@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Chromavox</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="left-panel" class="panel">
+    <h2>Emitters</h2>
+    <div class="row"><label>Sources <input id="emitter-count" type="range" min="1" max="128" value="40"><span id="emitter-count-val">40</span></label></div>
+    <div class="row"><label>λ min (nm) <input id="wl-min" type="range" min="380" max="780" value="400"><span id="wl-min-val">400</span></label></div>
+    <div class="row"><label>λ max (nm) <input id="wl-max" type="range" min="380" max="780" value="700"><span id="wl-max-val">700</span></label></div>
+    <div class="row"><label>Rays/source <input id="rays-per" type="range" min="1" max="256" value="64"><span id="rays-per-val">64</span></label></div>
+    <div class="row"><label>Spread° <input id="spread" type="range" min="0" max="60" value="8"><span id="spread-val">8</span></label></div>
+    <h2>Sensors</h2>
+    <div class="row"><label>Count <input id="sensor-count" type="range" min="1" max="64" value="16"><span id="sensor-count-val">16</span></label></div>
+    <h2>Tools</h2>
+    <div class="tools">
+      <button data-tool="prism">Prism</button>
+      <button data-tool="block">Block</button>
+      <button data-tool="lens-convex">Convex Lens</button>
+      <button data-tool="lens-concave">Concave Lens</button>
+      <button data-tool="mirror">Mirror</button>
+      <button data-tool="select" class="active">Select</button>
+      <button data-tool="delete">Delete</button>
+    </div>
+    <h2>Selected</h2>
+    <div id="prop-panel"><em>No selection</em></div>
+    <h2>Scene</h2>
+    <div class="row">
+      <button id="save">Save JSON</button>
+      <button id="load">Load JSON</button>
+      <button id="clear">Clear</button>
+    </div>
+    <input id="file-input" type="file" accept="application/json" hidden>
+  </aside>
+
+  <main id="stage">
+    <canvas id="gl"></canvas>
+  </main>
+
+  <aside id="right-panel" class="panel">
+    <div id="sensor-readout"></div>
+  </aside>
+
+  <button id="panel-toggle" aria-label="Toggle panels">☰</button>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

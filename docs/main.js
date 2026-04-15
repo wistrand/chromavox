@@ -1,0 +1,67 @@
+// Entry: wire scene, tracer, renderer, UI; run the frame loop.
+
+import { createScene } from './scene.js';
+import { Tracer } from './raytracer.js';
+import { Renderer } from './renderer.js';
+import { UI } from './ui.js';
+import { wavelengthToRGB } from './spectrum.js';
+
+const canvas = document.getElementById('gl');
+const renderer = new Renderer(canvas);
+const scene = createScene();
+// Sync bench size to canvas aspect so content fills the viewport.
+Object.assign(scene.bench, renderer.benchSize());
+const tracer = new Tracer();
+
+let dirty = true;
+const markDirty = () => { dirty = true; };
+
+const ui = new UI(scene, canvas, markDirty);
+ui.rebuildSensorReadout();
+
+window.addEventListener('resize', () => {
+  renderer.resize();
+  Object.assign(scene.bench, renderer.benchSize());
+  markDirty();
+});
+
+function frame() {
+  if (dirty) {
+    dirty = false;
+    tracer.trace(scene);
+    renderer.draw(scene, tracer);
+    updateSensorReadout();
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+function updateSensorReadout() {
+  const host = document.getElementById('sensor-readout');
+  const bars = host.children;
+  if (bars.length !== scene.sensorCount) return;
+  const binCount = tracer.binCount;
+  // Normalise: find max across all bins for consistent scaling, fallback 1.
+  let maxVal = 1e-6;
+  for (let i = 0; i < tracer.sensorBins.length; i++) {
+    if (tracer.sensorBins[i] > maxVal) maxVal = tracer.sensorBins[i];
+  }
+  for (let s = 0; s < scene.sensorCount; s++) {
+    const c = bars[s].querySelector('canvas');
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, c.width, c.height);
+    const wlMin = 380, wlMax = 780;
+    for (let b = 0; b < binCount; b++) {
+      const v = tracer.sensorBins[s * binCount + b] / maxVal;
+      if (v <= 0) continue;
+      const wl = wlMin + (b + 0.5) / binCount * (wlMax - wlMin);
+      const rgb = wavelengthToRGB(wl);
+      const a = Math.min(1, v);
+      ctx.fillStyle = `rgba(${(rgb[0] * 255)|0},${(rgb[1] * 255)|0},${(rgb[2] * 255)|0},${a})`;
+      const x = (b / binCount) * c.width;
+      const w = c.width / binCount + 1;
+      ctx.fillRect(x, 0, w, c.height);
+    }
+  }
+}
