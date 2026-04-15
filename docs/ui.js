@@ -26,10 +26,12 @@ export class UI {
       ['wl-max', 'wlMax', parseInt],
       ['rays-per', 'raysPerSource', parseInt],
       ['spread', 'spreadDeg', parseInt],
+      ['aperture', 'apertureFactor', v => parseInt(v, 10) / 100],
     ];
     for (const [id, key, cast] of map) {
       const el = document.getElementById(id);
-      el.value = this.scene.emitter[key];
+      if (key === 'apertureFactor') el.value = Math.round(this.scene.emitter[key] * 100);
+      else el.value = this.scene.emitter[key];
       el.addEventListener('input', () => {
         this.scene.emitter[key] = cast(el.value, 10);
         this.refreshEmitterLabels();
@@ -52,6 +54,7 @@ export class UI {
     document.getElementById('wl-max').value = this.scene.emitter.wlMax;
     document.getElementById('rays-per').value = this.scene.emitter.raysPerSource;
     document.getElementById('spread').value = this.scene.emitter.spreadDeg;
+    document.getElementById('aperture').value = Math.round((this.scene.emitter.apertureFactor ?? 0.01) * 100);
     document.getElementById('sensor-count').value = this.scene.sensorCount;
     this.refreshEmitterLabels();
   }
@@ -61,6 +64,7 @@ export class UI {
     document.getElementById('wl-max-val').textContent = this.scene.emitter.wlMax;
     document.getElementById('rays-per-val').textContent = this.scene.emitter.raysPerSource;
     document.getElementById('spread-val').textContent = this.scene.emitter.spreadDeg;
+    document.getElementById('aperture-val').textContent = (this.scene.emitter.apertureFactor ?? 0.01).toFixed(2);
     document.getElementById('sensor-count-val').textContent = this.scene.sensorCount;
   }
 
@@ -81,6 +85,7 @@ export class UI {
     c.addEventListener('pointermove', e => this.onMove(e));
     c.addEventListener('pointerup', e => this.onUp(e));
     c.addEventListener('pointercancel', e => this.onUp(e));
+    c.addEventListener('contextmenu', e => e.preventDefault());
   }
 
   canvasToBench(clientX, clientY) {
@@ -107,7 +112,12 @@ export class UI {
     if (this.tool === 'select') {
       if (hit) {
         this.select(hit);
-        this.dragging = { type: 'move', dx: hit.x - x, dy: hit.y - y };
+        if (e.shiftKey || e.button === 2) {
+          const a = Math.atan2(y - hit.y, x - hit.x);
+          this.dragging = { type: 'rotate', startAngle: a, startRot: hit.rot };
+        } else {
+          this.dragging = { type: 'move', dx: hit.x - x, dy: hit.y - y };
+        }
       } else {
         this.select(null);
       }
@@ -138,6 +148,11 @@ export class UI {
     if (this.dragging.type === 'move') {
       this.selected.x = x + this.dragging.dx;
       this.selected.y = y + this.dragging.dy;
+      this.onChange();
+    } else if (this.dragging.type === 'rotate') {
+      const a = Math.atan2(y - this.selected.y, x - this.selected.x);
+      this.selected.rot = this.dragging.startRot + (a - this.dragging.startAngle);
+      this.renderPropPanel();
       this.onChange();
     }
   }
@@ -205,6 +220,7 @@ export class UI {
     // Size params per kind
     const sizeFields = {
       'prism':        [['size', 40, 300]],
+      'rabbit':       [['size', 60, 300]],
       'block':        [['w', 40, 400], ['h', 20, 300]],
       'lens-convex':  [['h', 40, 300], ['radius', 80, 1200]],
       'lens-concave': [['w', 20, 200], ['h', 40, 300], ['radius', 80, 800]],
@@ -254,6 +270,9 @@ export class UI {
         const scene = deserializeScene(text);
         // Mutate current scene in place so references remain valid.
         Object.assign(this.scene, scene);
+        // Replace loaded bench size with current canvas aspect so prism/lens
+        // geometry keeps its intended aspect ratio on this viewport.
+        window.dispatchEvent(new Event('resize'));
         this.syncControls();
         this.select(null);
         this.rebuildSensorReadout();
@@ -307,6 +326,9 @@ export class UI {
         const text = await (await fetch('presets/' + file)).text();
         const scene = deserializeScene(text);
         Object.assign(this.scene, scene);
+        // Replace loaded bench size with current canvas aspect so prism/lens
+        // geometry keeps its intended aspect ratio on this viewport.
+        window.dispatchEvent(new Event('resize'));
         this.syncControls();
         this.select(null);
         this.rebuildSensorReadout();

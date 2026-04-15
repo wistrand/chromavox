@@ -4,7 +4,6 @@
   "emitter": { "count": 3, "wlMin": 400, "wlMax": 700, "raysPerSource": 200, "spreadDeg": 0 },
   "sensorCount": 48,
   "elements": [
-    { "kind": "prism",  "x": 520,  "y": 450, "size": 220, "material": "flint", "rot": 0.524 },
-    { "kind": "prism",  "x": 1060, "y": 450, "size": 220, "material": "flint", "rot": 2.618 }
+    { "kind": "prism", "x": 480, "y": 450, "size": 260, "material": "hyper", "rot": 0.524 }
   ]
 }

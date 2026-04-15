@@ -5,6 +5,7 @@ import { Tracer } from './raytracer.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
 import { wavelengthToRGB } from './spectrum.js';
+import { MicModulator, micBands } from './mic.js';
 
 const canvas = document.getElementById('gl');
 const renderer = new Renderer(canvas);
@@ -16,8 +17,28 @@ const tracer = new Tracer();
 let dirty = true;
 const markDirty = () => { dirty = true; };
 
+const mic = new MicModulator();
 const ui = new UI(scene, canvas, markDirty);
 ui.rebuildSensorReadout();
+
+const micBtn = document.getElementById('mic-toggle');
+micBtn.addEventListener('click', async () => {
+  if (!mic.active) {
+    try {
+      await mic.enable();
+      micBtn.textContent = 'Mic modulate: on';
+      micBtn.classList.add('active');
+    } catch (err) {
+      alert('Microphone: ' + err.message);
+    }
+  } else {
+    mic.disable();
+    scene.emitter.micLevels = null;
+    micBtn.textContent = 'Mic modulate: off';
+    micBtn.classList.remove('active');
+    markDirty();
+  }
+});
 
 window.addEventListener('resize', () => {
   renderer.resize();
@@ -26,6 +47,16 @@ window.addEventListener('resize', () => {
 });
 
 function frame() {
+  if (mic.active) {
+    const s = mic.sample();
+    if (s) {
+      // Each source maps to one log-spaced audio frequency bucket; the
+      // bucket's amplitude scales that source's ray intensity. Wavelengths
+      // and ray counts are not touched.
+      scene.emitter.micLevels = micBands(mic, scene.emitter.count);
+      dirty = true;
+    }
+  }
   if (dirty) {
     dirty = false;
     tracer.trace(scene);

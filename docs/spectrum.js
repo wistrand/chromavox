@@ -30,4 +30,6 @@ export const MATERIALS = {
   flint:   { A: 1.6700, B: 0.00743 }, // dense flint, strong dispersion
   fused:   { A: 1.4580, B: 0.00354 }, // fused silica
   water:   { A: 1.3240, B: 0.00308 },
+  diamond: { A: 2.3800, B: 0.01174 }, // real diamond — n>2, will TIR in a 60° prism
+  hyper:   { A: 1.5000, B: 0.03000 }, // synthetic: ~4× flint dispersion, safely n<2
 };

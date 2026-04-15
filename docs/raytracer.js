@@ -75,21 +75,30 @@ export class Tracer {
     const wlMin = emitter.wlMin, wlMax = emitter.wlMax;
     const wlRange = Math.max(1, wlMax - wlMin);
 
+    // Source is modelled as an extended aperture across its y-strip. Rays
+    // are emitted from random-looking positions along the aperture with
+    // decorrelated wavelengths and small angular jitter, so each beam looks
+    // like a wide continuous ribbon of light rather than a visible fan.
+    const PHI = 0.6180339887498949;
+    const PSI = 0.7548776662466927;
     for (let s = 0; s < nSrc; s++) {
-      const ey = (s + 0.5) * srcStripH;
+      const ey0 = s * srcStripH;
+      const apertureH = srcStripH * (emitter.apertureFactor ?? 0.01);
       for (let k = 0; k < raysPer; k++) {
-        // Wavelength: sample deterministically across range per source.
-        const tW = (s * raysPer + k) / Math.max(1, (nSrc * raysPer - 1));
+        // Every source emits the same wavelength mix across wlMin..wlMax.
         const wl = wlMin + wlRange * ((k + 0.5) / raysPer);
         const rgb = wavelengthToRGB(wl);
-        // Direction: straight across (+x) with spread.
-        const a = (raysPer === 1) ? 0 : (k / (raysPer - 1) - 0.5) * spreadRad;
+        // Decorrelate y-offset and angle from wavelength with irrational
+        // step sequences (no visible banding).
+        const yT = ((k + 1) * PHI) % 1;
+        const aT = ((k + 1) * PSI) % 1;
+        const ey = ey0 + (srcStripH - apertureH) * 0.5 + yT * apertureH;
+        const a = (aT - 0.5) * spreadRad;
         const dirX = Math.cos(a), dirY = Math.sin(a);
-        const intensity = BASE_INTENSITY / Math.sqrt(raysPer);
+        const micGain = emitter.micLevels ? emitter.micLevels[s] : 1;
+        const intensity = (BASE_INTENSITY / Math.sqrt(raysPer)) * micGain;
         this.castRay(emX, ey, dirX, dirY, wl, rgb, intensity,
                      edges, elementMap, bench, sensorX, sensorStripH);
-        // mark tW used
-        void tW;
       }
     }
   }

@@ -1,5 +1,7 @@
 [
   { "label": "Prism rainbow",   "file": "prism-rainbow.json" },
+  { "label": "Hyper prism",     "file": "hyper-prism.json" },
+  { "label": "Dark side",       "file": "dark-side.json" },
   { "label": "Converging lens", "file": "converging-lens.json" },
   { "label": "Diverging lens",  "file": "diverging-lens.json" },
   { "label": "Double prism",    "file": "double-prism.json" },

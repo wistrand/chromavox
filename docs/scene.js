@@ -10,8 +10,8 @@ export function createScene() {
   return {
     bench: { w: 1600, h: 900 },
     emitter: {
-      count: 40, wlMin: 400, wlMax: 700,
-      raysPerSource: 64, spreadDeg: 8,
+      count: 10, wlMin: 400, wlMax: 700,
+      raysPerSource: 64, spreadDeg: 0, apertureFactor: 0.01,
     },
     sensorCount: 16,
     elements: [],
@@ -22,11 +22,21 @@ export function createScene() {
 export function makeElement(kind, x, y) {
   const base = { id: genId(), kind, x, y, rot: 0 };
   switch (kind) {
-    case 'prism':        return { ...base, size: 120, material: 'flint' };
-    case 'block':        return { ...base, w: 180, h: 80, material: 'crown' };
+    // Default rotations are chosen so that horizontal rays from the left
+    // produce a visible optical effect on placement:
+    //   prism  — π/6 (~30°): left face at ~50° incidence, well above the
+    //            ~44° TIR cutoff for flint. Dispersion is visible.
+    //   block  — π/6: otherwise axis-aligned → 0° incidence → ray exits
+    //            parallel, no visible refraction.
+    //   mirror — π/4 (45°): otherwise horizontal strip that parallel rays
+    //            skim past; at 45° it reflects horizontal rays vertically.
+    //   lenses — 0: on-axis is the correct optical orientation.
+    case 'prism':        return { ...base, rot: Math.PI / 6, size: 120, material: 'flint' };
+    case 'block':        return { ...base, rot: Math.PI / 6, w: 180, h: 80, material: 'crown' };
     case 'lens-convex':  return { ...base, h: 110, radius: 220, material: 'crown' };
     case 'lens-concave': return { ...base, w: 30, h: 110, radius: 220, material: 'crown' };
-    case 'mirror':       return { ...base, w: 180, h: 6, material: 'mirror' };
+    case 'mirror':       return { ...base, rot: Math.PI / 4, w: 180, h: 6, material: 'mirror' };
+    case 'rabbit':       return { ...base, size: 140, material: 'crown' };
     default: throw new Error('unknown element kind: ' + kind);
   }
 }
@@ -69,6 +79,19 @@ export function localPolygon(el) {
         pts.push({ x: cxL + R * Math.cos(a), y: R * Math.sin(a) });
       }
       return pts;
+    }
+    case 'rabbit': {
+      const u = el.size * 0.01;
+      // Rabbit silhouette — ears up, body below. Non-convex polygon;
+      // pointInPolygon and per-edge normals handle that fine as long as
+      // winding is consistent (clockwise in y-down).
+      const pts = [
+        [10, -30], [15, -55], [20, -75], [28, -55], [30, -30],
+        [45, -15], [50,  10], [45,  35], [30,  45], [ 0,  48],
+        [-30, 45], [-45, 35], [-50, 10], [-45, -15], [-30, -30],
+        [-28, -55], [-20, -75], [-15, -55], [-10, -30], [0, -25],
+      ];
+      return pts.map(([x, y]) => ({ x: x * u, y: y * u }));
     }
     case 'lens-concave': {
       const R = el.radius;
@@ -161,7 +184,7 @@ export function deserializeScene(text) {
   if (!data || data.version !== 1) throw new Error('unsupported scene version');
   const scene = createScene();
   scene.bench = data.bench;
-  scene.emitter = data.emitter;
+  scene.emitter = { apertureFactor: 0.01, ...data.emitter };
   scene.sensorCount = data.sensorCount;
   scene.elements = data.elements.map(e => ({ ...e, id: genId() }));
   return scene;

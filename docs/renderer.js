@@ -125,11 +125,18 @@ export class Renderer {
     // Bench outline.
     this.rect(0, 0, bench.w, bench.h, 0.35, 0.4, 0.5, 0.6);
 
-    // Emitter ticks on left wall.
+    // Emitter ticks on left wall. With mic active, each tick extends into
+    // a band-volume bar.
+    const levels = scene.emitter.micLevels;
     const srcStripH = bench.h / scene.emitter.count;
     for (let s = 0; s < scene.emitter.count; s++) {
       const y = (s + 0.5) * srcStripH;
       this.line(2, y, 20, y, 1, 1, 0.6, 0.9);
+      if (levels && levels[s] > 0.02) {
+        const v = Math.min(1, levels[s]);
+        const len = 24 + v * 140;
+        this.line(22, y, 22 + len, y, 1, 0.85, 0.4, 0.4 + 0.6 * v);
+      }
     }
     // Sensor ticks on right wall.
     const senStripH = bench.h / scene.sensorCount;
@@ -175,6 +182,8 @@ function elementColor(el) {
     case 'crown':  return [0.6, 0.9, 1.0, 0.85];
     case 'fused':  return [0.8, 1.0, 0.9, 0.85];
     case 'water':  return [0.6, 0.8, 1.0, 0.85];
+    case 'diamond':return [1.0, 1.0, 0.8, 0.9];
+    case 'hyper':  return [1.0, 0.5, 1.0, 0.9];
     default:       return [1, 1, 1, 0.8];
   }
 }
