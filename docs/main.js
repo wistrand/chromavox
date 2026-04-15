@@ -36,6 +36,14 @@ synthBtn.addEventListener('click', () => {
   }
 });
 
+const volSlider = document.getElementById('synth-vol');
+const volLabel = document.getElementById('synth-vol-val');
+synth.setVolume(parseInt(volSlider.value, 10) / 100);
+volSlider.addEventListener('input', () => {
+  synth.setVolume(parseInt(volSlider.value, 10) / 100);
+  volLabel.textContent = volSlider.value;
+});
+
 const micBtn = document.getElementById('mic-toggle');
 micBtn.addEventListener('click', async () => {
   if (!mic.active) {

@@ -9,6 +9,14 @@ export class SensorSynth {
     this.master = null;
     this.voices = []; // { osc, gain }
     this.count = 0;
+    this.volume = 0.25;
+  }
+
+  setVolume(v) {
+    this.volume = v;
+    if (this.master) {
+      this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+    }
   }
 
   enable(sensorCount) {
@@ -16,7 +24,7 @@ export class SensorSynth {
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC();
     this.master = this.ctx.createGain();
-    this.master.gain.value = 0.25;
+    this.master.gain.value = this.volume ?? 0.25;
     this.master.connect(this.ctx.destination);
     this.rebuild(sensorCount);
     this.active = true;

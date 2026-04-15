@@ -11,7 +11,7 @@ export function createScene() {
     bench: { w: 1600, h: 900 },
     emitter: {
       count: 10, wlMin: 400, wlMax: 700,
-      raysPerSource: 64, spreadDeg: 0, apertureFactor: 0.01,
+      raysPerSource: 512, spreadDeg: 0, apertureFactor: 0.01,
     },
     sensorCount: 16,
     elements: [],
