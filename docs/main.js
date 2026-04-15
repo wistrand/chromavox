@@ -27,6 +27,7 @@ const synthBtn = document.getElementById('synth-toggle');
 synthBtn.addEventListener('click', () => {
   if (!synth.active) {
     const mode = document.getElementById('mic-mode').value;
+    synth.setBase(parseFloat(document.getElementById('mic-base').value));
     synth.enable(scene.sensorCount, mode);
     synthBtn.textContent = 'Audio out: on';
     synthBtn.classList.add('active');
@@ -42,6 +43,19 @@ document.getElementById('mic-mode').addEventListener('change', e => {
 });
 
 document.getElementById('mic-source').addEventListener('change', async e => {
+  // Pick a reasonable chromatic base for each debug source so its main
+  // content lands inside the ladder. Microphone and noises keep C3.
+  const baseBySource = {
+    'sine':      '440',
+    'harmonics': '220',
+    'mic':       '130.81',
+    'white':     '130.81',
+    'pink':      '130.81',
+  };
+  const nextBase = baseBySource[e.target.value];
+  if (nextBase) document.getElementById('mic-base').value = nextBase;
+  synth.setBase(parseFloat(nextBase));
+
   if (!mic.active) return;
   mic.disable();
   try {
@@ -54,6 +68,10 @@ document.getElementById('mic-source').addEventListener('change', async e => {
     scene.emitter.wlPerSource = null;
     markDirty();
   }
+});
+
+document.getElementById('mic-base').addEventListener('change', e => {
+  synth.setBase(parseFloat(e.target.value));
 });
 
 const volSlider = document.getElementById('synth-vol');
@@ -99,7 +117,8 @@ function frame() {
       // source's ray intensity. Optionally, each source also gets its own
       // narrow wavelength band derived from its bucket position.
       const micMode = document.getElementById('mic-mode').value;
-      scene.emitter.micLevels = micBands(mic, scene.emitter.count, micMode);
+      const baseHz = parseFloat(document.getElementById('mic-base').value);
+      scene.emitter.micLevels = micBands(mic, scene.emitter.count, micMode, baseHz);
       if (document.getElementById('bucket-color').checked) {
         const n = scene.emitter.count;
         const min = new Float32Array(n);

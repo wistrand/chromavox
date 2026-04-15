@@ -13,6 +13,13 @@ export class SensorSynth {
     this.count = 0;
     this.volume = 0.25;
     this.mode = 'log';
+    this.baseHz = 130.81;
+  }
+
+  setBase(hz) {
+    if (!hz || this.baseHz === hz) return;
+    this.baseHz = hz;
+    if (this.active && this.mode === 'chromatic') this.rebuild(this.count);
   }
 
   setVolume(v) {
@@ -51,7 +58,7 @@ export class SensorSynth {
     this.voices = [];
     const K = 6; // partials per voice
     const loHz = 110, hiHz = 1800;
-    const baseHz = 130.81; // C3, matches mic chromatic base
+    const baseHz = this.baseHz ?? 130.81;
     const semi = Math.pow(2, 1 / 12);
     const nyquist = this.ctx.sampleRate / 2;
     for (let i = 0; i < sensorCount; i++) {
