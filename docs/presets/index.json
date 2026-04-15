@@ -1,0 +1,7 @@
+[
+  { "label": "Prism rainbow",   "file": "prism-rainbow.json" },
+  { "label": "Converging lens", "file": "converging-lens.json" },
+  { "label": "Diverging lens",  "file": "diverging-lens.json" },
+  { "label": "Double prism",    "file": "double-prism.json" },
+  { "label": "Mirror bounce",   "file": "mirror-bounce.json" }
+]

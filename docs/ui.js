@@ -239,7 +239,7 @@ export class UI {
       const blob = new Blob([text], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = 'optics-bench.json';
+      a.href = url; a.download = 'chromavox.json';
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
@@ -270,6 +270,8 @@ export class UI {
       this.onChange();
     });
 
+    this.bindPresets();
+
     // Mobile panel toggle.
     const tog = document.getElementById('panel-toggle');
     tog.addEventListener('click', () => {
@@ -282,6 +284,37 @@ export class UI {
       } else {
         app.classList.add('show-left');
       }
+    });
+  }
+
+  async bindPresets() {
+    const sel = document.getElementById('preset-select');
+    try {
+      const list = await (await fetch('presets/index.json')).json();
+      for (const p of list) {
+        const opt = document.createElement('option');
+        opt.value = p.file; opt.textContent = p.label;
+        sel.appendChild(opt);
+      }
+    } catch {
+      sel.disabled = true;
+      return;
+    }
+    sel.addEventListener('change', async () => {
+      const file = sel.value;
+      if (!file) return;
+      try {
+        const text = await (await fetch('presets/' + file)).text();
+        const scene = deserializeScene(text);
+        Object.assign(this.scene, scene);
+        this.syncControls();
+        this.select(null);
+        this.rebuildSensorReadout();
+        this.onChange();
+      } catch (err) {
+        alert('Preset load failed: ' + err.message);
+      }
+      sel.value = '';
     });
   }
 

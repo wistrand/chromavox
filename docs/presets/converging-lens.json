@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "bench": { "w": 1600, "h": 900 },
+  "emitter": { "count": 32, "wlMin": 400, "wlMax": 700, "raysPerSource": 64, "spreadDeg": 4 },
+  "sensorCount": 48,
+  "elements": [
+    { "kind": "lens-convex", "x": 700, "y": 450, "h": 340, "radius": 380, "material": "crown", "rot": 0 }
+  ]
+}

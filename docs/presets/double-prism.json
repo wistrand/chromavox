@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "bench": { "w": 1600, "h": 900 },
+  "emitter": { "count": 4, "wlMin": 400, "wlMax": 700, "raysPerSource": 160, "spreadDeg": 5 },
+  "sensorCount": 48,
+  "elements": [
+    { "kind": "prism",  "x": 520,  "y": 450, "size": 220, "material": "flint", "rot": 0 },
+    { "kind": "prism",  "x": 1060, "y": 450, "size": 220, "material": "flint", "rot": 3.14159 }
+  ]
+}
