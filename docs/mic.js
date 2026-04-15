@@ -1,6 +1,7 @@
-// Microphone modulator. When active, sample() returns { volume, pitchHz }
-// from the live audio stream. Volume is RMS in [0,1]; pitchHz is the
-// dominant FFT bin frequency.
+// Audio-input modulator. `enable(source)` attaches either the microphone or
+// a synthetic debug source (sine, harmonics, white/pink noise) to the same
+// AnalyserNode so everything downstream (sample, micBands) is oblivious to
+// where the sound came from.
 
 export class MicModulator {
   constructor() {
@@ -12,21 +13,84 @@ export class MicModulator {
     this.timeData = null;
     this.volume = 0;
     this.pitchHz = 0;
+    this.nodes = [];
+    this.source = 'mic';
   }
 
-  async enable() {
+  async enable(source = 'mic') {
     if (this.active) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = new AC();
-    const src = ctx.createMediaStreamSource(stream);
     const an = ctx.createAnalyser();
-    an.fftSize = 2048;
+    an.fftSize = 8192;
     an.smoothingTimeConstant = 0.6;
-    src.connect(an);
+
+    let srcNode, stream = null;
+    const nodes = [];
+
+    if (source === 'mic') {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      srcNode = ctx.createMediaStreamSource(stream);
+    } else if (source === 'sine') {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = 440;
+      o.start();
+      nodes.push(o);
+      srcNode = o;
+    } else if (source === 'harmonics') {
+      const mix = ctx.createGain();
+      mix.gain.value = 0.5;
+      const base = 220;
+      for (let k = 1; k <= 6; k++) {
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.value = base * k;
+        const gk = ctx.createGain();
+        gk.gain.value = 1 / k;
+        o.connect(gk).connect(mix);
+        o.start();
+        nodes.push(o, gk);
+      }
+      srcNode = mix;
+    } else if (source === 'white' || source === 'pink') {
+      const sr = ctx.sampleRate;
+      const len = sr * 2;
+      const buf = ctx.createBuffer(1, len, sr);
+      const data = buf.getChannelData(0);
+      if (source === 'white') {
+        for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      } else {
+        // Paul Kellet's pink noise approximation.
+        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+        for (let i = 0; i < len; i++) {
+          const w = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + w * 0.0555179;
+          b1 = 0.99332 * b1 + w * 0.0750759;
+          b2 = 0.96900 * b2 + w * 0.1538520;
+          b3 = 0.86650 * b3 + w * 0.3104856;
+          b4 = 0.55000 * b4 + w * 0.5329522;
+          b5 = -0.7616 * b5 - w * 0.0168980;
+          data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11;
+          b6 = w * 0.115926;
+        }
+      }
+      const bn = ctx.createBufferSource();
+      bn.buffer = buf;
+      bn.loop = true;
+      bn.start();
+      nodes.push(bn);
+      srcNode = bn;
+    } else {
+      throw new Error('unknown mic source: ' + source);
+    }
+
+    srcNode.connect(an);
     this.ctx = ctx;
     this.stream = stream;
     this.analyser = an;
+    this.nodes = nodes;
+    this.source = source;
     this.freqData = new Uint8Array(an.frequencyBinCount);
     this.timeData = new Float32Array(an.fftSize);
     this.active = true;
@@ -36,6 +100,8 @@ export class MicModulator {
     if (!this.active) return;
     this.active = false;
     this.stream?.getTracks().forEach(t => t.stop());
+    for (const n of this.nodes) { try { n.stop?.(); } catch {} }
+    this.nodes = [];
     this.ctx?.close();
     this.stream = null;
     this.ctx = null;
@@ -76,14 +142,38 @@ export function pitchToWavelength(hz) {
   return 600 - t * 100;
 }
 
-// Downsample FFT magnitudes to `n` log-spaced buckets in [0,1].
-export function micBands(mic, n) {
+// Downsample FFT magnitudes to `n` buckets in [0,1].
+// mode: 'log' (80–6000 Hz log-spaced) or 'chromatic' (semitone ladder from
+// baseHz upward, ±50-cent window per bucket).
+export function micBands(mic, n, mode = 'log', baseHz = 130.81) {
   if (!mic.active || !mic.freqData) return null;
   const fd = mic.freqData;
   const nyquist = mic.ctx.sampleRate / 2;
   const binCount = fd.length;
-  const loHz = 80, hiHz = 6000;
   const out = new Float32Array(n);
+  const floor = 0.08;
+
+  const shape = raw => {
+    const v = Math.max(0, (raw - floor) / (1 - floor));
+    return Math.pow(v, 1.2);
+  };
+
+  if (mode === 'chromatic') {
+    const semi = Math.pow(2, 1 / 12);
+    const half = Math.pow(2, 1 / 24);
+    for (let i = 0; i < n; i++) {
+      const fc = baseHz * Math.pow(semi, i);
+      const f0 = fc / half, f1 = fc * half;
+      const b0 = Math.max(1, Math.floor(f0 / nyquist * binCount));
+      const b1 = Math.max(b0 + 1, Math.ceil(f1 / nyquist * binCount));
+      let sum = 0, cnt = 0;
+      for (let b = b0; b < b1 && b < binCount; b++) { sum += fd[b]; cnt++; }
+      out[i] = shape(cnt ? (sum / cnt) / 255 : 0);
+    }
+    return out;
+  }
+
+  const loHz = 80, hiHz = 6000;
   const logLo = Math.log(loHz), logHi = Math.log(hiHz);
   for (let i = 0; i < n; i++) {
     const f0 = Math.exp(logLo + (i / n) * (logHi - logLo));
@@ -92,12 +182,7 @@ export function micBands(mic, n) {
     const b1 = Math.max(b0 + 1, Math.ceil(f1 / nyquist * binCount));
     let sum = 0, cnt = 0;
     for (let b = b0; b < b1 && b < binCount; b++) { sum += fd[b]; cnt++; }
-    // Subtract a noise floor so quiet buckets are truly zero, then apply a
-    // gamma curve so the response ramps from zero rather than a faint glow.
-    const raw = cnt ? (sum / cnt) / 255 : 0;
-    const floor = 0.22;
-    const v = Math.max(0, (raw - floor) / (1 - floor));
-    out[i] = Math.pow(v, 1.5);
+    out[i] = shape(cnt ? (sum / cnt) / 255 : 0);
   }
   return out;
 }

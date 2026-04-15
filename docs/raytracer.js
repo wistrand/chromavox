@@ -74,6 +74,7 @@ export class Tracer {
 
     const wlMin = emitter.wlMin, wlMax = emitter.wlMax;
     const wlRange = Math.max(1, wlMax - wlMin);
+    const wlPer = emitter.wlPerSource;
 
     // Source is modelled as an extended aperture across its y-strip. Rays
     // are emitted from random-looking positions along the aperture with
@@ -84,9 +85,11 @@ export class Tracer {
     for (let s = 0; s < nSrc; s++) {
       const ey0 = s * srcStripH;
       const apertureH = srcStripH * (emitter.apertureFactor ?? 0.01);
+      const wlMinS = wlPer ? wlPer.min[s] : wlMin;
+      const wlMaxS = wlPer ? wlPer.max[s] : wlMax;
+      const wlRangeS = Math.max(1, wlMaxS - wlMinS);
       for (let k = 0; k < raysPer; k++) {
-        // Every source emits the same wavelength mix across wlMin..wlMax.
-        const wl = wlMin + wlRange * ((k + 0.5) / raysPer);
+        const wl = wlMinS + wlRangeS * ((k + 0.5) / raysPer);
         const rgb = wavelengthToRGB(wl);
         // Decorrelate y-offset and angle from wavelength with irrational
         // step sequences (no visible banding).

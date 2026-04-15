@@ -26,13 +26,33 @@ ui.rebuildSensorReadout();
 const synthBtn = document.getElementById('synth-toggle');
 synthBtn.addEventListener('click', () => {
   if (!synth.active) {
-    synth.enable(scene.sensorCount);
+    const mode = document.getElementById('mic-mode').value;
+    synth.enable(scene.sensorCount, mode);
     synthBtn.textContent = 'Audio out: on';
     synthBtn.classList.add('active');
   } else {
     synth.disable();
     synthBtn.textContent = 'Audio out: off';
     synthBtn.classList.remove('active');
+  }
+});
+
+document.getElementById('mic-mode').addEventListener('change', e => {
+  synth.setMode(e.target.value);
+});
+
+document.getElementById('mic-source').addEventListener('change', async e => {
+  if (!mic.active) return;
+  mic.disable();
+  try {
+    await mic.enable(e.target.value);
+  } catch (err) {
+    alert('Audio input: ' + err.message);
+    micBtn.textContent = 'Audio in: off';
+    micBtn.classList.remove('active');
+    scene.emitter.micLevels = null;
+    scene.emitter.wlPerSource = null;
+    markDirty();
   }
 });
 
@@ -48,8 +68,9 @@ const micBtn = document.getElementById('mic-toggle');
 micBtn.addEventListener('click', async () => {
   if (!mic.active) {
     try {
-      await mic.enable();
-      micBtn.textContent = 'Mic modulate: on';
+      const src = document.getElementById('mic-source').value;
+      await mic.enable(src);
+      micBtn.textContent = 'Audio in: on';
       micBtn.classList.add('active');
     } catch (err) {
       alert('Microphone: ' + err.message);
@@ -57,7 +78,8 @@ micBtn.addEventListener('click', async () => {
   } else {
     mic.disable();
     scene.emitter.micLevels = null;
-    micBtn.textContent = 'Mic modulate: off';
+    scene.emitter.wlPerSource = null;
+    micBtn.textContent = 'Audio in: off';
     micBtn.classList.remove('active');
     markDirty();
   }
@@ -73,10 +95,26 @@ function frame() {
   if (mic.active) {
     const s = mic.sample();
     if (s) {
-      // Each source maps to one log-spaced audio frequency bucket; the
-      // bucket's amplitude scales that source's ray intensity. Wavelengths
-      // and ray counts are not touched.
-      scene.emitter.micLevels = micBands(mic, scene.emitter.count);
+      // Each source maps to one audio bucket; bucket amplitude scales that
+      // source's ray intensity. Optionally, each source also gets its own
+      // narrow wavelength band derived from its bucket position.
+      const micMode = document.getElementById('mic-mode').value;
+      scene.emitter.micLevels = micBands(mic, scene.emitter.count, micMode);
+      if (document.getElementById('bucket-color').checked) {
+        const n = scene.emitter.count;
+        const min = new Float32Array(n);
+        const max = new Float32Array(n);
+        const band = 12;
+        for (let i = 0; i < n; i++) {
+          const t = n > 1 ? i / (n - 1) : 0.5;
+          const wl = 400 + t * 300;
+          min[i] = Math.max(380, wl - band);
+          max[i] = Math.min(780, wl + band);
+        }
+        scene.emitter.wlPerSource = { min, max };
+      } else {
+        scene.emitter.wlPerSource = null;
+      }
       dirty = true;
     }
   }
