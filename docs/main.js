@@ -6,6 +6,7 @@ import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
 import { wavelengthToRGB } from './spectrum.js';
 import { MicModulator, micBands } from './mic.js';
+import { SensorSynth } from './synth.js';
 
 const canvas = document.getElementById('gl');
 const renderer = new Renderer(canvas);
@@ -18,8 +19,22 @@ let dirty = true;
 const markDirty = () => { dirty = true; };
 
 const mic = new MicModulator();
+const synth = new SensorSynth();
 const ui = new UI(scene, canvas, markDirty);
 ui.rebuildSensorReadout();
+
+const synthBtn = document.getElementById('synth-toggle');
+synthBtn.addEventListener('click', () => {
+  if (!synth.active) {
+    synth.enable(scene.sensorCount);
+    synthBtn.textContent = 'Audio out: on';
+    synthBtn.classList.add('active');
+  } else {
+    synth.disable();
+    synthBtn.textContent = 'Audio out: off';
+    synthBtn.classList.remove('active');
+  }
+});
 
 const micBtn = document.getElementById('mic-toggle');
 micBtn.addEventListener('click', async () => {
@@ -62,6 +77,9 @@ function frame() {
     tracer.trace(scene);
     renderer.draw(scene, tracer);
     updateSensorReadout();
+  }
+  if (synth.active) {
+    synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount);
   }
   requestAnimationFrame(frame);
 }
