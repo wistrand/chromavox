@@ -47,6 +47,23 @@ falloff.
   medium for Snell. Entering pushes, exiting pops; TIR rolls the pop back
   so a ray that internally reflects stays in the correct medium.
 
+## Performance notes
+
+Hot-loop allocations are avoided:
+
+- The four bench walls are stored on the Tracer and their coordinates
+  are written once per `trace()`, not rebuilt per bounce.
+- The inside-medium `stack` is a single reusable `Array` on the Tracer;
+  `stack.length = 0` at the start of each ray instead of `new Array`.
+- The initial-medium scan iterates a pre-built `this._elementInfos`
+  array by index — no Map iterator allocation.
+- `n1`/`n2` lookups inline `materialN(materialOptics(...))` instead of
+  going through per-ray closures.
+
+Remaining per-frame allocations are outside the ray hot loop: `edges`
+array, `elementMap`, `worldEdges()` polygon/edge objects (per element,
+rebuilt each frame), and one `wavelengthToRGB` result per ray.
+
 ## Dispersion gotchas (important)
 
 - Sellmeier `n²(λ) = 1 + Σ B_i λ²/(λ²−C_i)` with λ in µm (Cauchy for

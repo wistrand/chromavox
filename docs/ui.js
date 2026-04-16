@@ -94,6 +94,30 @@ export class UI {
   bindShortcuts() {
     const STEP = 5;
     const ROT_STEP = 1 * Math.PI / 180;
+    const SIZE_STEP = 8;
+    const SIZE_STEP_FINE = 1;
+    const bumpSize = (el, d) => {
+      switch (el.kind) {
+        case 'prism':
+        case 'rabbit':
+          el.size = Math.max(20, el.size + d);
+          break;
+        case 'block':
+          el.w = Math.max(20, el.w + d);
+          el.h = Math.max(10, el.h + d * 0.5);
+          break;
+        case 'mirror':
+          el.w = Math.max(20, el.w + d);
+          break;
+        case 'lens-convex':
+          el.h = Math.max(40, el.h + d);
+          el.radius = Math.max(80, el.radius + d);
+          break;
+        case 'lens-concave':
+          el.h = Math.max(40, el.h + d);
+          break;
+      }
+    };
 
     window.addEventListener('keydown', e => {
       if (e.target.matches('input, select, textarea')) return;
@@ -125,12 +149,14 @@ export class UI {
       }
 
       let handled = true;
-      if (e.shiftKey && e.key === 'ArrowLeft')  { this.beginEdit(); this.selected.rot -= ROT_STEP; }
+      if (e.shiftKey && e.key === 'ArrowLeft')       { this.beginEdit(); this.selected.rot -= ROT_STEP; }
       else if (e.shiftKey && e.key === 'ArrowRight') { this.beginEdit(); this.selected.rot += ROT_STEP; }
+      else if (e.shiftKey && e.key === 'ArrowUp')    { this.beginEdit(); bumpSize(this.selected,  SIZE_STEP_FINE); }
+      else if (e.shiftKey && e.key === 'ArrowDown')  { this.beginEdit(); bumpSize(this.selected, -SIZE_STEP_FINE); }
       else if (e.key === 'ArrowLeft')  { this.beginEdit(); this.selected.x -= STEP; }
       else if (e.key === 'ArrowRight') { this.beginEdit(); this.selected.x += STEP; }
-      else if (e.key === 'ArrowUp')    { this.beginEdit(); this.selected.y -= STEP; }
-      else if (e.key === 'ArrowDown')  { this.beginEdit(); this.selected.y += STEP; }
+      else if (e.key === 'ArrowUp')    { this.beginEdit(); bumpSize(this.selected,  SIZE_STEP); }
+      else if (e.key === 'ArrowDown')  { this.beginEdit(); bumpSize(this.selected, -SIZE_STEP); }
       else handled = false;
 
       if (handled) {
@@ -223,10 +249,27 @@ export class UI {
   // --- Tool palette ---
   bindTools() {
     const btns = document.querySelectorAll('.tools button');
+    const placeable = new Set(['prism', 'block', 'lens-convex', 'lens-concave', 'mirror', 'rabbit']);
     btns.forEach(b => b.addEventListener('click', () => {
-      btns.forEach(x => x.classList.remove('active'));
-      b.classList.add('active');
-      this.tool = b.dataset.tool;
+      const kind = b.dataset.tool;
+      if (placeable.has(kind)) {
+        // Place immediately at the center of the bench, then fall back to
+        // select so the user can drag / rotate / delete right away.
+        this.beginEdit();
+        const cx = this.scene.bench.w / 2;
+        const cy = this.scene.bench.h / 2;
+        const el = makeElement(kind, cx, cy);
+        this.scene.elements.push(el);
+        this.select(el);
+        this.endEdit();
+        this.onChange();
+        btns.forEach(x => x.classList.toggle('active', x.dataset.tool === 'select'));
+        this.tool = 'select';
+      } else {
+        btns.forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        this.tool = kind;
+      }
     }));
   }
 

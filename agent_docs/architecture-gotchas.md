@@ -7,6 +7,10 @@
   (`docs/renderer.js`). Overlay elements (bench outline, emitter/sensor
   ticks, element polygons) still use line primitives; emitter ticks
   stack three 1px lines vertically to look thicker.
+- Element interiors are drawn as bounding-box quads; the fragment shader
+  runs a polygon-SDF loop (up to `MAX_EDGES = 64`) to clip and sample
+  the underlying ray FBO with a distortion offset. Polygons with > 64
+  edges will silently be clipped.
 - Additive blending is not physically accurate for monochromatic beams
   piling up — overlap saturates to white regardless of wavelength. This
   is a long-standing trade-off discussed in the render design; a true
@@ -20,6 +24,10 @@
 - Block zigzag is also real physics: adjacent faces of a rectangular
   dielectric always TIR, so rays can only exit through the parallel
   opposite face.
+- Overlapping dielectrics work (inside-element stack resolves `n1`/`n2`
+  and Beer-Lambert α correctly), but the stack uses *last-entered* as
+  the current medium. For deliberately ambiguous overlaps the picked
+  medium depends on which element the ray entered first.
 
 ## Audio
 
@@ -38,8 +46,8 @@
 - Slider sanity: nothing prevents `wlMin > wlMax`; the tracer handles
   it but the output gets weird.
 - Large ray counts (128 sources × 2000 rays/source = 256k rays) are the
-  hard cap via slider maxes. The vertex buffer can balloon; watch for
-  perf drops on low-end mobile.
+  hard cap via slider maxes. The per-segment buffer can balloon; watch
+  for perf drops on low-end mobile.
 - The element material dropdown filters by element kind
   (dielectric/mirror); switching a mirror's material to a dielectric
   value is not possible from the UI — change via JSON edit if needed.

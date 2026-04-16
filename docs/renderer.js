@@ -1,16 +1,23 @@
-// WebGL2 renderer. Two passes:
-//   - Ray pass: per segment = one instanced quad, width and soft falloff
-//     computed in the fragment shader (SDF). Additive blend.
-//   - Overlay pass: element outlines + emitter/sensor ticks. Alpha blend,
-//     plain line primitives.
+// WebGL2 renderer. Three passes:
+//   1. Rays rendered into an FBO as instanced SDF quads (additive).
+//   2. Screen is cleared and the FBO is blitted via a fullscreen quad; then
+//      each element interior is drawn with a polygon-SDF fragment shader
+//      that samples the FBO with a per-pixel offset to distort the rays
+//      underneath (refractive glass look). Material parameters differ per
+//      material — sharp edges for diamond, softer for crown, opaque tint
+//      for mirrors, etc.
+//   3. Overlay lines on top (bench outline, emitter/sensor ticks, element
+//      outlines, selection handle). Alpha blend.
 
 import { worldEdges } from './scene.js';
 
+const MAX_EDGES = 64;
+
 const RAY_VS = `#version 300 es
-in vec2 aCorner;     // (along, side) in {(0,-1),(0,1),(1,-1),(1,1)}
-in vec4 aSeg;        // p1.xy, p2.xy
-in vec4 aCol1;       // premultiplied color1 + alpha1
-in vec4 aCol2;       // premultiplied color2 + alpha2
+in vec2 aCorner;
+in vec4 aSeg;
+in vec4 aCol1;
+in vec4 aCol2;
 uniform vec2 uBench;
 uniform float uWidth;
 out float vAlong;
@@ -36,7 +43,7 @@ void main() {
 }`;
 
 const RAY_FS = `#version 300 es
-precision mediump float;
+precision highp float;
 in float vAlong;
 in float vSide;
 in vec4 vCol1;
@@ -44,10 +51,141 @@ in vec4 vCol2;
 out vec4 outColor;
 void main() {
   float d = abs(vSide);
-  // Soft cubic falloff from 1.0 at center to 0.0 at edge.
   float amp = 1.0 - smoothstep(0.0, 1.0, d);
   vec4 c = mix(vCol1, vCol2, vAlong);
   outColor = vec4(c.rgb * amp, c.a * amp);
+}`;
+
+const BLIT_VS = `#version 300 es
+in vec2 aCorner;
+out vec2 vUV;
+void main() {
+  vUV = aCorner;
+  gl_Position = vec4(aCorner * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const BLIT_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uTex;
+out vec4 outColor;
+void main() { outColor = texture(uTex, vUV); }`;
+
+// Element shader: draws a bounding quad in world space, discards pixels
+// outside the polygon (SDF), and inside the polygon samples the FBO with
+// an offset driven by distance from the nearest edge — so the ray image
+// underneath distorts as if bent by a lens.
+const ELEM_VS = `#version 300 es
+in vec2 aCorner;
+uniform vec2 uAabbMin;
+uniform vec2 uAabbMax;
+uniform vec2 uBench;
+out vec2 vBench;
+out vec2 vUV;
+void main() {
+  vBench = mix(uAabbMin, uAabbMax, aCorner);
+  vec2 nd = vBench / uBench;
+  nd.y = 1.0 - nd.y;
+  vUV = vec2(nd.x, nd.y);
+  gl_Position = vec4(nd * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const ELEM_FS = `#version 300 es
+precision highp float;
+#define MAX_EDGES ${MAX_EDGES}
+in vec2 vBench;
+in vec2 vUV;
+uniform vec2 uAabbMin;
+uniform vec2 uAabbMax;
+uniform int uEdgeCount;
+uniform vec4 uEdges[MAX_EDGES];
+uniform vec3 uTint;
+uniform float uTintStrength;
+uniform float uMagnitude;
+uniform float uFalloff;
+uniform vec3 uEdgeGlow;
+uniform float uEdgeGlowAmp;
+uniform float uEdgeWidth;
+uniform float uOpaque;       // 1.0 → ignore FBO (opaque tint); 0.0 → refractive sample
+uniform vec2 uBench;
+uniform sampler2D uFbo;
+out vec4 outColor;
+
+void main() {
+  // Polygon SDF via loop over edges. Also tracks the closest edge point so
+  // we can derive a distortion direction.
+  float minDist2 = 1e18;
+  vec2 nearest = vec2(0.0);
+  bool inside = false;
+  for (int i = 0; i < MAX_EDGES; i++) {
+    if (i >= uEdgeCount) break;
+    vec2 a = uEdges[i].xy;
+    vec2 b = uEdges[i].zw;
+    vec2 ba = b - a;
+    vec2 pa = vBench - a;
+    float denom = max(dot(ba, ba), 1e-12);
+    float h = clamp(dot(pa, ba) / denom, 0.0, 1.0);
+    vec2 q = a + ba * h;
+    vec2 diff = vBench - q;
+    float d2 = dot(diff, diff);
+    if (d2 < minDist2) { minDist2 = d2; nearest = q; }
+    // Point-in-polygon crossing test (even-odd rule).
+    if (abs(b.y - a.y) > 1e-9) {
+      bool crossY = (a.y > vBench.y) != (b.y > vBench.y);
+      if (crossY) {
+        float xCross = a.x + (vBench.y - a.y) * (b.x - a.x) / (b.y - a.y);
+        if (vBench.x < xCross) inside = !inside;
+      }
+    }
+  }
+  if (!inside) discard;
+
+  float dist = sqrt(minDist2);
+
+  // Shared light-facing factor: edges whose outward normal faces the
+  // upper-left light (Y is down, so upper-left = (-1, -1)) are both
+  // brighter (rim glint) AND refract more strongly (distortion).
+  vec2 light = normalize(vec2(-1.0, -1.0));
+  vec2 outward = normalize(nearest - vBench + vec2(1e-5));
+  float facing = dot(outward, light);          // -1..+1
+  float facingT = clamp(facing * 0.5 + 0.5, 0.0, 1.0);  // 0..1
+
+  // Base sample from the FBO (ray image underneath). The distortion
+  // direction is taken from the polygon centroid, not the nearest edge —
+  // that avoids the medial-axis discontinuity where the nearest-edge
+  // direction flips and produces visible breaks inside the element.
+  vec3 baseRgb;
+  if (uOpaque < 0.5) {
+    vec2 center = 0.5 * (uAabbMin + uAabbMax);
+    vec2 centerDir = normalize(vBench - center + vec2(1e-5));
+    float edgeT = 1.0 - smoothstep(0.0, uFalloff, dist);
+    float distortScale = mix(0.35, 1.0, facingT);
+    vec2 offsetBench = -centerDir * uMagnitude * edgeT * distortScale;
+    vec2 offsetUV = offsetBench / uBench;
+    offsetUV.y = -offsetUV.y;
+    vec2 uv = clamp(vUV + offsetUV, vec2(0.0), vec2(1.0));
+    baseRgb = texture(uFbo, uv).rgb;
+  } else {
+    baseRgb = vec3(0.0);
+  }
+
+  // Tint + edge glow.
+  vec3 tinted = baseRgb + uTint * uTintStrength;
+  float glowT = 1.0 - smoothstep(0.0, uEdgeWidth, dist);
+  vec3 glow = uEdgeGlow * uEdgeGlowAmp * glowT;
+  vec3 rgb = tinted + glow;
+
+  // Rim highlight: same light direction; peaks where the edge faces the light.
+  float rimFacing = max(0.0, facing);
+  float rimBand = 1.0 - smoothstep(0.0, uEdgeWidth * 2.0, dist);
+  float rim = pow(rimFacing, 3.0) * rimBand * 0.6;
+
+  // Opaque materials use the tint as body color; refractive overlay composites.
+  if (uOpaque > 0.5) {
+    outColor = vec4(uTint + glow + vec3(1.0) * rim, 1.0);
+  } else {
+    outColor = vec4(rgb + vec3(1.0) * rim, 1.0);
+  }
 }`;
 
 const OVERLAY_VS = `#version 300 es
@@ -63,10 +201,25 @@ void main() {
 }`;
 
 const OVERLAY_FS = `#version 300 es
-precision mediump float;
+precision highp float;
 in vec4 vColor;
 out vec4 outColor;
 void main() { outColor = vColor; }`;
+
+// Per-material visual parameters for the element pass.
+const LOOK = {
+  crown:         { tint: [0.55, 0.80, 1.00], tintStrength: 0.08, magnitude: 5,  falloff: 40, edgeGlow: [0.7, 0.9, 1.0], edgeGlowAmp: 0.35, edgeWidth: 4,  opaque: false },
+  flint:         { tint: [1.00, 0.70, 0.80], tintStrength: 0.08, magnitude: 7,  falloff: 40, edgeGlow: [1.0, 0.7, 0.8], edgeGlowAmp: 0.35, edgeWidth: 4,  opaque: false },
+  fused:         { tint: [0.85, 1.00, 0.95], tintStrength: 0.05, magnitude: 3,  falloff: 35, edgeGlow: [0.8, 1.0, 0.9], edgeGlowAmp: 0.25, edgeWidth: 3,  opaque: false },
+  water:         { tint: [0.50, 0.75, 1.00], tintStrength: 0.10, magnitude: 4,  falloff: 55, edgeGlow: [0.5, 0.7, 1.0], edgeGlowAmp: 0.30, edgeWidth: 5,  opaque: false },
+  diamond:       { tint: [1.00, 1.00, 0.90], tintStrength: 0.04, magnitude: 13, falloff: 22, edgeGlow: [1.0, 1.0, 0.8], edgeGlowAmp: 0.80, edgeWidth: 2,  opaque: false },
+  hyper:         { tint: [1.00, 0.50, 1.00], tintStrength: 0.12, magnitude: 15, falloff: 30, edgeGlow: [1.0, 0.5, 1.0], edgeGlowAmp: 0.45, edgeWidth: 3,  opaque: false },
+  mirror:        { tint: [0.75, 0.80, 0.95], tintStrength: 1.0,  magnitude: 0,  falloff: 1,  edgeGlow: [1.0, 1.0, 1.0], edgeGlowAmp: 0.70, edgeWidth: 2,  opaque: true },
+  'mirror-red':  { tint: [0.95, 0.25, 0.25], tintStrength: 1.0,  magnitude: 0,  falloff: 1,  edgeGlow: [1.0, 0.6, 0.6], edgeGlowAmp: 0.65, edgeWidth: 2,  opaque: true },
+  'mirror-green':{ tint: [0.25, 0.90, 0.40], tintStrength: 1.0,  magnitude: 0,  falloff: 1,  edgeGlow: [0.6, 1.0, 0.7], edgeGlowAmp: 0.65, edgeWidth: 2,  opaque: true },
+  'mirror-blue': { tint: [0.25, 0.40, 1.00], tintStrength: 1.0,  magnitude: 0,  falloff: 1,  edgeGlow: [0.6, 0.7, 1.0], edgeGlowAmp: 0.65, edgeWidth: 2,  opaque: true },
+};
+const DEFAULT_LOOK = LOOK.crown;
 
 export class Renderer {
   constructor(canvas) {
@@ -75,7 +228,7 @@ export class Renderer {
     if (!gl) throw new Error('WebGL2 not supported');
     this.gl = gl;
 
-    // Ray program (SDF quads, instanced).
+    // --- Programs ---
     this.rayProgram = buildProgram(gl, RAY_VS, RAY_FS);
     this.ray = {
       aCorner: gl.getAttribLocation(this.rayProgram, 'aCorner'),
@@ -85,28 +238,77 @@ export class Renderer {
       uBench:  gl.getUniformLocation(this.rayProgram, 'uBench'),
       uWidth:  gl.getUniformLocation(this.rayProgram, 'uWidth'),
     };
-    // Static quad corners: triangle strip (along, side).
-    this.cornerBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      0, -1,  0, 1,  1, -1,  1, 1,
-    ]), gl.STATIC_DRAW);
-    // Per-segment instance buffer.
-    this.segBuf = gl.createBuffer();
 
-    // Overlay program (plain lines, alpha blend).
+    this.blitProgram = buildProgram(gl, BLIT_VS, BLIT_FS);
+    this.blit = {
+      aCorner: gl.getAttribLocation(this.blitProgram, 'aCorner'),
+      uTex:    gl.getUniformLocation(this.blitProgram, 'uTex'),
+    };
+
+    this.elemProgram = buildProgram(gl, ELEM_VS, ELEM_FS);
+    this.elem = {
+      aCorner:       gl.getAttribLocation(this.elemProgram, 'aCorner'),
+      uAabbMin:      gl.getUniformLocation(this.elemProgram, 'uAabbMin'),
+      uAabbMax:      gl.getUniformLocation(this.elemProgram, 'uAabbMax'),
+      uBench:        gl.getUniformLocation(this.elemProgram, 'uBench'),
+      uEdgeCount:    gl.getUniformLocation(this.elemProgram, 'uEdgeCount'),
+      uEdges:        gl.getUniformLocation(this.elemProgram, 'uEdges[0]'),
+      uTint:         gl.getUniformLocation(this.elemProgram, 'uTint'),
+      uTintStrength: gl.getUniformLocation(this.elemProgram, 'uTintStrength'),
+      uMagnitude:    gl.getUniformLocation(this.elemProgram, 'uMagnitude'),
+      uFalloff:      gl.getUniformLocation(this.elemProgram, 'uFalloff'),
+      uEdgeGlow:     gl.getUniformLocation(this.elemProgram, 'uEdgeGlow'),
+      uEdgeGlowAmp:  gl.getUniformLocation(this.elemProgram, 'uEdgeGlowAmp'),
+      uEdgeWidth:    gl.getUniformLocation(this.elemProgram, 'uEdgeWidth'),
+      uOpaque:       gl.getUniformLocation(this.elemProgram, 'uOpaque'),
+      uFbo:          gl.getUniformLocation(this.elemProgram, 'uFbo'),
+    };
+
     this.overlayProgram = buildProgram(gl, OVERLAY_VS, OVERLAY_FS);
     this.overlay = {
       aPos:   gl.getAttribLocation(this.overlayProgram, 'aPos'),
       aColor: gl.getAttribLocation(this.overlayProgram, 'aColor'),
       uBench: gl.getUniformLocation(this.overlayProgram, 'uBench'),
     };
+
+    // --- Static geometry ---
+    // Ray quad corners: triangle strip (along, side).
+    this.rayCornerBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.rayCornerBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, -1,  0, 1,  1, -1,  1, 1,
+    ]), gl.STATIC_DRAW);
+    // Unit quad corners for blit and element programs: triangle strip (0..1).
+    this.unitQuadBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, 0,  1, 0,  0, 1,  1, 1,
+    ]), gl.STATIC_DRAW);
+
+    // --- Dynamic buffers ---
+    this.segBuf = gl.createBuffer();
     this.overlayBuf = gl.createBuffer();
     this.overlayData = new Float32Array(0);
     this.overlayCount = 0;
 
+    // --- Framebuffer for ray image ---
+    this.fbo = gl.createFramebuffer();
+    this.fboTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    // Scratch for per-element edge uploads.
+    this._edgeData = new Float32Array(MAX_EDGES * 4);
+
     // Width of rays in bench units. 2–3 is a nice range for a 900-tall bench.
     this.rayWidth = 2.5;
+
+    // Refractive distortion through glass is optional; the rim glint and
+    // tint stay on regardless.
+    this.distortEnabled = false;
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -118,6 +320,14 @@ export class Renderer {
     this.canvas.width = Math.max(2, Math.floor(rect.width * dpr));
     this.canvas.height = Math.max(2, Math.floor(rect.height * dpr));
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    // Reallocate the FBO color attachment to match.
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.canvas.width, this.canvas.height, 0,
+      gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.fboTex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   benchSize() {
@@ -129,17 +339,17 @@ export class Renderer {
 
   draw(scene, tracer) {
     const gl = this.gl;
+
+    // --- Pass 1: rays → FBO ---
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-
-    // --- Ray pass (instanced SDF quads, additive) ---
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(this.rayProgram);
     gl.uniform2f(this.ray.uBench, scene.bench.w, scene.bench.h);
     gl.uniform1f(this.ray.uWidth, this.rayWidth);
-
-    // Upload segment data (12 floats per segment).
     gl.bindBuffer(gl.ARRAY_BUFFER, this.segBuf);
     gl.bufferData(gl.ARRAY_BUFFER,
       tracer.segmentData.subarray(0, tracer.segmentCount * 12), gl.DYNAMIC_DRAW);
@@ -153,24 +363,46 @@ export class Renderer {
     gl.enableVertexAttribArray(this.ray.aCol2);
     gl.vertexAttribPointer(this.ray.aCol2, 4, gl.FLOAT, false, segStride, 8 * 4);
     gl.vertexAttribDivisor(this.ray.aCol2, 1);
-
-    // Static quad corners (per vertex).
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.rayCornerBuf);
     gl.enableVertexAttribArray(this.ray.aCorner);
     gl.vertexAttribPointer(this.ray.aCorner, 2, gl.FLOAT, false, 0, 0);
     gl.vertexAttribDivisor(this.ray.aCorner, 0);
-
     if (tracer.segmentCount > 0) {
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, tracer.segmentCount);
     }
-
-    // Clean up divisors so the overlay pass isn't confused.
     gl.vertexAttribDivisor(this.ray.aSeg, 0);
     gl.vertexAttribDivisor(this.ray.aCol1, 0);
     gl.vertexAttribDivisor(this.ray.aCol2, 0);
 
-    // --- Overlay pass (alpha) ---
+    // --- Pass 2a: blit FBO → screen ---
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.blitProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
+    gl.uniform1i(this.blit.uTex, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
+    gl.enableVertexAttribArray(this.blit.aCorner);
+    gl.vertexAttribPointer(this.blit.aCorner, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    // --- Pass 2b: element interiors (distortion sampling the FBO) ---
+    gl.useProgram(this.elemProgram);
+    gl.uniform2f(this.elem.uBench, scene.bench.w, scene.bench.h);
+    gl.uniform1i(this.elem.uFbo, 0); // FBO texture still bound on unit 0
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
+    gl.enableVertexAttribArray(this.elem.aCorner);
+    gl.vertexAttribPointer(this.elem.aCorner, 2, gl.FLOAT, false, 0, 0);
+    for (const el of scene.elements) {
+      this.drawElement(el);
+    }
+
+    // --- Pass 3: overlay (alpha-blended lines) ---
     this.buildOverlay(scene);
+    gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.overlayProgram);
     gl.uniform2f(this.overlay.uBench, scene.bench.w, scene.bench.h);
@@ -183,6 +415,52 @@ export class Renderer {
     gl.enableVertexAttribArray(this.overlay.aColor);
     gl.vertexAttribPointer(this.overlay.aColor, 4, gl.FLOAT, false, ovStride, 2 * 4);
     gl.drawArrays(gl.LINES, 0, this.overlayCount);
+  }
+
+  drawElement(el) {
+    const gl = this.gl;
+    const { polygon } = worldEdges(el);
+    const n = Math.min(polygon.length, MAX_EDGES);
+    const look = LOOK[el.material] || DEFAULT_LOOK;
+
+    // Fill edge uniform buffer.
+    const ed = this._edgeData;
+    for (let i = 0; i < n; i++) {
+      const a = polygon[i], b = polygon[(i + 1) % polygon.length];
+      ed[i * 4    ] = a.x;
+      ed[i * 4 + 1] = a.y;
+      ed[i * 4 + 2] = b.x;
+      ed[i * 4 + 3] = b.y;
+    }
+    // Zero out unused edges to keep the fragment loop a no-op past uEdgeCount.
+    for (let i = n * 4; i < ed.length; i++) ed[i] = 0;
+
+    // AABB of polygon, padded so the distortion reach stays inside the quad.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < polygon.length; i++) {
+      const p = polygon[i];
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const pad = Math.max(look.falloff, look.edgeWidth) + 4;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+
+    gl.uniform1i(this.elem.uEdgeCount, n);
+    gl.uniform4fv(this.elem.uEdges, ed);
+    gl.uniform2f(this.elem.uAabbMin, minX, minY);
+    gl.uniform2f(this.elem.uAabbMax, maxX, maxY);
+    gl.uniform3fv(this.elem.uTint, look.tint);
+    gl.uniform1f(this.elem.uTintStrength, look.tintStrength);
+    gl.uniform1f(this.elem.uMagnitude, this.distortEnabled ? look.magnitude : 0);
+    gl.uniform1f(this.elem.uFalloff, look.falloff);
+    gl.uniform3fv(this.elem.uEdgeGlow, look.edgeGlow);
+    gl.uniform1f(this.elem.uEdgeGlowAmp, look.edgeGlowAmp);
+    gl.uniform1f(this.elem.uEdgeWidth, look.edgeWidth);
+    gl.uniform1f(this.elem.uOpaque, look.opaque ? 1.0 : 0.0);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
   ensureOverlayCapacity(nVerts) {
@@ -210,11 +488,8 @@ export class Renderer {
     this.ensureOverlayCapacity(estimate * 2);
 
     const { bench } = scene;
-
     this.rect(0, 0, bench.w, bench.h, 0.35, 0.4, 0.5, 0.6);
 
-    // Emitter ticks on left wall. Disabled sources draw dim; with mic active,
-    // enabled sources extend into an amber band-volume bar.
     const levels = scene.emitter.micLevels;
     const disabled = scene.emitter.disabled;
     const srcStripH = bench.h / scene.emitter.count;
@@ -241,8 +516,8 @@ export class Renderer {
     }
 
     for (const el of scene.elements) {
-      const { polygon } = worldEdgesCached(el);
-      const col = elementColor(el);
+      const { polygon } = worldEdges(el);
+      const col = elementOutlineColor(el);
       this.polyOutline(polygon, col[0], col[1], col[2], col[3]);
       if (el._selected) {
         this.rect(el.x - 8, el.y - 8, 16, 16, 1, 1, 1, 0.8);
@@ -268,24 +543,22 @@ export class Renderer {
   }
 }
 
-function elementColor(el) {
+// Overlay outline color per material. Interior colors are now handled by the
+// element pass; this is just a faint edge stroke for selection feedback.
+function elementOutlineColor(el) {
   switch (el.material) {
     case 'mirror':       return [0.85, 0.85, 1.0, 0.9];
     case 'mirror-red':   return [1.0, 0.4, 0.4, 0.9];
     case 'mirror-green': return [0.4, 1.0, 0.5, 0.9];
     case 'mirror-blue':  return [0.4, 0.5, 1.0, 0.9];
-    case 'flint':        return [1.0, 0.7, 0.8, 0.85];
-    case 'crown':        return [0.6, 0.9, 1.0, 0.85];
-    case 'fused':        return [0.8, 1.0, 0.9, 0.85];
-    case 'water':        return [0.6, 0.8, 1.0, 0.85];
-    case 'diamond':      return [1.0, 1.0, 0.8, 0.9];
-    case 'hyper':        return [1.0, 0.5, 1.0, 0.9];
-    default:             return [1, 1, 1, 0.8];
+    case 'flint':        return [1.0, 0.7, 0.8, 0.6];
+    case 'crown':        return [0.6, 0.9, 1.0, 0.6];
+    case 'fused':        return [0.8, 1.0, 0.9, 0.6];
+    case 'water':        return [0.6, 0.8, 1.0, 0.6];
+    case 'diamond':      return [1.0, 1.0, 0.8, 0.7];
+    case 'hyper':        return [1.0, 0.5, 1.0, 0.7];
+    default:             return [1, 1, 1, 0.6];
   }
-}
-
-function worldEdgesCached(el) {
-  return worldEdges(el);
 }
 
 function buildProgram(gl, vs, fs) {

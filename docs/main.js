@@ -43,6 +43,13 @@ function syncBaseSelect(hz) {
 const ui = new UI(scene, canvas, markDirty);
 ui.rebuildSensorReadout();
 
+const distortToggle = document.getElementById('distort-toggle');
+renderer.distortEnabled = distortToggle.checked;
+distortToggle.addEventListener('change', () => {
+  renderer.distortEnabled = distortToggle.checked;
+  markDirty();
+});
+
 const synthBtn = document.getElementById('synth-toggle');
 synthBtn.addEventListener('click', () => {
   if (!synth.active) {

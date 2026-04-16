@@ -13,9 +13,13 @@ No dependencies.
 - `docs/spectrum.js` — Dan-Bruton wavelength→RGB, Sellmeier/Cauchy dispersion,
   Beer-Lambert absorption, dichroic reflectance, `MATERIALS` table.
 - `docs/scene.js` — data model, local/world polygon geometry, JSON save/load.
-- `docs/raytracer.js` — CPU tracer, per-frame vertex buffer + sensor bins.
-- `docs/renderer.js` — WebGL2. Two passes: additive line blend (light field),
-  alpha overlay for element outlines and emitter/sensor ticks.
+- `docs/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
+- `docs/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
+  rendered into an FBO (additive blend, soft falloff), (2) FBO blit to
+  screen plus per-element bounding-quad pass that re-samples the FBO with
+  a polygon-SDF-driven offset for refractive distortion and material
+  tinting, (3) alpha-blended overlay lines for the bench outline, element
+  outlines, emitter/sensor ticks, and selection handle.
 - `docs/ui.js` — pointer events (mouse + touch unified), property panel,
   save/load, preset dropdown, undo/redo, keyboard shortcuts.
 - `docs/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.

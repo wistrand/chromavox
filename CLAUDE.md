@@ -37,9 +37,23 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Tracer never branches rays (no Fresnel split). TIR reflects; dichroic
   mirror absorbs the non-reflected fraction. Keeps the vertex buffer
   size predictable.
+- Nested / overlapping dielectrics use an inside-element *stack*
+  (`this._stack`) so `n1` / `n2` and Beer-Lambert α reflect the actual
+  current medium, not just "vacuum or this element".
+- Ray hot loop avoids allocations: walls and inside-stack are reused
+  Tracer fields; element infos iterate as an array, not a Map iterator.
 - Equilateral prism requires `n < 2` for any transmission. `diamond`
   always TIRs; `hyper` is tuned to satisfy the bound.
 - Undo/redo batches via `beginEdit` / `endEdit`; drags and slider scrubs
   collapse into one history entry.
 - Scene JSON is `version: 1`. IDs are regenerated on deserialize;
   `bumpIdCeiling` keeps the running counter ahead of any restored max.
+- Rays render via instanced SDF quads, not GL line primitives — width
+  and soft falloff are controlled by `renderer.rayWidth` and the
+  fragment shader.
+- Element rendering is a three-pass pipeline: rays → FBO → screen blit →
+  per-element SDF distortion pass sampling the FBO → overlay lines. Each
+  material has a `LOOK` entry in `renderer.js` controlling tint,
+  distortion magnitude, falloff, edge glow, and opacity. Sharp vs soft
+  edges come from `edgeWidth`; refractive distortion comes from
+  `magnitude` and `falloff`.
