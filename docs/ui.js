@@ -305,11 +305,54 @@ export class UI {
   // --- Canvas pointer events ---
   bindCanvas() {
     const c = this.canvas;
+    this.pointers = new Map();
     c.addEventListener('pointerdown', e => this.onDown(e));
     c.addEventListener('pointermove', e => this.onMove(e));
     c.addEventListener('pointerup', e => this.onUp(e));
     c.addEventListener('pointercancel', e => this.onUp(e));
     c.addEventListener('contextmenu', e => e.preventDefault());
+  }
+
+  _captureBaseSize(el) {
+    return { size: el.size, w: el.w, h: el.h, radius: el.radius };
+  }
+  _applyPinchScale(el, base, s) {
+    switch (el.kind) {
+      case 'prism':
+      case 'rabbit':
+        el.size = Math.max(20, base.size * s);
+        break;
+      case 'block':
+        el.w = Math.max(20, base.w * s);
+        el.h = Math.max(10, base.h * s);
+        break;
+      case 'mirror':
+        el.w = Math.max(20, base.w * s);
+        break;
+      case 'lens-convex':
+        el.h = Math.max(40, base.h * s);
+        el.radius = Math.max(80, base.radius * s);
+        break;
+      case 'lens-concave':
+        el.h = Math.max(40, base.h * s);
+        el.radius = Math.max(80, base.radius * s);
+        break;
+    }
+  }
+  _startPinchIfTwoPointers() {
+    if (this.pointers.size !== 2 || !this.selected) return;
+    const pts = [...this.pointers.values()];
+    const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const angle = Math.atan2(dy, dx);
+    this.beginEdit();
+    this.dragging = {
+      type: 'pinch',
+      startDist: dist,
+      startAngle: angle,
+      startRot: this.selected.rot,
+      baseSize: this._captureBaseSize(this.selected),
+    };
   }
 
   canvasToBench(clientX, clientY) {
@@ -332,6 +375,14 @@ export class UI {
   onDown(e) {
     this.canvas.setPointerCapture(e.pointerId);
     const { x, y } = this.canvasToBench(e.clientX, e.clientY);
+    this.pointers.set(e.pointerId, { x, y });
+
+    // Second simultaneous pointer on a selected element starts a pinch
+    // (scale + rotate) gesture, superseding any single-pointer drag.
+    if (this.pointers.size === 2 && this.selected) {
+      this._startPinchIfTwoPointers();
+      return;
+    }
 
     // Click on left-wall tick area toggles that source. Shift-click solos it.
     if (x >= 0 && x <= 30) {
@@ -391,9 +442,22 @@ export class UI {
   }
 
   onMove(e) {
-    if (!this.dragging || !this.selected) return;
     const { x, y } = this.canvasToBench(e.clientX, e.clientY);
-    if (this.dragging.type === 'move') {
+    if (this.pointers.has(e.pointerId)) {
+      this.pointers.set(e.pointerId, { x, y });
+    }
+    if (!this.dragging || !this.selected) return;
+    if (this.dragging.type === 'pinch' && this.pointers.size >= 2) {
+      const pts = [...this.pointers.values()];
+      const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const angle = Math.atan2(dy, dx);
+      const scale = dist / this.dragging.startDist;
+      this.selected.rot = this.dragging.startRot + (angle - this.dragging.startAngle);
+      this._applyPinchScale(this.selected, this.dragging.baseSize, scale);
+      this.renderPropPanel();
+      this.onChange();
+    } else if (this.dragging.type === 'move') {
       this.selected.x = x + this.dragging.dx;
       this.selected.y = y + this.dragging.dy;
       this.onChange();
@@ -407,6 +471,13 @@ export class UI {
 
   onUp(e) {
     try { this.canvas.releasePointerCapture(e.pointerId); } catch {}
+    this.pointers.delete(e.pointerId);
+    // End pinch only when fewer than two pointers remain.
+    if (this.dragging?.type === 'pinch' && this.pointers.size < 2) {
+      this.dragging = null;
+      this.endEdit();
+      return;
+    }
     this.dragging = null;
     this.endEdit();
   }

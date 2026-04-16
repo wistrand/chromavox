@@ -8,23 +8,64 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--ink); font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
-#app { display: grid; grid-template-columns: 240px 1fr 240px; height: 100vh; }
+#app {
+  display: grid;
+  grid-template-columns: 220px 1fr 220px;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "header header header"
+    "left   stage  right";
+  height: 100vh;
+}
+#toolbar  { grid-area: header; }
+#left-panel  { grid-area: left; }
+#stage       { grid-area: stage; }
+#right-panel { grid-area: right; }
+
 .panel { background: var(--panel); border-right: 1px solid var(--border); padding: 10px; overflow-y: auto; overscroll-behavior: contain; }
-#right-panel { border-right: 0; border-left: 1px solid var(--border); padding: 0; overflow: hidden; }
+#right-panel { border-right: 0; border-left: 1px solid var(--border); padding: 0; overflow-y: auto; }
 .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 14px 0 6px; }
 .panel h2:first-child { margin-top: 0; }
 .row { margin: 6px 0; }
 .row label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .row input[type=range] { flex: 1; min-width: 0; }
 .row span { min-width: 30px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-.tools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+
+#toolbar {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+  height: 54px;
+  min-height: 54px;
+  box-sizing: border-box;
+}
+#toolbar > * { flex-shrink: 0; }
+#toolbar .tools { display: flex; gap: 6px; grid-template-columns: none; }
+#toolbar .tools > button { flex-shrink: 0; }
+#toolbar button { padding: 8px 14px; font-size: 13px; }
+#toolbar .tb-sep { width: 1px; height: 26px; background: var(--border); margin: 0 6px; flex: 0 0 auto; }
+#toolbar .tb-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+#toolbar .tb-check input { margin: 0; }
+
+/* Left-panel tool grid style only applies when the class is there (kept for
+   legacy — the toolbar uses flex, not grid). */
+.panel .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+
 button { background: #1d222a; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font: inherit; cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.active { background: var(--accent); color: #061018; border-color: var(--accent); }
 #stage { position: relative; background: #000; }
 #gl { width: 100%; height: 100%; display: block; touch-action: none; }
-#sensor-readout { display: flex; flex-direction: column; height: 100%; }
-.sensor-bar { flex: 1 1 0; min-height: 0; background: #000; position: relative; overflow: hidden; border-top: 1px solid var(--border); }
+#sensor-readout { display: flex; flex-direction: column; min-height: 100%; }
+.sensor-bar { flex: 1 1 0; min-height: 14px; background: #000; position: relative; overflow: hidden; border-top: 1px solid var(--border); }
 .sensor-bar:first-child { border-top: 0; }
 .sensor-bar canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 #prop-panel { font-size: 12px; }
@@ -33,11 +74,17 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 #panel-toggle { display: none; position: absolute; top: 8px; left: 8px; z-index: 10; width: 36px; height: 36px; padding: 0; }
 
 @media (max-width: 860px) {
-  #app { grid-template-columns: 1fr; grid-template-rows: 1fr; }
-  .panel { position: absolute; top: 0; bottom: 0; width: 280px; z-index: 5; transform: translateX(-100%); transition: transform 0.2s; border: 0; }
+  #app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      "header"
+      "stage";
+  }
+  .panel { position: absolute; top: 54px; bottom: 0; width: 280px; z-index: 5; transform: translateX(-100%); transition: transform 0.2s; border: 0; }
   #left-panel { left: 0; }
   #right-panel { right: 0; transform: translateX(100%); }
   #app.show-left #left-panel { transform: translateX(0); box-shadow: 0 0 30px rgba(0,0,0,0.5); }
   #app.show-right #right-panel { transform: translateX(0); box-shadow: 0 0 30px rgba(0,0,0,0.5); }
-  #panel-toggle { display: block; }
+  #panel-toggle { display: block; top: 62px; }
 }

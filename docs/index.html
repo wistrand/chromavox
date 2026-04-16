@@ -8,6 +8,29 @@
 </head>
 <body>
 <div id="app">
+  <header id="toolbar">
+    <div class="tools">
+      <button data-tool="select" class="active">Select</button>
+      <button data-tool="prism">Prism</button>
+      <button data-tool="block">Block</button>
+      <button data-tool="lens-convex">Convex</button>
+      <button data-tool="lens-concave">Concave</button>
+      <button data-tool="mirror">Mirror</button>
+      <button data-tool="rabbit">Rabbit</button>
+      <button data-tool="delete">Delete</button>
+    </div>
+    <span class="tb-sep"></span>
+    <button id="mic-toggle">Audio in: off</button>
+    <button id="synth-toggle">Audio out: off</button>
+    <span class="tb-sep"></span>
+    <label class="tb-check"><input id="distort-toggle" type="checkbox"> Distort</label>
+    <span class="tb-sep"></span>
+    <button id="save">Save</button>
+    <button id="load">Load</button>
+    <button id="clear">Clear</button>
+    <input id="file-input" type="file" accept="application/json" hidden>
+  </header>
+
   <aside id="left-panel" class="panel">
     <h2>Emitters</h2>
     <div class="row"><label>Sources <input id="emitter-count" type="range" min="1" max="128" value="12"><span id="emitter-count-val">12</span></label></div>
@@ -16,7 +39,8 @@
     <div class="row"><label>Rays/source <input id="rays-per" type="range" min="1" max="2000" value="512"><span id="rays-per-val">512</span></label></div>
     <div class="row"><label>Spread° <input id="spread" type="range" min="0" max="60" value="0"><span id="spread-val">0</span></label></div>
     <div class="row"><label>Aperture <input id="aperture" type="range" min="0" max="100" value="1"><span id="aperture-val">0.01</span></label></div>
-    <div class="row"><button id="mic-toggle">Audio in: off</button></div>
+
+    <h2>Audio in</h2>
     <div class="row"><label>Source <select id="mic-source"><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keyboard</option></select></label></div>
     <div class="row" id="mic-device-row"><label>Device <select id="mic-device"><option value="">default</option></select></label></div>
     <div class="row"><label>Mode <select id="mic-mode"><option value="log">log</option><option value="chromatic" selected>chromatic</option></select></label></div>
@@ -36,36 +60,18 @@
       <option value="2093">C7</option>
     </select></label></div>
     <div class="row"><label><input id="bucket-color" type="checkbox"> Bucket color</label></div>
+
     <h2>Sensors</h2>
     <div class="row"><label>Count <input id="sensor-count" type="range" min="1" max="64" value="12"><span id="sensor-count-val">12</span></label></div>
     <div class="row"><label><input id="sensor-sync" type="checkbox"> Sync to source count</label></div>
-    <div class="row"><button id="synth-toggle">Audio out: off</button></div>
     <div class="row"><label>Device <select id="synth-device"><option value="">default</option></select></label></div>
     <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="100" value="25"><span id="synth-vol-val">25</span></label></div>
-    <h2>Tools</h2>
-    <div class="tools">
-      <button data-tool="prism">Prism</button>
-      <button data-tool="block">Block</button>
-      <button data-tool="lens-convex">Convex Lens</button>
-      <button data-tool="lens-concave">Concave Lens</button>
-      <button data-tool="mirror">Mirror</button>
-      <button data-tool="rabbit">Rabbit</button>
-      <button data-tool="select" class="active">Select</button>
-      <button data-tool="delete">Delete</button>
-    </div>
+
     <h2>Selected</h2>
     <div id="prop-panel"><em>No selection</em></div>
+
     <h2>Scene</h2>
-    <div class="row"><label><input id="distort-toggle" type="checkbox"> Distort rays through glass</label></div>
-    <div class="row">
-      <label>Preset <select id="preset-select"><option value="">…</option></select></label>
-    </div>
-    <div class="row">
-      <button id="save">Save JSON</button>
-      <button id="load">Load JSON</button>
-      <button id="clear">Clear</button>
-    </div>
-    <input id="file-input" type="file" accept="application/json" hidden>
+    <div class="row"><label>Preset <select id="preset-select"><option value="">…</option></select></label></div>
   </aside>
 
   <main id="stage">

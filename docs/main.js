@@ -220,8 +220,22 @@ micBtn.addEventListener('click', async () => {
 });
 
 window.addEventListener('resize', () => {
+  const oldW = scene.bench.w;
+  const oldH = scene.bench.h;
   renderer.resize();
-  Object.assign(scene.bench, renderer.benchSize());
+  const newBench = renderer.benchSize();
+  // Scale element positions proportionally so they stay at the same fraction
+  // of the bench when the aspect changes. Sizes are not scaled.
+  const sx = oldW ? newBench.w / oldW : 1;
+  const sy = oldH ? newBench.h / oldH : 1;
+  if (sx !== 1 || sy !== 1) {
+    for (const el of scene.elements) {
+      el.x *= sx;
+      el.y *= sy;
+    }
+  }
+  scene.bench.w = newBench.w;
+  scene.bench.h = newBench.h;
   markDirty();
 });
 

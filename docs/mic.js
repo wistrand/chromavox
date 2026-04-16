@@ -30,6 +30,12 @@ export class MicModulator {
     const nodes = [];
 
     if (source === 'mic') {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          'Microphone requires a secure context (HTTPS or localhost). ' +
+          'Pick sine, harmonics, noise, or keyboard as the source instead.'
+        );
+      }
       // Disable browser AGC/AEC/NS so the analyser sees the raw envelope.
       // AGC in particular flattens loud and quiet to a constant level,
       // making the input look "stuck at max" no matter what you do.
