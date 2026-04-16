@@ -1,9 +1,34 @@
 {
   "version": 1,
-  "bench": { "w": 1600, "h": 900 },
-  "emitter": { "count": 1, "wlMin": 400, "wlMax": 700, "raysPerSource": 400, "spreadDeg": 0, "apertureFactor": 0.02 },
-  "sensorCount": 64,
+  "bench": {
+    "w": 552,
+    "h": 900
+  },
+  "emitter": {
+    "apertureFactor": 0.005,
+    "count": 6,
+    "wlMin": 400,
+    "wlMax": 700,
+    "raysPerSource": 600,
+    "spreadDeg": 0,
+    "disabled": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "sensorCount": 24,
   "elements": [
-    { "kind": "prism", "x": 560, "y": 450, "size": 300, "material": "flint", "rot": 0.524 }
+    {
+      "kind": "prism",
+      "x": 243.24203559559038,
+      "y": 216.33486669523433,
+      "size": 320,
+      "material": "flint",
+      "rot": 0.5,
+      "id": 1
+    }
   ]
 }

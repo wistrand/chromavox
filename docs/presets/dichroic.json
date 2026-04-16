@@ -1,7 +1,7 @@
 {
   "version": 1,
   "bench": { "w": 1600, "h": 900 },
-  "emitter": { "count": 3, "wlMin": 400, "wlMax": 700, "raysPerSource": 256, "spreadDeg": 0, "apertureFactor": 0.02 },
+  "emitter": { "count": 3, "wlMin": 400, "wlMax": 700, "raysPerSource": 256, "spreadDeg": 0, "apertureFactor": 0.02, "disabled": [] },
   "sensorCount": 48,
   "elements": [
     { "kind": "mirror", "x": 600,  "y": 300, "w": 260, "h": 6, "material": "mirror-red",   "rot": 0.7854 },

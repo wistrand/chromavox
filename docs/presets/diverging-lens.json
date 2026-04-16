@@ -1,7 +1,7 @@
 {
   "version": 1,
   "bench": { "w": 1600, "h": 900 },
-  "emitter": { "count": 32, "wlMin": 400, "wlMax": 700, "raysPerSource": 64, "spreadDeg": 4 },
+  "emitter": { "count": 32, "wlMin": 400, "wlMax": 700, "raysPerSource": 64, "spreadDeg": 4, "disabled": [] },
   "sensorCount": 48,
   "elements": [
     { "kind": "lens-concave", "x": 700, "y": 450, "w": 30, "h": 340, "radius": 400, "material": "crown", "rot": 0 }

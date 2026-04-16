@@ -1,7 +1,7 @@
 {
   "version": 1,
   "bench": { "w": 1600, "h": 900 },
-  "emitter": { "count": 8, "wlMin": 400, "wlMax": 700, "raysPerSource": 96, "spreadDeg": 0, "apertureFactor": 0.2 },
+  "emitter": { "count": 8, "wlMin": 400, "wlMax": 700, "raysPerSource": 96, "spreadDeg": 0, "apertureFactor": 0.2, "disabled": [] },
   "sensorCount": 48,
   "elements": [
     { "kind": "block", "x": 500,  "y": 250, "w": 240, "h": 120, "material": "water",  "rot": 0 },
