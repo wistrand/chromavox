@@ -1,7 +1,7 @@
 // CPU ray tracer. Emits per-frame segment records for the WebGL2 renderer
 // and updates per-sensor spectrum bins.
 
-import { wavelengthToRGB, materialN, materialAbsorption, mirrorReflectance } from './spectrum.js';
+import { wavelengthToRGB, materialN, elementAbsorption, elementReflectance } from './spectrum.js';
 import { worldEdges, pointInPolygon, materialOptics } from './scene.js';
 
 const EPS = 1e-4;
@@ -161,10 +161,12 @@ export class Tracer {
       const hx = x + vx * tBest, hy = y + vy * tBest;
 
       // Beer-Lambert absorption along the segment if it was inside a medium.
+      // Per-element color overrides the material's absorption band.
       let Iend = I;
       if (stack.length > 0) {
-        const inMat = materialOptics(stack[stack.length - 1].material);
-        const alpha = materialAbsorption(inMat, wl);
+        const insideEl = stack[stack.length - 1];
+        const inMat = materialOptics(insideEl.material);
+        const alpha = elementAbsorption(insideEl, inMat, wl);
         if (alpha > 0) {
           const d = Math.hypot(hx - x, hy - y);
           Iend = I * Math.exp(-alpha * d);
@@ -193,7 +195,7 @@ export class Tracer {
         const vdotn = vx * nx + vy * ny;
         vx = vx - 2 * vdotn * nx;
         vy = vy - 2 * vdotn * ny;
-        I *= mirrorReflectance(matObj, wl);
+        I *= elementReflectance(elInfo.el, matObj, wl);
       } else {
         // Dielectric: Snell with Sellmeier (or Cauchy) dispersion.
         // vdotn_out decides enter/exit of *this* polygon; n1/n2 are resolved

@@ -7,6 +7,35 @@ import { MATERIALS } from './spectrum.js';
 // sensor count, bench) as a JSON string. Rapid drags and slider scrubs are
 // batched: `beginEdit` captures the pre-state lazily, `endEdit` commits if
 // anything actually changed.
+function hexToHue(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+  if (!m) return 0;
+  const r = parseInt(m[1], 16) / 255;
+  const g = parseInt(m[2], 16) / 255;
+  const b = parseInt(m[3], 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return 0;
+  let h;
+  if (max === r)      h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else                h = (r - g) / d + 4;
+  h *= 60;
+  if (h < 0) h += 360;
+  return h;
+}
+
+function hslToHex(h, s, l) {
+  const hp = h / 360;
+  const to2 = n => {
+    const k = (n + hp * 12) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(Math.max(0, Math.min(1, c)) * 255).toString(16).padStart(2, '0');
+  };
+  return '#' + to2(0) + to2(8) + to2(4);
+}
+
 class History {
   constructor(limit = 50) {
     this.past = [];
@@ -441,6 +470,64 @@ export class UI {
       this.onChange();
     });
     addRow('Material', sel);
+
+    // Color override: optional per-element tint that replaces the material's
+    // default visual color. Reset button clears el.color so the material
+    // default is restored.
+    const MATERIAL_COLOR_HINT = {
+      crown: '#8ccbff', flint: '#ffb3cc', fused: '#d9ffe6', water: '#80bfff',
+      diamond: '#ffffe6', hyper: '#ff80ff',
+      mirror: '#bfccff', 'mirror-red': '#ff6666',
+      'mirror-green': '#66ff6e', 'mirror-blue': '#6670ff',
+    };
+    const colorRow = document.createElement('div');
+    colorRow.style.display = 'flex';
+    colorRow.style.gap = '4px';
+    const colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.style.flex = '1';
+    const initialColor = el.color || MATERIAL_COLOR_HINT[el.material] || '#cccccc';
+    colorInput.value = initialColor;
+    const resetBtn = document.createElement('button');
+    resetBtn.textContent = '×';
+    resetBtn.title = 'Reset to material default';
+    colorRow.appendChild(colorInput);
+    colorRow.appendChild(resetBtn);
+    addRow('Color', colorRow);
+
+    // Hue slider lets the user scrub through the spectrum live. Mirrors the
+    // color picker value both ways.
+    const hueInput = document.createElement('input');
+    hueInput.type = 'range';
+    hueInput.min = 0; hueInput.max = 360; hueInput.step = 1;
+    hueInput.value = hexToHue(initialColor);
+    hueInput.style.background = 'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)';
+    addRow('Hue', hueInput);
+
+    colorInput.addEventListener('input', () => {
+      this.beginEdit();
+      el.color = colorInput.value;
+      hueInput.value = hexToHue(el.color);
+      this.onChange();
+    });
+    colorInput.addEventListener('change', () => this.endEdit());
+    hueInput.addEventListener('input', () => {
+      this.beginEdit();
+      const hex = hslToHex(parseInt(hueInput.value, 10), 1, 0.5);
+      el.color = hex;
+      colorInput.value = hex;
+      this.onChange();
+    });
+    hueInput.addEventListener('change', () => this.endEdit());
+    resetBtn.addEventListener('click', () => {
+      this.beginEdit();
+      delete el.color;
+      this.endEdit();
+      const fallback = MATERIAL_COLOR_HINT[el.material] || '#cccccc';
+      colorInput.value = fallback;
+      hueInput.value = hexToHue(fallback);
+      this.onChange();
+    });
 
     // Size params per kind
     const sizeFields = {

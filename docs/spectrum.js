@@ -64,6 +64,47 @@ export function mirrorReflectance(mat, wlNm) {
   return Math.min(1, base + r.peak * Math.exp(-d * d));
 }
 
+// Parse "#rrggbb" → [r, g, b] in [0,1]. Returns white on invalid input.
+export function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+  if (!m) return [1, 1, 1];
+  return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
+}
+
+// How strongly a colored filter of RGB `c` transmits wavelength `wl`.
+// T(λ) = dot(c, wlRGB(λ)) / |wlRGB|. Peak near the wavelengths the color
+// represents; near zero for complementary wavelengths.
+function colorTransmission(rgb, wlNm) {
+  const w = wavelengthToRGB(wlNm);
+  const total = w[0] + w[1] + w[2] + 1e-6;
+  const t = (rgb[0] * w[0] + rgb[1] * w[1] + rgb[2] * w[2]) / total;
+  return Math.max(0.01, Math.min(1, t));
+}
+
+// Reference path length (bench units) over which a colored filter fully
+// applies. α = -ln(T) / D_REF. Shorter = stronger filtering per unit length.
+const D_REF = 80;
+
+// Per-element absorption. When `el.color` is set, derives α from the color
+// as a transmission filter; otherwise falls back to the material's band.
+export function elementAbsorption(el, mat, wlNm) {
+  if (el && el.color) {
+    const trans = colorTransmission(hexToRgb(el.color), wlNm);
+    return -Math.log(trans) / D_REF;
+  }
+  return materialAbsorption(mat, wlNm);
+}
+
+// Per-element mirror reflectance. When `el.color` is set, reflects
+// wavelengths matching the color strongly and others weakly.
+export function elementReflectance(el, mat, wlNm) {
+  if (el && el.color) {
+    const trans = colorTransmission(hexToRgb(el.color), wlNm);
+    return 0.02 + 0.93 * trans;
+  }
+  return mirrorReflectance(mat, wlNm);
+}
+
 // Sellmeier coefficients sourced from Schott / refractiveindex.info for real
 // materials; synthetic ones stay on Cauchy for simplicity.
 // Absorption α scales are per bench unit; a path of 200 units at the peak

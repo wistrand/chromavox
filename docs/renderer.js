@@ -169,8 +169,11 @@ void main() {
     baseRgb = vec3(0.0);
   }
 
-  // Tint + edge glow.
-  vec3 tinted = baseRgb + uTint * uTintStrength;
+  // Tint + edge glow. Apply the tint both multiplicatively (rays through
+  // glass pick up its color, colored-glass filter look) and additively
+  // (body is visible even where no rays reach).
+  vec3 filtered = mix(baseRgb, baseRgb * uTint, uTintStrength * 0.8);
+  vec3 tinted = filtered + uTint * uTintStrength;
   float glowT = 1.0 - smoothstep(0.0, uEdgeWidth, dist);
   vec3 glow = uEdgeGlow * uEdgeGlowAmp * glowT;
   vec3 rgb = tinted + glow;
@@ -451,11 +454,22 @@ export class Renderer {
     gl.uniform4fv(this.elem.uEdges, ed);
     gl.uniform2f(this.elem.uAabbMin, minX, minY);
     gl.uniform2f(this.elem.uAabbMax, maxX, maxY);
-    gl.uniform3fv(this.elem.uTint, look.tint);
-    gl.uniform1f(this.elem.uTintStrength, look.tintStrength);
+    // Per-element color override takes precedence over the material's tint.
+    // Overridden colors also get a much stronger mix so the body reads as
+    // that color, not just as a faint sheen.
+    let tint = look.tint, edgeGlow = look.edgeGlow;
+    let tintStrength = look.tintStrength;
+    if (el.color) {
+      const rgb = hexToRgb(el.color);
+      tint = rgb;
+      edgeGlow = rgb;
+      tintStrength = 0.45;
+    }
+    gl.uniform3fv(this.elem.uTint, tint);
+    gl.uniform1f(this.elem.uTintStrength, tintStrength);
     gl.uniform1f(this.elem.uMagnitude, this.distortEnabled ? look.magnitude : 0);
     gl.uniform1f(this.elem.uFalloff, look.falloff);
-    gl.uniform3fv(this.elem.uEdgeGlow, look.edgeGlow);
+    gl.uniform3fv(this.elem.uEdgeGlow, edgeGlow);
     gl.uniform1f(this.elem.uEdgeGlowAmp, look.edgeGlowAmp);
     gl.uniform1f(this.elem.uEdgeWidth, look.edgeWidth);
     gl.uniform1f(this.elem.uOpaque, look.opaque ? 1.0 : 0.0);
@@ -559,6 +573,12 @@ function elementOutlineColor(el) {
     case 'hyper':        return [1.0, 0.5, 1.0, 0.7];
     default:             return [1, 1, 1, 0.6];
   }
+}
+
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return [1, 1, 1];
+  return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
 }
 
 function buildProgram(gl, vs, fs) {
