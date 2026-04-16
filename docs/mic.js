@@ -18,7 +18,7 @@ export class MicModulator {
     this.keyboardOctave = 4;
   }
 
-  async enable(source = 'mic') {
+  async enable(source = 'mic', deviceId = null) {
     if (this.active) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = new AC();
@@ -30,7 +30,10 @@ export class MicModulator {
     const nodes = [];
 
     if (source === 'mic') {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audio = deviceId
+        ? { deviceId: { exact: deviceId } }
+        : true;
+      stream = await navigator.mediaDevices.getUserMedia({ audio });
       srcNode = ctx.createMediaStreamSource(stream);
     } else if (source === 'sine') {
       const o = ctx.createOscillator();

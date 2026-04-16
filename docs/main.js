@@ -62,7 +62,72 @@ document.getElementById('mic-mode').addEventListener('change', e => {
   synth.setMode(e.target.value);
 });
 
+window.addEventListener('keydown', e => {
+  if (e.target.matches('input, select, textarea')) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'q' || e.key === 'Q') { e.preventDefault(); synthBtn.click(); }
+});
+
+async function populateDevices(selectId, kind, fallbackName) {
+  const sel = document.getElementById(selectId);
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  const cur = sel.value;
+  sel.innerHTML = '';
+  const def = document.createElement('option');
+  def.value = ''; def.textContent = 'default';
+  sel.appendChild(def);
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    let n = 1;
+    for (const d of devs) {
+      if (d.kind !== kind) continue;
+      const o = document.createElement('option');
+      o.value = d.deviceId;
+      o.textContent = d.label || `${fallbackName} ${n++}`;
+      sel.appendChild(o);
+    }
+  } catch {}
+  sel.value = cur;
+}
+const populateMicDevices    = () => populateDevices('mic-device',   'audioinput',  'input');
+const populateSynthDevices  = () => populateDevices('synth-device', 'audiooutput', 'output');
+
+document.getElementById('mic-device').addEventListener('change', async () => {
+  if (!mic.active || mic.source !== 'mic') return;
+  mic.disable();
+  try {
+    const dev = document.getElementById('mic-device').value || null;
+    await mic.enable('mic', dev);
+  } catch (err) {
+    alert('Microphone: ' + err.message);
+    micBtn.textContent = 'Audio in: off';
+    micBtn.classList.remove('active');
+    scene.emitter.micLevels = null;
+    scene.emitter.wlPerSource = null;
+    markDirty();
+  }
+});
+
+document.getElementById('synth-device').addEventListener('change', e => {
+  synth.setSinkId(e.target.value || '');
+});
+
+populateMicDevices();
+populateSynthDevices();
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  populateMicDevices();
+  populateSynthDevices();
+});
+
+function syncMicDeviceVisibility() {
+  const row = document.getElementById('mic-device-row');
+  const isMic = document.getElementById('mic-source').value === 'mic';
+  row.style.visibility = isMic ? 'visible' : 'hidden';
+}
+syncMicDeviceVisibility();
+
 document.getElementById('mic-source').addEventListener('change', async e => {
+  syncMicDeviceVisibility();
   // Pick a reasonable chromatic base for each debug source so its main
   // content lands inside the ladder. Microphone and noises keep C3.
   const baseBySource = {
@@ -85,7 +150,8 @@ document.getElementById('mic-source').addEventListener('change', async e => {
   if (!mic.active) return;
   mic.disable();
   try {
-    await mic.enable(e.target.value);
+    const dev = document.getElementById('mic-device').value || null;
+    await mic.enable(e.target.value, dev);
   } catch (err) {
     alert('Audio input: ' + err.message);
     micBtn.textContent = 'Audio in: off';
@@ -113,9 +179,12 @@ micBtn.addEventListener('click', async () => {
   if (!mic.active) {
     try {
       const src = document.getElementById('mic-source').value;
-      await mic.enable(src);
+      const dev = document.getElementById('mic-device').value || null;
+      await mic.enable(src, dev);
       micBtn.textContent = 'Audio in: on';
       micBtn.classList.add('active');
+      populateMicDevices();
+      populateSynthDevices();
     } catch (err) {
       alert('Microphone: ' + err.message);
     }

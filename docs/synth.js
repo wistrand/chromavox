@@ -14,6 +14,16 @@ export class SensorSynth {
     this.volume = 0.25;
     this.mode = 'log';
     this.baseHz = 130.81;
+    this.sinkId = '';
+  }
+
+  async setSinkId(id) {
+    this.sinkId = id || '';
+    if (this.ctx && typeof this.ctx.setSinkId === 'function') {
+      try { await this.ctx.setSinkId(this.sinkId); } catch (err) {
+        console.warn('setSinkId failed:', err);
+      }
+    }
   }
 
   setBase(hz) {
@@ -37,6 +47,9 @@ export class SensorSynth {
     this.master.gain.value = this.volume ?? 0.25;
     this.master.connect(this.ctx.destination);
     this.mode = mode;
+    if (this.sinkId && typeof this.ctx.setSinkId === 'function') {
+      this.ctx.setSinkId(this.sinkId).catch(err => console.warn('setSinkId:', err));
+    }
     this.rebuild(sensorCount);
     this.active = true;
   }
