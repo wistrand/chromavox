@@ -20,6 +20,15 @@ export class Tracer {
     this.sensorBins = null;                    // Float32Array [sensor][bin] flat
     this.sensorCount = 0;
     this.binCount = 64;
+    // Reusable scratch — avoid allocating inside the ray hot loop.
+    this._stack = [];
+    this._walls = [
+      { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 }, kind: 'abs' },
+      { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 }, kind: 'sensor' },
+      { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 }, kind: 'abs' },
+      { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 }, kind: 'abs' },
+    ];
+    this._elementInfos = [];
   }
 
   ensureSegmentCapacity(n) {
@@ -37,11 +46,22 @@ export class Tracer {
     // Build edges for all elements.
     const edges = [];
     const elementMap = new Map();
+    const elementInfos = this._elementInfos;
+    elementInfos.length = 0;
     for (const el of elements) {
       const { edges: eEdges, polygon } = worldEdges(el);
-      elementMap.set(el.id, { el, polygon });
+      const info = { el, polygon };
+      elementMap.set(el.id, info);
+      elementInfos.push(info);
       for (const e of eEdges) edges.push(e);
     }
+
+    // Bench walls: update reused structs instead of re-allocating each frame.
+    const W = this._walls;
+    W[0].p1.x = 0;       W[0].p1.y = 0;       W[0].p2.x = bench.w; W[0].p2.y = 0;
+    W[1].p1.x = bench.w; W[1].p1.y = 0;       W[1].p2.x = bench.w; W[1].p2.y = bench.h;
+    W[2].p1.x = bench.w; W[2].p1.y = bench.h; W[2].p2.x = 0;       W[2].p2.y = bench.h;
+    W[3].p1.x = 0;       W[3].p1.y = bench.h; W[3].p2.x = 0;       W[3].p2.y = 0;
 
     // Sensor setup: sensors tile the right wall. Each sensor covers a strip.
     if (this.sensorCount !== sensorCount || !this.sensorBins) {
@@ -95,21 +115,24 @@ export class Tracer {
         const micGain = emitter.micLevels ? emitter.micLevels[s] : 1;
         const intensity = (BASE_INTENSITY / Math.sqrt(raysPer)) * micGain;
         this.castRay(emX, ey, dirX, dirY, wl, rgb, intensity,
-                     edges, elementMap, bench, sensorX, sensorStripH);
+                     edges, elementMap, elementInfos, W, sensorStripH);
       }
     }
   }
 
-  castRay(ox, oy, dx, dy, wl, rgb, intensity, edges, elementMap, bench, sensorX, sensorStripH) {
+  castRay(ox, oy, dx, dy, wl, rgb, intensity, edges, elementMap, elementInfos, walls, sensorStripH) {
     let x = ox, y = oy, vx = dx, vy = dy;
     let I = intensity;
 
-    // Determine starting medium: inside any dielectric polygon?
-    let insideEl = null;
-    for (const [, v] of elementMap) {
+    // Stack of dielectric elements the ray is currently inside, last-entered
+    // on top. Reused across rays — reset length instead of allocating.
+    const stack = this._stack;
+    stack.length = 0;
+    for (let i = 0; i < elementInfos.length; i++) {
+      const v = elementInfos[i];
       const m = materialOptics(v.el.material);
       if (m && m.type === 'dielectric' && pointInPolygon(v.polygon, x, y)) {
-        insideEl = v.el; break;
+        stack.push(v.el);
       }
     }
 
@@ -122,13 +145,7 @@ export class Tracer {
         const t = raySeg(x, y, vx, vy, e.p1.x, e.p1.y, e.p2.x, e.p2.y);
         if (t !== null && t < tBest) { tBest = t; hitEdge = e; hitWall = null; }
       }
-      // Bench walls: top, bottom, left (behind), right (sensors).
-      const walls = [
-        { p1: { x: 0, y: 0 },          p2: { x: bench.w, y: 0 },          kind: 'abs' },
-        { p1: { x: bench.w, y: 0 },    p2: { x: bench.w, y: bench.h },    kind: 'sensor' },
-        { p1: { x: bench.w, y: bench.h }, p2: { x: 0, y: bench.h },       kind: 'abs' },
-        { p1: { x: 0, y: bench.h },    p2: { x: 0, y: 0 },                kind: 'abs' },
-      ];
+      // Bench walls: reused from the Tracer; populated in trace().
       for (let i = 0; i < walls.length; i++) {
         const w = walls[i];
         const t = raySeg(x, y, vx, vy, w.p1.x, w.p1.y, w.p2.x, w.p2.y);
@@ -145,8 +162,8 @@ export class Tracer {
 
       // Beer-Lambert absorption along the segment if it was inside a medium.
       let Iend = I;
-      if (insideEl) {
-        const inMat = materialOptics(insideEl.material);
+      if (stack.length > 0) {
+        const inMat = materialOptics(stack[stack.length - 1].material);
         const alpha = materialAbsorption(inMat, wl);
         if (alpha > 0) {
           const d = Math.hypot(hx - x, hy - y);
@@ -179,34 +196,52 @@ export class Tracer {
         I *= mirrorReflectance(matObj, wl);
       } else {
         // Dielectric: Snell with Sellmeier (or Cauchy) dispersion.
+        // vdotn_out decides enter/exit of *this* polygon; n1/n2 are resolved
+        // from the stack so nested/overlapping dielectrics refract correctly.
         const nGlass = materialN(matObj, wl);
 
         let nx = hitEdge.nx, ny = hitEdge.ny;
         const vdotn_out = vx * nx + vy * ny;
-        let n1, n2;
-        let snx, sny;
-        if (vdotn_out < 0) {
-          n1 = 1.0; n2 = nGlass;
+        const entering = vdotn_out < 0;
+
+        let n1, n2, snx, sny;
+        let poppedIdx = -1;
+        if (entering) {
+          n1 = stack.length > 0
+            ? materialN(materialOptics(stack[stack.length - 1].material), wl)
+            : 1.0;
+          n2 = nGlass;
           snx = nx; sny = ny;
-          insideEl = elInfo.el;
         } else {
-          n1 = nGlass; n2 = 1.0;
+          // Temporarily remove this element from the stack so n2 is the
+          // medium surrounding it. Re-add on TIR.
+          poppedIdx = stack.lastIndexOf(elInfo.el);
+          if (poppedIdx >= 0) stack.splice(poppedIdx, 1);
+          n1 = nGlass;
+          n2 = stack.length > 0
+            ? materialN(materialOptics(stack[stack.length - 1].material), wl)
+            : 1.0;
           snx = -nx; sny = -ny;
-          insideEl = null;
         }
+
         const eta = n1 / n2;
         const cosI = -(vx * snx + vy * sny);
         const sin2T = eta * eta * (1 - cosI * cosI);
         if (sin2T > 1) {
+          // Total internal reflection: bounce, stack unchanged.
           const vd = vx * (-snx) + vy * (-sny);
           vx = vx - 2 * vd * (-snx);
           vy = vy - 2 * vd * (-sny);
-          // TIR stays inside glass — insideEl unchanged from before the exit test.
-          insideEl = elInfo.el;
+          if (!entering && poppedIdx >= 0) {
+            // Roll back the pop — we didn't actually cross.
+            stack.splice(poppedIdx, 0, elInfo.el);
+          }
         } else {
           const cosT = Math.sqrt(1 - sin2T);
           vx = eta * vx + (eta * cosI - cosT) * snx;
           vy = eta * vy + (eta * cosI - cosT) * sny;
+          if (entering) stack.push(elInfo.el);
+          // Exit case: pop already performed above, stays popped.
         }
         const len = Math.hypot(vx, vy);
         vx /= len; vy /= len;

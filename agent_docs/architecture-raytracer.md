@@ -38,9 +38,14 @@ falloff.
   is absorbed, not transmitted — keeps the ray tree unbranched.
 - Ray absorbed at bench walls; sensor wall is the right edge, deposits
   into a `sensorCount × 64` histogram by (y-strip, wavelength-bin).
-- Starting medium: `pointInPolygon` test at emitter origin decides if the
-  ray starts inside a dielectric. Matters if a lens is dropped over the
-  emitter line.
+- Starting medium: at ray birth every dielectric polygon is tested and
+  added to an inside-stack (`pointInPolygon`). Matters if a lens is dropped
+  over the emitter line and also when elements nest/overlap.
+- Nested / overlapping dielectrics: the tracer maintains a `stack` of the
+  dielectric elements the ray is currently inside, last-entered on top.
+  The top-of-stack supplies Beer-Lambert α and is the incident/exit
+  medium for Snell. Entering pushes, exiting pops; TIR rolls the pop back
+  so a ray that internally reflects stays in the correct medium.
 
 ## Dispersion gotchas (important)
 
