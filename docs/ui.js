@@ -7,6 +7,32 @@ import { MATERIALS } from './spectrum.js';
 // sensor count, bench) as a JSON string. Rapid drags and slider scrubs are
 // batched: `beginEdit` captures the pre-state lazily, `endEdit` commits if
 // anything actually changed.
+// Build an SVG icon for an Add-menu item by rendering the element's actual
+// polygon (default rotation included). Single source of geometry — relies on
+// `worldEdges` so any change to `localPolygon` automatically updates the
+// menu icons.
+function buildElementIcon(kind) {
+  const el = makeElement(kind, 0, 0);
+  const { polygon } = worldEdges(el);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of polygon) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const W = Math.max(1, maxX - minX);
+  const H = Math.max(1, maxY - minY);
+  const pad = Math.max(W, H) * 0.06;
+  const vbW = W + 2 * pad;
+  const vbH = H + 2 * pad;
+  const pts = polygon.map(p =>
+    `${(p.x - minX + pad).toFixed(1)},${(p.y - minY + pad).toFixed(1)}`
+  ).join(' ');
+  const sw = (Math.max(vbW, vbH) * 0.045).toFixed(2);
+  return `<svg class="tmi-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW.toFixed(1)} ${vbH.toFixed(1)}" preserveAspectRatio="xMidYMid meet"><polygon points="${pts}" fill="rgba(140,200,255,0.22)" stroke="rgba(210,225,240,0.9)" stroke-width="${sw}" stroke-linejoin="round"/></svg>`;
+}
+
 function hexToHue(hex) {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
   if (!m) return 0;
@@ -345,8 +371,11 @@ export class UI {
       addMenu.classList.add('open');
     });
     addMenu.querySelectorAll('.tool-menu-item').forEach(item => {
+      const kind = item.dataset.tool;
+      // Render the element's actual polygon as the menu icon — re-uses the
+      // same geometry as `localPolygon` / `worldEdges`, no duplication.
+      item.insertAdjacentHTML('afterbegin', buildElementIcon(kind));
       item.addEventListener('click', () => {
-        const kind = item.dataset.tool;
         if (placeable.has(kind)) place(kind);
         closeMenu();
       });
