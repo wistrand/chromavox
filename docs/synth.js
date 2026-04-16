@@ -1,8 +1,10 @@
-// Additive sensor synth. Each sensor is a voice at a log-spaced pitch; the
-// voice's timbre comes from the sensor's incoming wavelength spectrum. The
-// wavelength bins are grouped into K harmonic partials — low wavelengths
-// feed the fundamental, high wavelengths feed upper harmonics — so the
-// sound's brightness tracks the color mix reaching each sensor.
+// Additive sensor synth. Each sensor is a voice at a log- or scale-spaced
+// pitch; the voice's timbre comes from the sensor's incoming wavelength
+// spectrum. The wavelength bins are grouped into K harmonic partials — low
+// wavelengths feed the fundamental, high wavelengths feed upper harmonics —
+// so the sound's brightness tracks the color mix reaching each sensor.
+
+import { scaleFreq } from './spectrum.js';
 
 export class SensorSynth {
   constructor() {
@@ -24,7 +26,7 @@ export class SensorSynth {
   setStep(stepSemi) {
     if (this.stepSemi === stepSemi) return;
     this.stepSemi = stepSemi;
-    if (this.active && this.mode === 'chromatic') this.rebuild(this.count);
+    if (this.active && this.mode !== 'log') this.rebuild(this.count);
   }
 
   async setSinkId(id) {
@@ -82,14 +84,16 @@ export class SensorSynth {
     const K = 6; // partials per voice
     const loHz = 110, hiHz = 1800;
     const baseHz = this.baseHz ?? 130.81;
-    const step = Math.pow(2, (this.stepSemi ?? 1) / 12);
+    const stepDeg = this.stepSemi ?? 1;
+    const scaleName = (this.mode && this.mode !== 'log') ? this.mode : 'chromatic';
     const nyquist = this.ctx.sampleRate / 2;
     for (let i = 0; i < sensorCount; i++) {
       let freq;
-      if (this.mode === 'chromatic') {
-        // Sensor i plays the same pitch the mic's bucket i covers, with the
-        // same stepSemi so input and output ladders stay aligned.
-        freq = baseHz * Math.pow(step, i);
+      if (this.mode !== 'log') {
+        // Sensor i plays the i-th scale degree (with stepDeg degrees per
+        // bucket). Same formula as the mic side so ladders stay aligned
+        // when scale + base + step match.
+        freq = scaleFreq(baseHz, scaleName, i, stepDeg);
       } else {
         const t = sensorCount > 1 ? i / (sensorCount - 1) : 0;
         freq = loHz * Math.pow(hiHz / loHz, t);

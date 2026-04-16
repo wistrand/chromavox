@@ -14,7 +14,9 @@ No dependencies.
   drawers on the mobile breakpoint (see the `@media` rule in
   `docs/style.css` for the cutoff).
 - `docs/spectrum.js` — Dan-Bruton wavelength→RGB, Sellmeier/Cauchy dispersion,
-  Beer-Lambert absorption, dichroic reflectance, `MATERIALS` table.
+  Beer-Lambert absorption, dichroic reflectance, `MATERIALS` table,
+  `SCALES` table + `scaleFreq(base, scale, i, stepDeg)` for musical
+  bucketing.
 - `docs/scene.js` — data model, local/world polygon geometry, JSON save/load.
 - `docs/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
 - `docs/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
@@ -37,9 +39,11 @@ No dependencies.
 ## Coordinate system
 
 Scene coordinates are "bench pixels" in a logical space with `bench.w`,
-`bench.h`. The renderer re-derives bench size from canvas aspect on
-resize; the fixed short-axis value is in `Renderer.benchSize`. All UI
-input is converted via `UI.canvasToBench`.
+`bench.h`. The bench is **letterboxed** at the canonical portrait
+golden-ratio aspect (`CANONICAL_BENCH` in `scene.js`); CSS pins the
+canvas to that aspect inside the stage with black bars on whichever
+axis the viewport over-provides. `Renderer.benchSize` returns the
+constant. All UI input is converted via `UI.canvasToBench`.
 
 Y is **down** (screen convention). Polygon winding and outward-normal sign
 in `worldEdges` depend on this — see the shoelace / `cw` logic. If you

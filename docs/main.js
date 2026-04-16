@@ -7,6 +7,7 @@ import { UI } from './ui.js';
 import { wavelengthToRGB } from './spectrum.js';
 import { MicModulator, micBands } from './mic.js';
 import { SensorSynth } from './synth.js';
+import { scaleFreq } from './spectrum.js';
 
 const canvas = document.getElementById('gl');
 const renderer = new Renderer(canvas);
@@ -53,9 +54,9 @@ distortToggle.addEventListener('change', () => {
 const synthBtn = document.getElementById('synth-toggle');
 synthBtn.addEventListener('click', () => {
   if (!synth.active) {
-    const mode = document.getElementById('mic-mode').value;
-    synth.setBase(parseFloat(document.getElementById('mic-base').value));
-    synth.enable(scene.sensorCount, mode);
+    synth.setBase(synthBase());
+    synth.setStep(synthStep());
+    synth.enable(scene.sensorCount, synthMode());
     synthBtn.textContent = 'Audio out: on';
     synthBtn.classList.add('active');
   } else {
@@ -66,23 +67,66 @@ synthBtn.addEventListener('click', () => {
 });
 
 function syncSpanVisibility() {
-  const row = document.getElementById('chromatic-span-row');
-  const on = document.getElementById('mic-mode').value === 'chromatic';
-  row.style.visibility = on ? 'visible' : 'hidden';
+  const on = document.getElementById('mic-mode').value !== 'log';
+  document.getElementById('chromatic-span-row').style.visibility = on ? 'visible' : 'hidden';
 }
 syncSpanVisibility();
 
+// Synth scale can either follow the mic side (default) or run independently
+// from its own Mode/Base/Span/Scale controls. Read state via these helpers.
+const synthIndep = () => document.getElementById('synth-independent').checked;
+const synthMode  = () => synthIndep()
+  ? document.getElementById('synth-mode').value
+  : document.getElementById('mic-mode').value;
+const synthBase  = () => synthIndep()
+  ? parseFloat(document.getElementById('synth-base').value)
+  : currentBaseHz();
+const synthStep  = () => synthIndep()
+  ? (parseInt(document.getElementById('synth-span').value, 10) || 1)
+  : (parseInt(document.getElementById('chromatic-span').value, 10) || 1);
+function pushSynthScale() {
+  synth.setMode(synthMode());
+  synth.setBase(synthBase());
+  synth.setStep(synthStep());
+}
+
 document.getElementById('mic-mode').addEventListener('change', e => {
-  synth.setMode(e.target.value);
+  if (!synthIndep()) synth.setMode(e.target.value);
   syncSpanVisibility();
+  rebuildEmitterLabels();
 });
 
 document.getElementById('chromatic-span').addEventListener('input', e => {
   const v = parseInt(e.target.value, 10) || 1;
   document.getElementById('chromatic-span-val').textContent = v;
-  synth.setStep(v);
+  if (!synthIndep()) synth.setStep(v);
   rebuildEmitterLabels();
 });
+
+// Independent synth scale toggle — show/hide synth-mode/base/span rows and
+// push the active set of values into the synth.
+function syncSynthIndepVisibility() {
+  const on = synthIndep();
+  for (const id of ['synth-mode-row', 'synth-base-row', 'synth-span-row']) {
+    document.getElementById(id).style.visibility = on ? 'visible' : 'hidden';
+  }
+}
+document.getElementById('synth-independent').addEventListener('change', () => {
+  syncSynthIndepVisibility();
+  pushSynthScale();
+});
+document.getElementById('synth-mode').addEventListener('change', () => {
+  if (synthIndep()) pushSynthScale();
+});
+document.getElementById('synth-base').addEventListener('change', () => {
+  if (synthIndep()) pushSynthScale();
+});
+document.getElementById('synth-span').addEventListener('input', e => {
+  const v = parseInt(e.target.value, 10) || 1;
+  document.getElementById('synth-span-val').textContent = v;
+  if (synthIndep()) pushSynthScale();
+});
+syncSynthIndepVisibility();
 
 const smoothingSlider = document.getElementById('mic-smoothing');
 const smoothingLabel = document.getElementById('mic-smoothing-val');
@@ -110,9 +154,8 @@ function rebuildEmitterLabels() {
   const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
   for (let i = 0; i < n; i++) {
     let txt;
-    if (mode === 'chromatic') {
-      const hz = base * Math.pow(2, (i * stepSemi) / 12);
-      txt = freqToNote(hz);
+    if (mode !== 'log') {
+      txt = freqToNote(scaleFreq(base, mode, i, stepSemi));
     } else {
       const lo = 80, hi = 6000;
       const t = n > 1 ? i / (n - 1) : 0;
@@ -294,7 +337,7 @@ function frame() {
       const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
       scene.emitter.micLevels = micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
       if (baseHz !== lastBaseHz) {
-        synth.setBase(baseHz);
+        if (!synthIndep()) synth.setBase(baseHz);
         if (mic.source === 'keyboard') syncBaseSelect(baseHz);
         rebuildEmitterLabels();
         lastBaseHz = baseHz;

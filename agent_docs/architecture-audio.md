@@ -27,12 +27,25 @@ doesn't know where the audio came from.
 `micBands(mic, n, mode, baseHz, stepSemi)` bins the FFT into `n`
 buckets:
 
-- **log** mode: log-spaced across a broadband range (see the `loHz` /
-  `hiHz` constants in `micBands`).
-- **chromatic** mode: `stepSemi`-semitone ladder from `baseHz` upward,
-  window half-a-step wide. The **Span** slider controls `stepSemi` —
-  a wider step gives N buckets a broader total range at lower pitch
-  resolution.
+- **`log`** mode: log-spaced across a broadband range (see the `loHz`
+  / `hiHz` constants in `micBands`).
+- **scale modes** (`chromatic`, `major`, `minor`, `pentaMajor`,
+  `pentaMinor`, `wholeTone`, `blues`): the mode value is the scale
+  name; `scaleFreq(base, scaleName, i, stepSemi)` in `spectrum.js`
+  walks the scale from `baseHz` upward, wrapping into higher octaves
+  past the last degree. Window is the geometric midpoint to the
+  previous and next scale degree — full coverage with no gaps or
+  overlap regardless of how sparse the scale is.
+
+The **Span** slider controls `stepSemi`, interpreted as
+*scale-degrees per bucket*. With chromatic + span 2 you get whole
+tones; with major + span 2 you get thirds. Span only matters in scale
+modes (hidden in `log`).
+
+The mic smoothing slider drives `AnalyserNode.smoothingTimeConstant`
+via `mic.setSmoothing(v)`. Lower for snappier per-key response on the
+keyboard claviature; higher for smoother envelope tracking on vocals
+or sustained sources.
 
 Both modes apply a noise floor and gamma shaping (see the `floor` and
 `shape()` in `micBands`) so quiet buckets read zero. Result is written
@@ -67,10 +80,18 @@ drives one voice with multiple sine partials (count is a constant in
 
 ## Input/output symmetry
 
-In chromatic mode, input bucket `i` and output voice `i` cover the
-same pitch. In log mode, the same index `i` maps to roughly the same
-bucket on both sides. Under identity optics (no elements placed), what
-you feed in comes back out at the same pitch.
+In any scale mode, input bucket `i` and output voice `i` cover the
+same pitch *as long as both sides share mode + base + span*. In `log`
+mode the same index `i` maps to roughly the same bucket on both sides.
+Under identity optics (no elements placed), what you feed in comes
+back out at the same pitch.
+
+The **Independent scale** checkbox in the Sensors section breaks that
+coupling: separate `synth-mode` / `synth-base` / `synth-span` controls
+appear and drive the synth ladder independently. Lets you transpose
+(input chromatic at C3, output chromatic at C5), compress (mic in
+log, synth in pentatonic), or detune (different bases for slow beat
+effects).
 
 ## Design notes
 

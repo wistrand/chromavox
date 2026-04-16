@@ -65,8 +65,12 @@ Detailed notes are split into topic files under `agent_docs/`:
   left and right panels + stage below. Toolbar stays visible always
   (raised z-index over the drawer overlays, fixed height, horizontal
   scroll on narrow widths).
-- Window resize scales `el.x` / `el.y` proportionally to the bench-aspect
-  change so compositions stay in-bounds; sizes unchanged.
+- Bench is **letterboxed** at the canonical portrait golden-ratio aspect
+  (`CANONICAL_BENCH` in `scene.js`). `Renderer.benchSize` returns the
+  constant; CSS pins the canvas's display aspect with black bars on the
+  rest of the stage. Resize never rescales elements. `deserializeScene`
+  rescales loaded preset coords + sizes to the canonical bench so older
+  presets keep composing correctly.
 - Touch: single pointer drags/rotates (shift-drag rotates); two
   simultaneous pointers on a selected element pinch-scale + rotate.
 - Emitter ticks: short tap toggles, long-press or shift-click solos.
@@ -76,9 +80,9 @@ Detailed notes are split into topic files under `agent_docs/`:
   only when the right-side spectrum panel is off-screen (so it's
   always visible somewhere). Logic in `Renderer.buildOverlay`.
 - Vertical frequency labels overlay the canvas left edge, one per
-  emitter row, just above each tick. Labels show note names in
-  chromatic mode, Hz in log mode. Updated whenever count, mode, base,
-  or span changes.
+  emitter row, just above each tick. Labels show note names in any
+  scale mode, Hz in log mode. Updated whenever count, mode, base, or
+  span changes.
 - Sensor count can auto-track source count via the **Sync** checkbox
   with a multiplier slider (`sensor-factor`); manual sensor-slider use
   turns sync off.
@@ -94,3 +98,22 @@ Detailed notes are split into topic files under `agent_docs/`:
 - UI shortcuts ignore key events while a drag is in progress
   (`if (this.dragging) return;`) so playing keyboard notes mid-drag
   doesn't hijack the gesture.
+- Audio bucketing supports musical scales: `Mode` is one dropdown
+  combining `log` with the `SCALES` keys (`chromatic`, `major`,
+  `minor`, `pentaMajor`, `pentaMinor`, `wholeTone`, `blues`). `log`
+  picks the broadband path; any other value names a scale walked by
+  `scaleFreq` from `baseHz`. Window per bucket is the geometric
+  midpoint between neighboring scale degrees, so any scale gets full
+  coverage with no overlap.
+- Synth side can run **independent** of the mic side via the
+  `Independent scale` checkbox — separate Mode/Base/Span controls
+  appear that drive the synth ladder. Off (default), synth follows
+  mic so input-output pitch corresponds under identity optics.
+- Mic smoothing is exposed as a slider (`AnalyserNode.smoothingTimeConstant`)
+  for per-keyboard-style snappy response or smoother envelope tracking.
+- Toolbar's element placement is a div-based dropdown (`Add ▾`) so each
+  menu item has space for custom renderings (currently shows an SVG
+  thumbnail rendered from the element's own `localPolygon`).
+- `endEdit` short-circuits while `this.dragging` is set so unrelated
+  events (Shift keyup, slider change) can't prematurely seal the drag's
+  pending history snapshot.

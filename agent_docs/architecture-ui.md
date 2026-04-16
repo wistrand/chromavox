@@ -9,6 +9,12 @@ Two-row, three-column grid defined in `docs/style.css`:
 "left   stage  right"    1fr
 ```
 
+The stage flex-centers a `#bench-viewport` div locked to the canonical
+bench aspect (`aspect-ratio: 556 / 900`). The canvas fills that viewport
+exactly, so the rest of the stage is the letterbox black bar. Emitter
+labels live inside the viewport so they track the canvas, not the full
+stage.
+
 - **Header (`#toolbar`)** holds the tool palette, Audio in/out
   toggles, the Distort checkbox, and Save / Load / Clear. Fixed
   height, `z-index` above the drawers, and `overflow-x: auto` with
@@ -123,9 +129,12 @@ stretch polygons.
 
 ## Resize behaviour
 
-The window `resize` handler proportionally scales every `el.x` and
-`el.y` by the bench-dimension change. Elements stay at the same
-fraction of the bench as the aspect changes; sizes are not rescaled.
+Bench is letterboxed at the canonical aspect, so element coordinates
+are stable across viewport sizes — the resize handler just calls
+`renderer.resize()` (re-allocates the FBO etc.) and marks dirty. No
+element rescaling. Loading a preset that was authored at a different
+bench size triggers `deserializeScene` to rescale element coords +
+sizes onto the canonical bench.
 
 ## Presets
 

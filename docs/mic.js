@@ -220,9 +220,14 @@ export function pitchToWavelength(hz) {
   return 600 - t * 100;
 }
 
+import { scaleFreq } from './spectrum.js';
+
 // Downsample FFT magnitudes to `n` buckets in [0,1].
-// mode: 'log' (80–6000 Hz log-spaced) or 'chromatic' (stepSemi semitones
-// per bucket starting at baseHz, window half the step wide).
+// mode: 'log' for 80–6000 Hz log-spaced; any other value is a scale name
+// (chromatic / major / minor / pentaMajor / pentaMinor / wholeTone / blues)
+// — buckets walk that scale from baseHz upward with `stepSemi` degrees per
+// bucket. Window is the geometric midpoint to neighboring buckets, so any
+// scale gives full coverage with no overlap.
 export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
   if (!mic.active || !mic.freqData) return null;
   const fd = mic.freqData;
@@ -236,12 +241,16 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
     return Math.pow(v, 1.2);
   };
 
-  if (mode === 'chromatic') {
-    const step = Math.pow(2, stepSemi / 12);
-    const half = Math.pow(2, stepSemi / 24);
+  if (mode !== 'log') {
+    const scaleName = mode;
     for (let i = 0; i < n; i++) {
-      const fc = baseHz * Math.pow(step, i);
-      const f0 = fc / half, f1 = fc * half;
+      const fc = scaleFreq(baseHz, scaleName, i, stepSemi);
+      const fcNext = scaleFreq(baseHz, scaleName, i + 1, stepSemi);
+      const fcPrev = i > 0
+        ? scaleFreq(baseHz, scaleName, i - 1, stepSemi)
+        : (fc * fc / fcNext);
+      const f0 = Math.sqrt(fcPrev * fc);
+      const f1 = Math.sqrt(fc * fcNext);
       const b0 = Math.max(1, Math.floor(f0 / nyquist * binCount));
       const b1 = Math.max(b0 + 1, Math.ceil(f1 / nyquist * binCount));
       let sum = 0, cnt = 0;

@@ -17,6 +17,31 @@ export function wavelengthToRGB(wl) {
   return [Math.pow(r * f, gamma), Math.pow(g * f, gamma), Math.pow(b * f, gamma)];
 }
 
+// Musical scales as semitone offsets within an octave. `chromatic` is the
+// trivial 12-note ladder; the others select subsets/patterns. The ladder
+// repeats octaves above the last degree.
+export const SCALES = {
+  chromatic:  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  major:      [0, 2, 4, 5, 7, 9, 11],
+  minor:      [0, 2, 3, 5, 7, 8, 10],
+  pentaMajor: [0, 2, 4, 7, 9],
+  pentaMinor: [0, 3, 5, 7, 10],
+  wholeTone:  [0, 2, 4, 6, 8, 10],
+  blues:      [0, 3, 5, 6, 7, 10],
+};
+
+// Frequency for the i-th degree of `scale` (with stepDeg degrees per bucket)
+// starting at `base`. Wraps into the next octave when `i` exceeds the scale
+// length.
+export function scaleFreq(base, scaleName, i, stepDeg = 1) {
+  const scale = SCALES[scaleName] || SCALES.chromatic;
+  const idx = i * stepDeg;
+  const len = scale.length;
+  const oct = Math.floor(idx / len);
+  const deg = ((idx % len) + len) % len;
+  return base * Math.pow(2, scale[deg] / 12 + oct);
+}
+
 // Sellmeier 3-term (or 2-term): n²(λ) = 1 + Σ B_i · λ² / (λ² − C_i). λ in µm.
 // Coeffs as flat array [B1, C1, B2, C2, ...].
 export function sellmeierN(coeffs, wlNm) {

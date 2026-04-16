@@ -64,10 +64,10 @@
 - The element material dropdown filters by element kind
   (`dielectric` / `mirror`); switching a mirror to a dielectric is
   not exposed in the UI — change via JSON edit if needed.
-- Window resize scales element positions proportionally but does
-  **not** rescale their sizes. On extreme resizes you may want to
-  manually shrink large elements. Preset loads follow the same path,
-  so they reflow cleanly.
+- Bench is letterboxed at the canonical portrait golden-ratio aspect.
+  Resizing the window does not move any element; the stage just
+  shows more or less black bar. Preset loads with mismatched bench
+  dimensions get rescaled to canonical inside `deserializeScene`.
 - Toolbar has a fixed height with `box-sizing: border-box` and
   `overflow-x: auto`; on narrow viewports the horizontal scrollbar
   appears inside the bar rather than compressing it.
