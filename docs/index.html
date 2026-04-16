@@ -29,8 +29,40 @@
     <button id="save">Save</button>
     <button id="load">Load</button>
     <button id="clear">Clear</button>
+    <span class="tb-sep"></span>
+    <button id="help-toggle" aria-label="Help">?</button>
     <input id="file-input" type="file" accept="application/json" hidden>
   </header>
+
+  <dialog id="help-dialog">
+    <h2>Chromavox</h2>
+    <p>Optical synthesizer: audio in modulates left-wall light emitters; rays
+       cross the bench through your placed prisms / lenses / mirrors / glass;
+       what reaches the right wall drives an additive synth out.</p>
+    <h3>Mouse &amp; touch</h3>
+    <ul>
+      <li><b>Tool button</b> — drop element at bench center.</li>
+      <li><b>Click</b> element to select; <b>drag</b> to move.</li>
+      <li><b>Shift-drag</b> or <b>right-button drag</b> — rotate.</li>
+      <li><b>Two-finger pinch</b> (touch) — scale + rotate.</li>
+      <li><b>Click left-wall tick</b> — toggle that source on/off.</li>
+      <li><b>Shift-click</b> or <b>long-press</b> tick — solo.</li>
+    </ul>
+    <h3>Keyboard</h3>
+    <ul>
+      <li><b>Arrows</b> — move selected element ±5</li>
+      <li><b>Shift + ←/→</b> — rotate ±1°</li>
+      <li><b>Shift + ↑/↓</b> — resize ±8</li>
+      <li><b>Backspace / Delete</b> — delete selected</li>
+      <li><b>Ctrl+Z / Ctrl+Shift+Z</b> — undo / redo</li>
+      <li><b>Q</b> — toggle audio out</li>
+      <li><b>H</b> or <b>?</b> — this help</li>
+    </ul>
+    <h3>Keyboard claviature (Audio in &gt; Source = keyboard)</h3>
+    <p><kbd>Z S X D C V G B H N J M</kbd> — one octave of piano keys.
+       <kbd>,</kbd> / <kbd>.</kbd> shift octave down / up.</p>
+    <button id="help-close">Close</button>
+  </dialog>
 
   <aside id="left-panel" class="panel">
     <h2>Emitters</h2>

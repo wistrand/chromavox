@@ -122,10 +122,18 @@ rebuildEmitterLabels();
 ['mic-mode', 'mic-base', 'mic-source']
   .forEach(id => document.getElementById(id).addEventListener('change', rebuildEmitterLabels));
 
+const helpDialog = document.getElementById('help-dialog');
+document.getElementById('help-toggle').addEventListener('click', () => helpDialog.showModal());
+document.getElementById('help-close').addEventListener('click', () => helpDialog.close());
+
 window.addEventListener('keydown', e => {
   if (e.target.matches('input, select, textarea')) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === 'q' || e.key === 'Q') { e.preventDefault(); synthBtn.click(); }
+  if (e.key === 'h' || e.key === 'H' || e.key === '?') {
+    e.preventDefault();
+    if (helpDialog.open) helpDialog.close(); else helpDialog.showModal();
+  }
 });
 
 async function populateDevices(selectId, kind, fallbackName) {
