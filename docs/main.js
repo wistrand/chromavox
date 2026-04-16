@@ -277,22 +277,8 @@ micBtn.addEventListener('click', async () => {
 });
 
 window.addEventListener('resize', () => {
-  const oldW = scene.bench.w;
-  const oldH = scene.bench.h;
+  // Bench is canonical / letterboxed; no element rescaling on resize.
   renderer.resize();
-  const newBench = renderer.benchSize();
-  // Scale element positions proportionally so they stay at the same fraction
-  // of the bench when the aspect changes. Sizes are not scaled.
-  const sx = oldW ? newBench.w / oldW : 1;
-  const sy = oldH ? newBench.h / oldH : 1;
-  if (sx !== 1 || sy !== 1) {
-    for (const el of scene.elements) {
-      el.x *= sx;
-      el.y *= sy;
-    }
-  }
-  scene.bench.w = newBench.w;
-  scene.bench.h = newBench.h;
   markDirty();
 });
 

@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "bench": { "w": 1600, "h": 900 },
+  "bench": { "w": 556, "h": 900 },
   "emitter": { "count": 8, "wlMin": 400, "wlMax": 700, "raysPerSource": 96, "spreadDeg": 0, "apertureFactor": 0.2, "disabled": [] },
   "sensorCount": 48,
   "elements": [
-    { "kind": "block", "x": 500,  "y": 250, "w": 240, "h": 120, "material": "water",  "rot": 0 },
-    { "kind": "block", "x": 500,  "y": 450, "w": 240, "h": 120, "material": "flint",  "rot": 0 },
-    { "kind": "block", "x": 500,  "y": 650, "w": 240, "h": 120, "material": "hyper",  "rot": 0 }
+    { "kind": "block", "x": 174, "y": 250, "w": 141, "h": 71, "material": "water", "rot": 0 },
+    { "kind": "block", "x": 174, "y": 450, "w": 141, "h": 71, "material": "flint", "rot": 0 },
+    { "kind": "block", "x": 174, "y": 650, "w": 141, "h": 71, "material": "hyper", "rot": 0 }
   ]
 }

@@ -7,9 +7,14 @@ let nextId = 1;
 const genId = () => nextId++;
 export function bumpIdCeiling(n) { if (n >= nextId) nextId = n + 1; }
 
+// Canonical bench: portrait, golden ratio. h / w = φ ≈ 1.618.
+// w = round(900 / φ) = 556. The renderer letterboxes the canvas to this
+// aspect, so element coordinates are stable across viewport sizes.
+export const CANONICAL_BENCH = { w: 556, h: 900 };
+
 export function createScene() {
   return {
-    bench: { w: 1600, h: 900 },
+    bench: { ...CANONICAL_BENCH },
     emitter: {
       count: 12, wlMin: 400, wlMax: 700,
       raysPerSource: 512, spreadDeg: 0, apertureFactor: 0.01,
@@ -197,10 +202,22 @@ export function deserializeScene(text) {
   const data = JSON.parse(text);
   if (!data || data.version !== 1) throw new Error('unsupported scene version');
   const scene = createScene();
-  scene.bench = data.bench;
+  // Rescale element coords + sizes from the preset's bench to the canonical
+  // bench. Old presets / user-saved scenes from before the letterbox change
+  // were authored at 1600×900, so they need to come down to 556×900.
+  const sx = CANONICAL_BENCH.w / (data.bench?.w || CANONICAL_BENCH.w);
+  const sy = CANONICAL_BENCH.h / (data.bench?.h || CANONICAL_BENCH.h);
+  const ssize = Math.sqrt(sx * sy);
   scene.emitter = { apertureFactor: 0.01, ...data.emitter };
   scene.emitter.disabled = new Set(Array.isArray(data.emitter?.disabled) ? data.emitter.disabled : []);
   scene.sensorCount = data.sensorCount;
-  scene.elements = data.elements.map(e => ({ ...e, id: genId() }));
+  const SIZE_KEYS = ['size', 'w', 'h', 'radius'];
+  scene.elements = data.elements.map(e => {
+    const el = { ...e, id: genId(), x: e.x * sx, y: e.y * sy };
+    for (const k of SIZE_KEYS) {
+      if (typeof el[k] === 'number') el[k] *= ssize;
+    }
+    return el;
+  });
   return scene;
 }

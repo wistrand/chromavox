@@ -335,10 +335,10 @@ export class Renderer {
   }
 
   benchSize() {
-    const aspect = this.canvas.width / this.canvas.height;
-    const h = 900;
-    const w = Math.round(h * aspect);
-    return { w, h };
+    // Letterbox: bench is locked to the canonical aspect (portrait, golden
+    // ratio). CSS handles the actual letterbox by pinning the canvas's
+    // display aspect; the renderer just trusts the canvas size it was given.
+    return { w: 556, h: 900 };
   }
 
   draw(scene, tracer) {

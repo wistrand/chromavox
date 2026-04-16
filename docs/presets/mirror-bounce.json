@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "bench": { "w": 1600, "h": 900 },
+  "bench": { "w": 556, "h": 900 },
   "emitter": { "count": 16, "wlMin": 400, "wlMax": 700, "raysPerSource": 48, "spreadDeg": 8, "disabled": [] },
   "sensorCount": 48,
   "elements": [
-    { "kind": "mirror", "x": 600,  "y": 300, "w": 280, "h": 6, "material": "mirror", "rot": 0.7854 },
-    { "kind": "mirror", "x": 1000, "y": 600, "w": 280, "h": 6, "material": "mirror", "rot": -0.7854 }
+    { "kind": "mirror", "x": 208, "y": 300, "w": 165, "h": 4, "material": "mirror", "rot": 0.7854 },
+    { "kind": "mirror", "x": 347, "y": 600, "w": 165, "h": 4, "material": "mirror", "rot": -0.7854 }
   ]
 }

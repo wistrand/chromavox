@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "bench": { "w": 1600, "h": 900 },
+  "bench": { "w": 556, "h": 900 },
   "emitter": { "count": 3, "wlMin": 400, "wlMax": 700, "raysPerSource": 200, "spreadDeg": 0, "disabled": [] },
   "sensorCount": 48,
   "elements": [
-    { "kind": "prism",  "x": 520,  "y": 450, "size": 220, "material": "flint", "rot": 0.524 },
-    { "kind": "prism",  "x": 1060, "y": 450, "size": 220, "material": "flint", "rot": 2.618 }
+    { "kind": "prism", "x": 181, "y": 450, "size": 130, "material": "flint", "rot": 0.524 },
+    { "kind": "prism", "x": 368, "y": 450, "size": 130, "material": "flint", "rot": 2.618 }
   ]
 }
