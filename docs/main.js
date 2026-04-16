@@ -58,8 +58,22 @@ synthBtn.addEventListener('click', () => {
   }
 });
 
+function syncSpanVisibility() {
+  const row = document.getElementById('chromatic-span-row');
+  const on = document.getElementById('mic-mode').value === 'chromatic';
+  row.style.visibility = on ? 'visible' : 'hidden';
+}
+syncSpanVisibility();
+
 document.getElementById('mic-mode').addEventListener('change', e => {
   synth.setMode(e.target.value);
+  syncSpanVisibility();
+});
+
+document.getElementById('chromatic-span').addEventListener('input', e => {
+  const v = parseInt(e.target.value, 10) || 1;
+  document.getElementById('chromatic-span-val').textContent = v;
+  synth.setStep(v);
 });
 
 window.addEventListener('keydown', e => {
@@ -213,7 +227,8 @@ function frame() {
       // narrow wavelength band derived from its bucket position.
       const micMode = document.getElementById('mic-mode').value;
       const baseHz = currentBaseHz();
-      scene.emitter.micLevels = micBands(mic, scene.emitter.count, micMode, baseHz);
+      const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
+      scene.emitter.micLevels = micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
       if (baseHz !== lastBaseHz) {
         synth.setBase(baseHz);
         if (mic.source === 'keyboard') syncBaseSelect(baseHz);

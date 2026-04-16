@@ -30,10 +30,16 @@ export class MicModulator {
     const nodes = [];
 
     if (source === 'mic') {
-      const audio = deviceId
-        ? { deviceId: { exact: deviceId } }
-        : true;
-      stream = await navigator.mediaDevices.getUserMedia({ audio });
+      // Disable browser AGC/AEC/NS so the analyser sees the raw envelope.
+      // AGC in particular flattens loud and quiet to a constant level,
+      // making the input look "stuck at max" no matter what you do.
+      const constraints = {
+        echoCancellation: false,
+        autoGainControl: false,
+        noiseSuppression: false,
+      };
+      if (deviceId) constraints.deviceId = { exact: deviceId };
+      stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
       srcNode = ctx.createMediaStreamSource(stream);
     } else if (source === 'sine') {
       const o = ctx.createOscillator();
@@ -202,9 +208,9 @@ export function pitchToWavelength(hz) {
 }
 
 // Downsample FFT magnitudes to `n` buckets in [0,1].
-// mode: 'log' (80–6000 Hz log-spaced) or 'chromatic' (semitone ladder from
-// baseHz upward, ±50-cent window per bucket).
-export function micBands(mic, n, mode = 'log', baseHz = 130.81) {
+// mode: 'log' (80–6000 Hz log-spaced) or 'chromatic' (stepSemi semitones
+// per bucket starting at baseHz, window half the step wide).
+export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
   if (!mic.active || !mic.freqData) return null;
   const fd = mic.freqData;
   const nyquist = mic.ctx.sampleRate / 2;
@@ -218,10 +224,10 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81) {
   };
 
   if (mode === 'chromatic') {
-    const semi = Math.pow(2, 1 / 12);
-    const half = Math.pow(2, 1 / 24);
+    const step = Math.pow(2, stepSemi / 12);
+    const half = Math.pow(2, stepSemi / 24);
     for (let i = 0; i < n; i++) {
-      const fc = baseHz * Math.pow(semi, i);
+      const fc = baseHz * Math.pow(step, i);
       const f0 = fc / half, f1 = fc * half;
       const b0 = Math.max(1, Math.floor(f0 / nyquist * binCount));
       const b1 = Math.max(b0 + 1, Math.ceil(f1 / nyquist * binCount));

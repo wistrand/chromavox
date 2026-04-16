@@ -15,6 +15,13 @@ export class SensorSynth {
     this.mode = 'log';
     this.baseHz = 130.81;
     this.sinkId = '';
+    this.stepSemi = 1;
+  }
+
+  setStep(stepSemi) {
+    if (this.stepSemi === stepSemi) return;
+    this.stepSemi = stepSemi;
+    if (this.active && this.mode === 'chromatic') this.rebuild(this.count);
   }
 
   async setSinkId(id) {
@@ -72,14 +79,14 @@ export class SensorSynth {
     const K = 6; // partials per voice
     const loHz = 110, hiHz = 1800;
     const baseHz = this.baseHz ?? 130.81;
-    const semi = Math.pow(2, 1 / 12);
+    const step = Math.pow(2, (this.stepSemi ?? 1) / 12);
     const nyquist = this.ctx.sampleRate / 2;
     for (let i = 0; i < sensorCount; i++) {
       let freq;
       if (this.mode === 'chromatic') {
-        // Sensor i plays the same semitone the mic's bucket i covers — no
-        // inversion, so in an identity scene input/output pitch line up.
-        freq = baseHz * Math.pow(semi, i);
+        // Sensor i plays the same pitch the mic's bucket i covers, with the
+        // same stepSemi so input and output ladders stay aligned.
+        freq = baseHz * Math.pow(step, i);
       } else {
         const t = sensorCount > 1 ? i / (sensorCount - 1) : 0;
         freq = loHz * Math.pow(hiHz / loHz, t);
