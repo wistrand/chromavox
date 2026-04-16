@@ -3,9 +3,10 @@
 ## Rendering
 
 - `gl.lineWidth` is driver-clamped to 1px on nearly all WebGL
-  implementations. Emitter ticks and bars are drawn as stacked 1px lines
-  to look thicker; actual rays are single-pixel lines and rely on
-  additive blending to look bright where many overlap.
+  implementations. Rays avoid this by rendering as instanced SDF quads
+  (`docs/renderer.js`). Overlay elements (bench outline, emitter/sensor
+  ticks, element polygons) still use line primitives; emitter ticks
+  stack three 1px lines vertically to look thicker.
 - Additive blending is not physically accurate for monochromatic beams
   piling up — overlap saturates to white regardless of wavelength. This
   is a long-standing trade-off discussed in the render design; a true

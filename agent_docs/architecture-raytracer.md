@@ -1,7 +1,10 @@
 # Architecture: Ray Tracer
 
-`docs/raytracer.js` produces per-frame line segment vertex data for the
-WebGL2 renderer and updates per-sensor spectrum bins.
+`docs/raytracer.js` produces per-frame segment records for the WebGL2
+renderer and updates per-sensor spectrum bins. Each segment is a single
+12-float entry (`[p1x, p1y, p2x, p2y, c1rgb*I1, I1, c2rgb*I2, I2]`) that
+the renderer expands into an instanced SDF quad with per-fragment soft
+falloff.
 
 ## Notes
 

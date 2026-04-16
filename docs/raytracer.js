@@ -1,5 +1,5 @@
-// CPU ray tracer. Emits per-frame line segment vertex data for the WebGL2
-// renderer and updates per-sensor spectrum bins.
+// CPU ray tracer. Emits per-frame segment records for the WebGL2 renderer
+// and updates per-sensor spectrum bins.
 
 import { wavelengthToRGB, materialN, materialAbsorption, mirrorReflectance } from './spectrum.js';
 import { worldEdges, pointInPolygon, materialOptics } from './scene.js';
@@ -10,36 +10,28 @@ const GLASS_LOSS = 0.985;       // per-surface attenuation
 const BASE_INTENSITY = 1.6;
 
 // Per-frame output buffers, reused across frames.
+// segmentData is laid out as 12 floats per ray segment:
+//   [p1x, p1y, p2x, p2y, c1r*I1, c1g*I1, c1b*I1, I1, c2r*I2, c2g*I2, c2b*I2, I2]
+// The renderer expands each segment into an instanced SDF quad.
 export class Tracer {
   constructor() {
-    this.vertexData = new Float32Array(0);   // x, y, r, g, b, a per vertex
-    this.vertexCount = 0;
+    this.segmentData = new Float32Array(0);
+    this.segmentCount = 0;
     this.sensorBins = null;                    // Float32Array [sensor][bin] flat
     this.sensorCount = 0;
     this.binCount = 64;
   }
 
-  ensureVertexCapacity(n) {
-    const needed = n * 6;
-    if (this.vertexData.length < needed) {
-      this.vertexData = new Float32Array(Math.max(needed, this.vertexData.length * 2 || 4096));
+  ensureSegmentCapacity(n) {
+    const needed = n * 12;
+    if (this.segmentData.length < needed) {
+      this.segmentData = new Float32Array(Math.max(needed, this.segmentData.length * 2 || 4096));
     }
-  }
-
-  pushVertex(x, y, r, g, b, a) {
-    const i = this.vertexCount * 6;
-    this.vertexData[i] = x;
-    this.vertexData[i + 1] = y;
-    this.vertexData[i + 2] = r;
-    this.vertexData[i + 3] = g;
-    this.vertexData[i + 4] = b;
-    this.vertexData[i + 5] = a;
-    this.vertexCount++;
   }
 
   // Main trace call. Produces line segments and sensor deposits.
   trace(scene) {
-    this.vertexCount = 0;
+    this.segmentCount = 0;
     const { bench, emitter, sensorCount, elements } = scene;
 
     // Build edges for all elements.
@@ -70,7 +62,7 @@ export class Tracer {
 
     // Estimate max segments to avoid re-alloc per ray.
     const totalRays = nSrc * raysPer;
-    this.ensureVertexCapacity(totalRays * (MAX_BOUNCES + 1) * 2);
+    this.ensureSegmentCapacity(totalRays * (MAX_BOUNCES + 1));
 
     const wlMin = emitter.wlMin, wlMax = emitter.wlMax;
     const wlRange = Math.max(1, wlMax - wlMin);
@@ -229,8 +221,12 @@ export class Tracer {
 
   emitSeg(x1, y1, x2, y2, rgb, I1, I2) {
     if (I2 === undefined) I2 = I1;
-    this.pushVertex(x1, y1, rgb[0] * I1, rgb[1] * I1, rgb[2] * I1, I1);
-    this.pushVertex(x2, y2, rgb[0] * I2, rgb[1] * I2, rgb[2] * I2, I2);
+    const i = this.segmentCount * 12;
+    const d = this.segmentData;
+    d[i    ] = x1; d[i + 1] = y1; d[i + 2] = x2; d[i + 3] = y2;
+    d[i + 4] = rgb[0] * I1; d[i + 5] = rgb[1] * I1; d[i + 6] = rgb[2] * I1; d[i + 7] = I1;
+    d[i + 8] = rgb[0] * I2; d[i + 9] = rgb[1] * I2; d[i + 10] = rgb[2] * I2; d[i + 11] = I2;
+    this.segmentCount++;
   }
 }
 

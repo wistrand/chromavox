@@ -1,26 +1,72 @@
-// WebGL2 renderer. Draws ray segments additively (the light field) and an
-// overlay of optical elements, emitters, and sensors.
+// WebGL2 renderer. Two passes:
+//   - Ray pass: per segment = one instanced quad, width and soft falloff
+//     computed in the fragment shader (SDF). Additive blend.
+//   - Overlay pass: element outlines + emitter/sensor ticks. Alpha blend,
+//     plain line primitives.
 
-const VS = `#version 300 es
+import { worldEdges } from './scene.js';
+
+const RAY_VS = `#version 300 es
+in vec2 aCorner;     // (along, side) in {(0,-1),(0,1),(1,-1),(1,1)}
+in vec4 aSeg;        // p1.xy, p2.xy
+in vec4 aCol1;       // premultiplied color1 + alpha1
+in vec4 aCol2;       // premultiplied color2 + alpha2
+uniform vec2 uBench;
+uniform float uWidth;
+out float vAlong;
+out float vSide;
+out vec4 vCol1;
+out vec4 vCol2;
+void main() {
+  vec2 p1 = aSeg.xy;
+  vec2 p2 = aSeg.zw;
+  vec2 dir = p2 - p1;
+  float len = max(length(dir), 1e-6);
+  vec2 u = dir / len;
+  vec2 n = vec2(-u.y, u.x);
+  vec2 center = mix(p1, p2, aCorner.x);
+  vec2 pos = center + n * uWidth * aCorner.y;
+  vec2 nd = pos / uBench;
+  nd.y = 1.0 - nd.y;
+  gl_Position = vec4(nd * 2.0 - 1.0, 0.0, 1.0);
+  vAlong = aCorner.x;
+  vSide = aCorner.y;
+  vCol1 = aCol1;
+  vCol2 = aCol2;
+}`;
+
+const RAY_FS = `#version 300 es
+precision mediump float;
+in float vAlong;
+in float vSide;
+in vec4 vCol1;
+in vec4 vCol2;
+out vec4 outColor;
+void main() {
+  float d = abs(vSide);
+  // Soft cubic falloff from 1.0 at center to 0.0 at edge.
+  float amp = 1.0 - smoothstep(0.0, 1.0, d);
+  vec4 c = mix(vCol1, vCol2, vAlong);
+  outColor = vec4(c.rgb * amp, c.a * amp);
+}`;
+
+const OVERLAY_VS = `#version 300 es
 in vec2 aPos;
 in vec4 aColor;
-uniform vec2 uBench;         // bench size in logical units
+uniform vec2 uBench;
 out vec4 vColor;
 void main() {
-  vec2 p = aPos / uBench;    // 0..1
-  p.y = 1.0 - p.y;           // flip to y-up clip space
+  vec2 p = aPos / uBench;
+  p.y = 1.0 - p.y;
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
   vColor = aColor;
 }`;
 
-const FS = `#version 300 es
+const OVERLAY_FS = `#version 300 es
 precision mediump float;
 in vec4 vColor;
-uniform float uGain;
 out vec4 outColor;
-void main() {
-  outColor = vec4(vColor.rgb * uGain, vColor.a);
-}`;
+void main() { outColor = vColor; }`;
 
 export class Renderer {
   constructor(canvas) {
@@ -28,15 +74,40 @@ export class Renderer {
     const gl = canvas.getContext('webgl2', { antialias: true, premultipliedAlpha: false });
     if (!gl) throw new Error('WebGL2 not supported');
     this.gl = gl;
-    this.program = buildProgram(gl, VS, FS);
-    this.aPos = gl.getAttribLocation(this.program, 'aPos');
-    this.aColor = gl.getAttribLocation(this.program, 'aColor');
-    this.uBench = gl.getUniformLocation(this.program, 'uBench');
-    this.uGain = gl.getUniformLocation(this.program, 'uGain');
-    this.rayBuf = gl.createBuffer();
+
+    // Ray program (SDF quads, instanced).
+    this.rayProgram = buildProgram(gl, RAY_VS, RAY_FS);
+    this.ray = {
+      aCorner: gl.getAttribLocation(this.rayProgram, 'aCorner'),
+      aSeg:    gl.getAttribLocation(this.rayProgram, 'aSeg'),
+      aCol1:   gl.getAttribLocation(this.rayProgram, 'aCol1'),
+      aCol2:   gl.getAttribLocation(this.rayProgram, 'aCol2'),
+      uBench:  gl.getUniformLocation(this.rayProgram, 'uBench'),
+      uWidth:  gl.getUniformLocation(this.rayProgram, 'uWidth'),
+    };
+    // Static quad corners: triangle strip (along, side).
+    this.cornerBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, -1,  0, 1,  1, -1,  1, 1,
+    ]), gl.STATIC_DRAW);
+    // Per-segment instance buffer.
+    this.segBuf = gl.createBuffer();
+
+    // Overlay program (plain lines, alpha blend).
+    this.overlayProgram = buildProgram(gl, OVERLAY_VS, OVERLAY_FS);
+    this.overlay = {
+      aPos:   gl.getAttribLocation(this.overlayProgram, 'aPos'),
+      aColor: gl.getAttribLocation(this.overlayProgram, 'aColor'),
+      uBench: gl.getUniformLocation(this.overlayProgram, 'uBench'),
+    };
     this.overlayBuf = gl.createBuffer();
     this.overlayData = new Float32Array(0);
     this.overlayCount = 0;
+
+    // Width of rays in bench units. 2–3 is a nice range for a 900-tall bench.
+    this.rayWidth = 2.5;
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -50,7 +121,6 @@ export class Renderer {
   }
 
   benchSize() {
-    // Map canvas aspect to bench logical size (fixed short axis).
     const aspect = this.canvas.width / this.canvas.height;
     const h = 900;
     const w = Math.round(h * aspect);
@@ -61,38 +131,58 @@ export class Renderer {
     const gl = this.gl;
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.useProgram(this.program);
-    gl.uniform2f(this.uBench, scene.bench.w, scene.bench.h);
 
-    // --- Ray pass (additive) ---
+    // --- Ray pass (instanced SDF quads, additive) ---
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
-    gl.uniform1f(this.uGain, 1.0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.rayBuf);
+    gl.useProgram(this.rayProgram);
+    gl.uniform2f(this.ray.uBench, scene.bench.w, scene.bench.h);
+    gl.uniform1f(this.ray.uWidth, this.rayWidth);
+
+    // Upload segment data (12 floats per segment).
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.segBuf);
     gl.bufferData(gl.ARRAY_BUFFER,
-      tracer.vertexData.subarray(0, tracer.vertexCount * 6), gl.DYNAMIC_DRAW);
-    this.bindAttrs();
-    gl.lineWidth(1);
-    gl.drawArrays(gl.LINES, 0, tracer.vertexCount);
+      tracer.segmentData.subarray(0, tracer.segmentCount * 12), gl.DYNAMIC_DRAW);
+    const segStride = 12 * 4;
+    gl.enableVertexAttribArray(this.ray.aSeg);
+    gl.vertexAttribPointer(this.ray.aSeg, 4, gl.FLOAT, false, segStride, 0);
+    gl.vertexAttribDivisor(this.ray.aSeg, 1);
+    gl.enableVertexAttribArray(this.ray.aCol1);
+    gl.vertexAttribPointer(this.ray.aCol1, 4, gl.FLOAT, false, segStride, 4 * 4);
+    gl.vertexAttribDivisor(this.ray.aCol1, 1);
+    gl.enableVertexAttribArray(this.ray.aCol2);
+    gl.vertexAttribPointer(this.ray.aCol2, 4, gl.FLOAT, false, segStride, 8 * 4);
+    gl.vertexAttribDivisor(this.ray.aCol2, 1);
+
+    // Static quad corners (per vertex).
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    gl.enableVertexAttribArray(this.ray.aCorner);
+    gl.vertexAttribPointer(this.ray.aCorner, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(this.ray.aCorner, 0);
+
+    if (tracer.segmentCount > 0) {
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, tracer.segmentCount);
+    }
+
+    // Clean up divisors so the overlay pass isn't confused.
+    gl.vertexAttribDivisor(this.ray.aSeg, 0);
+    gl.vertexAttribDivisor(this.ray.aCol1, 0);
+    gl.vertexAttribDivisor(this.ray.aCol2, 0);
 
     // --- Overlay pass (alpha) ---
     this.buildOverlay(scene);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.uniform1f(this.uGain, 1.0);
+    gl.useProgram(this.overlayProgram);
+    gl.uniform2f(this.overlay.uBench, scene.bench.w, scene.bench.h);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayBuf);
     gl.bufferData(gl.ARRAY_BUFFER,
       this.overlayData.subarray(0, this.overlayCount * 6), gl.DYNAMIC_DRAW);
-    this.bindAttrs();
+    const ovStride = 6 * 4;
+    gl.enableVertexAttribArray(this.overlay.aPos);
+    gl.vertexAttribPointer(this.overlay.aPos, 2, gl.FLOAT, false, ovStride, 0);
+    gl.enableVertexAttribArray(this.overlay.aColor);
+    gl.vertexAttribPointer(this.overlay.aColor, 4, gl.FLOAT, false, ovStride, 2 * 4);
     gl.drawArrays(gl.LINES, 0, this.overlayCount);
-  }
-
-  bindAttrs() {
-    const gl = this.gl;
-    const stride = 6 * 4;
-    gl.enableVertexAttribArray(this.aPos);
-    gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, stride, 0);
-    gl.enableVertexAttribArray(this.aColor);
-    gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, stride, 2 * 4);
   }
 
   ensureOverlayCapacity(nVerts) {
@@ -115,14 +205,12 @@ export class Renderer {
 
   buildOverlay(scene) {
     this.overlayCount = 0;
-    // Rough upper bound of vertices.
     let estimate = 8 + scene.emitter.count * 2 + scene.sensorCount * 2;
     for (const el of scene.elements) estimate += 100;
     this.ensureOverlayCapacity(estimate * 2);
 
     const { bench } = scene;
 
-    // Bench outline.
     this.rect(0, 0, bench.w, bench.h, 0.35, 0.4, 0.5, 0.6);
 
     // Emitter ticks on left wall. Disabled sources draw dim; with mic active,
@@ -134,8 +222,6 @@ export class Renderer {
       const y = (s + 0.5) * srcStripH;
       const off = disabled && disabled.has(s);
       const a = off ? 0.3 : 1.0;
-      // A few stacked lines to defeat the 1px line-width clamp without
-      // overpowering the bench.
       for (let dy = -1; dy <= 1; dy++) {
         this.line(0, y + dy, 14, y + dy, 1, 1, 0.7, a);
       }
@@ -148,20 +234,17 @@ export class Renderer {
         }
       }
     }
-    // Sensor ticks on right wall.
     const senStripH = bench.h / scene.sensorCount;
     for (let s = 0; s < scene.sensorCount; s++) {
       const y = (s + 0.5) * senStripH;
       this.line(bench.w - 20, y, bench.w - 2, y, 0.6, 1, 0.9, 0.9);
     }
 
-    // Elements.
     for (const el of scene.elements) {
       const { polygon } = worldEdgesCached(el);
       const col = elementColor(el);
       this.polyOutline(polygon, col[0], col[1], col[2], col[3]);
       if (el._selected) {
-        // Selection handle.
         this.rect(el.x - 8, el.y - 8, 16, 16, 1, 1, 1, 0.8);
       }
     }
@@ -201,12 +284,7 @@ function elementColor(el) {
   }
 }
 
-// Geometry import (placed here to keep the renderer self-contained at call site).
-import { worldEdges } from './scene.js';
-const _geomCache = new WeakMap();
 function worldEdgesCached(el) {
-  // Cache busts when any element prop changes; keep simple by recomputing.
-  // For perf this can be improved, but element counts are small.
   return worldEdges(el);
 }
 
