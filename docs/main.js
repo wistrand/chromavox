@@ -108,7 +108,9 @@ document.getElementById('chromatic-span').addEventListener('input', e => {
 function syncSynthIndepVisibility() {
   const on = synthIndep();
   for (const id of ['synth-mode-row', 'synth-base-row', 'synth-span-row']) {
-    document.getElementById(id).style.visibility = on ? 'visible' : 'hidden';
+    const row = document.getElementById(id);
+    row.classList.toggle('row-disabled', !on);
+    row.querySelectorAll('input, select').forEach(el => { el.disabled = !on; });
   }
 }
 document.getElementById('synth-independent').addEventListener('change', e => {
@@ -185,9 +187,76 @@ rebuildEmitterLabels();
 ['mic-mode', 'mic-base', 'mic-source']
   .forEach(id => document.getElementById(id).addEventListener('change', rebuildEmitterLabels));
 
+function rebuildSensorLabels() {
+  const host = document.getElementById('sensor-labels');
+  if (!host) return;
+  host.innerHTML = '';
+  const n = scene.sensorCount;
+  const mode = synthMode();
+  const base = synthBase();
+  const stepDeg = synthStep();
+  for (let i = 0; i < n; i++) {
+    let txt;
+    if (mode !== 'log') {
+      txt = freqToNote(scaleFreq(base, mode, i, stepDeg));
+    } else {
+      const lo = 80, hi = 6000;
+      const t = n > 1 ? i / (n - 1) : 0;
+      const hz = Math.exp(Math.log(lo) + t * (Math.log(hi) - Math.log(lo)));
+      txt = hz >= 1000 ? `${(hz / 1000).toFixed(1)}k` : `${Math.round(hz)}`;
+    }
+    const div = document.createElement('div');
+    div.className = 'sensor-label';
+    div.textContent = txt;
+    div.style.top = `${((i + 0.5) / n) * 100}%`;
+    host.appendChild(div);
+  }
+}
+rebuildSensorLabels();
+// Sensor labels track synth-side params plus sensor count. Anything that
+// changes either side should refresh them.
+['sensor-count', 'synth-mode', 'synth-base', 'synth-span', 'synth-independent',
+ 'mic-mode', 'mic-base', 'mic-source', 'chromatic-span']
+  .forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', rebuildSensorLabels);
+    el.addEventListener('change', rebuildSensorLabels);
+  });
+
 const helpDialog = document.getElementById('help-dialog');
 document.getElementById('help-toggle').addEventListener('click', () => helpDialog.showModal());
 document.getElementById('help-close').addEventListener('click', () => helpDialog.close());
+
+// Toolbar options dropdowns (Audio in / Audio out). Position is fixed so
+// they escape the toolbar's overflow-x clipping rect.
+function bindOptionsMenu(toggleId, menuId) {
+  const toggle = document.getElementById(toggleId);
+  const menu = document.getElementById(menuId);
+  toggle.addEventListener('click', e => {
+    e.stopPropagation();
+    if (menu.classList.contains('open')) {
+      menu.classList.remove('open');
+      return;
+    }
+    // Close any other options menus first.
+    document.querySelectorAll('.options-menu.open').forEach(m => m.classList.remove('open'));
+    const r = toggle.getBoundingClientRect();
+    menu.style.top = `${r.bottom + 4}px`;
+    menu.style.left = `${Math.max(4, r.right - 280)}px`;
+    menu.classList.add('open');
+  });
+  menu.addEventListener('click', e => e.stopPropagation());
+  document.addEventListener('click', e => {
+    if (menu.classList.contains('open') && !menu.contains(e.target) && e.target !== toggle) {
+      menu.classList.remove('open');
+    }
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && menu.classList.contains('open')) menu.classList.remove('open');
+  });
+}
+bindOptionsMenu('mic-options', 'mic-menu');
+bindOptionsMenu('synth-options', 'synth-menu');
 
 window.addEventListener('keydown', e => {
   if (e.target.matches('input, select, textarea')) return;

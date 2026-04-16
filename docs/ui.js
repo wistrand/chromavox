@@ -274,19 +274,32 @@ export class UI {
       el.addEventListener('change', () => this.endEdit());
     }
     sc.value = this.scene.sensorCount;
+    const factorIn = document.getElementById('sensor-factor');
+    const syncIn = document.getElementById('sensor-sync');
+    const syncFactorRow = () => {
+      const on = syncIn.checked;
+      const row = document.getElementById('sensor-factor-row');
+      row.classList.toggle('row-disabled', !on);
+      factorIn.disabled = !on;
+    };
+    syncFactorRow();
+
     sc.addEventListener('input', () => {
       this.beginEdit();
       this.scene.sensorCount = parseInt(sc.value, 10);
       document.getElementById('sensor-count-val').textContent = sc.value;
       // Manual change overrides sync.
-      document.getElementById('sensor-sync').checked = false;
+      syncIn.checked = false;
+      syncFactorRow();
       this.onChange();
       this.rebuildSensorReadout();
     });
     sc.addEventListener('change', () => this.endEdit());
 
-    // When sync is turned on, snap sensor count to source × factor.
-    document.getElementById('sensor-sync').addEventListener('change', e => {
+    // When sync is turned on, snap sensor count to source × factor; either
+    // way, refresh the factor-row enabled state.
+    syncIn.addEventListener('change', e => {
+      syncFactorRow();
       if (!e.target.checked) return;
       this.beginEdit();
       applySync();
@@ -295,10 +308,9 @@ export class UI {
     });
 
     // Factor slider re-syncs immediately if sync is on.
-    const factorIn = document.getElementById('sensor-factor');
     factorIn.addEventListener('input', () => {
       document.getElementById('sensor-factor-val').textContent = factorIn.value;
-      if (!document.getElementById('sensor-sync').checked) return;
+      if (!syncIn.checked) return;
       this.beginEdit();
       applySync();
       this.onChange();
