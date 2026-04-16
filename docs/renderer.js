@@ -125,14 +125,17 @@ export class Renderer {
     // Bench outline.
     this.rect(0, 0, bench.w, bench.h, 0.35, 0.4, 0.5, 0.6);
 
-    // Emitter ticks on left wall. With mic active, each tick extends into
-    // a band-volume bar.
+    // Emitter ticks on left wall. Disabled sources draw dim; with mic active,
+    // enabled sources extend into an amber band-volume bar.
     const levels = scene.emitter.micLevels;
+    const disabled = scene.emitter.disabled;
     const srcStripH = bench.h / scene.emitter.count;
     for (let s = 0; s < scene.emitter.count; s++) {
       const y = (s + 0.5) * srcStripH;
-      this.line(2, y, 20, y, 1, 1, 0.6, 0.9);
-      if (levels && levels[s] > 0.02) {
+      const off = disabled && disabled.has(s);
+      const a = off ? 0.25 : 0.9;
+      this.line(2, y, 20, y, 1, 1, 0.6, a);
+      if (!off && levels && levels[s] > 0.02) {
         const v = Math.min(1, levels[s]);
         const len = 24 + v * 140;
         this.line(22, y, 22 + len, y, 1, 0.85, 0.4, 0.4 + 0.6 * v);

@@ -5,6 +5,7 @@ import { MATERIALS } from './spectrum.js';
 
 let nextId = 1;
 const genId = () => nextId++;
+export function bumpIdCeiling(n) { if (n >= nextId) nextId = n + 1; }
 
 export function createScene() {
   return {
@@ -12,6 +13,7 @@ export function createScene() {
     emitter: {
       count: 10, wlMin: 400, wlMax: 700,
       raysPerSource: 512, spreadDeg: 0, apertureFactor: 0.01,
+      disabled: new Set(),
     },
     sensorCount: 16,
     elements: [],
@@ -173,7 +175,7 @@ export function serializeScene(scene) {
   return JSON.stringify({
     version: scene.version,
     bench: scene.bench,
-    emitter: scene.emitter,
+    emitter: { ...scene.emitter, disabled: [...(scene.emitter.disabled ?? [])] },
     sensorCount: scene.sensorCount,
     elements: scene.elements.map(({ _selected, ...rest }) => rest),
   }, null, 2);
@@ -185,6 +187,7 @@ export function deserializeScene(text) {
   const scene = createScene();
   scene.bench = data.bench;
   scene.emitter = { apertureFactor: 0.01, ...data.emitter };
+  scene.emitter.disabled = new Set(Array.isArray(data.emitter?.disabled) ? data.emitter.disabled : []);
   scene.sensorCount = data.sensorCount;
   scene.elements = data.elements.map(e => ({ ...e, id: genId() }));
   return scene;

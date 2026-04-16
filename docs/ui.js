@@ -1,7 +1,75 @@
 // UI: input handling, property panel, save/load.
 
-import { makeElement, worldEdges, pointInPolygon, serializeScene, deserializeScene } from './scene.js';
+import { makeElement, worldEdges, pointInPolygon, serializeScene, deserializeScene, bumpIdCeiling } from './scene.js';
 import { MATERIALS } from './spectrum.js';
+
+// Undo/redo. Snapshots the mutable scene state (elements, emitter settings,
+// sensor count, bench) as a JSON string. Rapid drags and slider scrubs are
+// batched: `beginEdit` captures the pre-state lazily, `endEdit` commits if
+// anything actually changed.
+class History {
+  constructor(limit = 50) {
+    this.past = [];
+    this.future = [];
+    this.limit = limit;
+    this.pending = null;
+  }
+  _snap(scene) {
+    return JSON.stringify({
+      bench: scene.bench,
+      emitter: {
+        count: scene.emitter.count,
+        wlMin: scene.emitter.wlMin,
+        wlMax: scene.emitter.wlMax,
+        raysPerSource: scene.emitter.raysPerSource,
+        spreadDeg: scene.emitter.spreadDeg,
+        apertureFactor: scene.emitter.apertureFactor,
+        disabled: [...(scene.emitter.disabled ?? [])],
+      },
+      sensorCount: scene.sensorCount,
+      elements: scene.elements.map(({ _selected, ...rest }) => rest),
+    });
+  }
+  _restore(scene, snap) {
+    const data = JSON.parse(snap);
+    scene.bench = data.bench;
+    Object.assign(scene.emitter, data.emitter);
+    scene.emitter.disabled = new Set(data.emitter.disabled || []);
+    scene.sensorCount = data.sensorCount;
+    scene.elements = data.elements.map(e => ({ ...e }));
+    let maxId = 0;
+    for (const el of scene.elements) if (el.id > maxId) maxId = el.id;
+    bumpIdCeiling(maxId);
+  }
+  begin(scene) {
+    if (this.pending !== null) return;
+    this.pending = this._snap(scene);
+  }
+  commit(scene) {
+    if (this.pending === null) return;
+    const cur = this._snap(scene);
+    if (cur !== this.pending) {
+      this.past.push(this.pending);
+      if (this.past.length > this.limit) this.past.shift();
+      this.future.length = 0;
+    }
+    this.pending = null;
+  }
+  undo(scene) {
+    if (!this.past.length) return false;
+    const cur = this._snap(scene);
+    this._restore(scene, this.past.pop());
+    this.future.push(cur);
+    return true;
+  }
+  redo(scene) {
+    if (!this.future.length) return false;
+    const cur = this._snap(scene);
+    this._restore(scene, this.future.pop());
+    this.past.push(cur);
+    return true;
+  }
+}
 
 export class UI {
   constructor(scene, canvas, onChange) {
@@ -11,11 +79,70 @@ export class UI {
     this.tool = 'select';
     this.selected = null;
     this.dragging = null;
+    this.history = new History();
     this.bindControls();
     this.bindTools();
     this.bindCanvas();
     this.bindSceneButtons();
+    this.bindShortcuts();
     this.refreshEmitterLabels();
+  }
+
+  beginEdit() { this.history.begin(this.scene); }
+  endEdit()   { this.history.commit(this.scene); }
+
+  bindShortcuts() {
+    const STEP = 5;
+    const ROT_STEP = 1 * Math.PI / 180;
+
+    window.addEventListener('keydown', e => {
+      if (e.target.matches('input, select, textarea')) return;
+
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'z' && !e.shiftKey) {
+          e.preventDefault();
+          if (this.history.undo(this.scene)) { this.select(null); this.rebuildSensorReadout(); this.syncControls(); this.onChange(); }
+          return;
+        }
+        if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+          e.preventDefault();
+          if (this.history.redo(this.scene)) { this.select(null); this.rebuildSensorReadout(); this.syncControls(); this.onChange(); }
+          return;
+        }
+      }
+
+      if (!this.selected) return;
+
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        this.beginEdit();
+        const dead = this.selected;
+        this.scene.elements = this.scene.elements.filter(el => el !== dead);
+        this.select(null);
+        this.endEdit();
+        this.onChange();
+        return;
+      }
+
+      let handled = true;
+      if (e.shiftKey && e.key === 'ArrowLeft')  { this.beginEdit(); this.selected.rot -= ROT_STEP; }
+      else if (e.shiftKey && e.key === 'ArrowRight') { this.beginEdit(); this.selected.rot += ROT_STEP; }
+      else if (e.key === 'ArrowLeft')  { this.beginEdit(); this.selected.x -= STEP; }
+      else if (e.key === 'ArrowRight') { this.beginEdit(); this.selected.x += STEP; }
+      else if (e.key === 'ArrowUp')    { this.beginEdit(); this.selected.y -= STEP; }
+      else if (e.key === 'ArrowDown')  { this.beginEdit(); this.selected.y += STEP; }
+      else handled = false;
+
+      if (handled) {
+        e.preventDefault();
+        this.renderPropPanel();
+        this.onChange();
+      }
+    });
+
+    window.addEventListener('keyup', e => {
+      if (e.key.startsWith('Arrow') || e.key === 'Shift') this.endEdit();
+    });
   }
 
   // --- Emitter / sensor sliders ---
@@ -33,19 +160,23 @@ export class UI {
       if (key === 'apertureFactor') el.value = Math.round(this.scene.emitter[key] * 100);
       else el.value = this.scene.emitter[key];
       el.addEventListener('input', () => {
+        this.beginEdit();
         this.scene.emitter[key] = cast(el.value, 10);
         this.refreshEmitterLabels();
         this.onChange();
       });
+      el.addEventListener('change', () => this.endEdit());
     }
     const sc = document.getElementById('sensor-count');
     sc.value = this.scene.sensorCount;
     sc.addEventListener('input', () => {
+      this.beginEdit();
       this.scene.sensorCount = parseInt(sc.value, 10);
       document.getElementById('sensor-count-val').textContent = sc.value;
       this.onChange();
       this.rebuildSensorReadout();
     });
+    sc.addEventListener('change', () => this.endEdit());
   }
 
   syncControls() {
@@ -108,9 +239,31 @@ export class UI {
   onDown(e) {
     this.canvas.setPointerCapture(e.pointerId);
     const { x, y } = this.canvasToBench(e.clientX, e.clientY);
+
+    // Click on left-wall tick area toggles that source. Shift-click solos it.
+    if (x >= 0 && x <= 30) {
+      const n = this.scene.emitter.count;
+      const sIdx = Math.max(0, Math.min(n - 1, Math.floor(y / (this.scene.bench.h / n))));
+      const dis = this.scene.emitter.disabled || (this.scene.emitter.disabled = new Set());
+      this.beginEdit();
+      if (e.shiftKey) {
+        const onlyOn = !dis.has(sIdx) && dis.size === n - 1;
+        dis.clear();
+        if (!onlyOn) {
+          for (let i = 0; i < n; i++) if (i !== sIdx) dis.add(i);
+        }
+      } else {
+        if (dis.has(sIdx)) dis.delete(sIdx); else dis.add(sIdx);
+      }
+      this.endEdit();
+      this.onChange();
+      return;
+    }
+
     const hit = this.hitTestElement(x, y);
     if (this.tool === 'select') {
       if (hit) {
+        this.beginEdit();
         this.select(hit);
         if (e.shiftKey || e.button === 2) {
           const a = Math.atan2(y - hit.y, x - hit.x);
@@ -123,17 +276,19 @@ export class UI {
       }
     } else if (this.tool === 'delete') {
       if (hit) {
+        this.beginEdit();
         this.scene.elements = this.scene.elements.filter(e => e !== hit);
         this.select(null);
+        this.endEdit();
         this.onChange();
       }
     } else {
       // Place a new element of this kind.
+      this.beginEdit();
       const el = makeElement(this.tool, x, y);
       this.scene.elements.push(el);
       this.select(el);
       this.dragging = { type: 'move', dx: 0, dy: 0 };
-      // Switch back to select.
       document.querySelectorAll('.tools button').forEach(b => {
         b.classList.toggle('active', b.dataset.tool === 'select');
       });
@@ -160,6 +315,7 @@ export class UI {
   onUp(e) {
     try { this.canvas.releasePointerCapture(e.pointerId); } catch {}
     this.dragging = null;
+    this.endEdit();
   }
 
   select(el) {
@@ -196,9 +352,11 @@ export class UI {
     rot.type = 'range'; rot.min = -180; rot.max = 180; rot.step = 1;
     rot.value = Math.round(el.rot * 180 / Math.PI);
     rot.addEventListener('input', () => {
+      this.beginEdit();
       el.rot = parseFloat(rot.value) * Math.PI / 180;
       this.onChange();
     });
+    rot.addEventListener('change', () => this.endEdit());
     addRow('Rotation', rot);
 
     // Material: mirror elements pick among mirror variants; everything else
@@ -213,7 +371,9 @@ export class UI {
       sel.appendChild(opt);
     }
     sel.addEventListener('change', () => {
+      this.beginEdit();
       el.material = sel.value;
+      this.endEdit();
       this.onChange();
     });
     addRow('Material', sel);
@@ -232,9 +392,11 @@ export class UI {
       inp.type = 'range'; inp.min = min; inp.max = max; inp.step = 1;
       inp.value = el[key];
       inp.addEventListener('input', () => {
+        this.beginEdit();
         el[key] = parseFloat(inp.value);
         this.onChange();
       });
+      inp.addEventListener('change', () => this.endEdit());
       addRow(key, inp);
     }
 
@@ -242,8 +404,10 @@ export class UI {
     const del = document.createElement('button');
     del.textContent = 'Delete';
     del.addEventListener('click', () => {
+      this.beginEdit();
       this.scene.elements = this.scene.elements.filter(e => e !== el);
       this.select(null);
+      this.endEdit();
       this.onChange();
     });
     panel.appendChild(del);
@@ -268,15 +432,14 @@ export class UI {
       if (!f) return;
       const text = await f.text();
       try {
+        this.beginEdit();
         const scene = deserializeScene(text);
-        // Mutate current scene in place so references remain valid.
         Object.assign(this.scene, scene);
-        // Replace loaded bench size with current canvas aspect so prism/lens
-        // geometry keeps its intended aspect ratio on this viewport.
         window.dispatchEvent(new Event('resize'));
         this.syncControls();
         this.select(null);
         this.rebuildSensorReadout();
+        this.endEdit();
         this.onChange();
       } catch (err) {
         alert('Load failed: ' + err.message);
@@ -285,8 +448,10 @@ export class UI {
     });
 
     document.getElementById('clear').addEventListener('click', () => {
+      this.beginEdit();
       this.scene.elements = [];
       this.select(null);
+      this.endEdit();
       this.onChange();
     });
 
@@ -324,15 +489,15 @@ export class UI {
       const file = sel.value;
       if (!file) return;
       try {
+        this.beginEdit();
         const text = await (await fetch('presets/' + file)).text();
         const scene = deserializeScene(text);
         Object.assign(this.scene, scene);
-        // Replace loaded bench size with current canvas aspect so prism/lens
-        // geometry keeps its intended aspect ratio on this viewport.
         window.dispatchEvent(new Event('resize'));
         this.syncControls();
         this.select(null);
         this.rebuildSensorReadout();
+        this.endEdit();
         this.onChange();
       } catch (err) {
         alert('Preset load failed: ' + err.message);

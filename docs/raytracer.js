@@ -82,7 +82,9 @@ export class Tracer {
     // like a wide continuous ribbon of light rather than a visible fan.
     const PHI = 0.6180339887498949;
     const PSI = 0.7548776662466927;
+    const disabled = emitter.disabled;
     for (let s = 0; s < nSrc; s++) {
+      if (disabled && disabled.has(s)) continue;
       const ey0 = s * srcStripH;
       const apertureH = srcStripH * (emitter.apertureFactor ?? 0.01);
       const wlMinS = wlPer ? wlPer.min[s] : wlMin;
