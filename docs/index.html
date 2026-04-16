@@ -10,7 +10,7 @@
 <div id="app">
   <aside id="left-panel" class="panel">
     <h2>Emitters</h2>
-    <div class="row"><label>Sources <input id="emitter-count" type="range" min="1" max="128" value="10"><span id="emitter-count-val">10</span></label></div>
+    <div class="row"><label>Sources <input id="emitter-count" type="range" min="1" max="128" value="12"><span id="emitter-count-val">12</span></label></div>
     <div class="row"><label>λ min (nm) <input id="wl-min" type="range" min="380" max="780" value="400"><span id="wl-min-val">400</span></label></div>
     <div class="row"><label>λ max (nm) <input id="wl-max" type="range" min="380" max="780" value="700"><span id="wl-max-val">700</span></label></div>
     <div class="row"><label>Rays/source <input id="rays-per" type="range" min="1" max="2000" value="512"><span id="rays-per-val">512</span></label></div>
@@ -18,7 +18,7 @@
     <div class="row"><label>Aperture <input id="aperture" type="range" min="0" max="100" value="1"><span id="aperture-val">0.01</span></label></div>
     <div class="row"><button id="mic-toggle">Audio in: off</button></div>
     <div class="row"><label>Source <select id="mic-source"><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keyboard</option></select></label></div>
-    <div class="row"><label>Mode <select id="mic-mode"><option value="log">log</option><option value="chromatic">chromatic</option></select></label></div>
+    <div class="row"><label>Mode <select id="mic-mode"><option value="log">log</option><option value="chromatic" selected>chromatic</option></select></label></div>
     <div class="row"><label>Base <select id="mic-base">
       <option value="32.70">C1</option>
       <option value="65.41">C2</option>
@@ -35,7 +35,8 @@
     </select></label></div>
     <div class="row"><label><input id="bucket-color" type="checkbox"> Bucket color</label></div>
     <h2>Sensors</h2>
-    <div class="row"><label>Count <input id="sensor-count" type="range" min="1" max="64" value="16"><span id="sensor-count-val">16</span></label></div>
+    <div class="row"><label>Count <input id="sensor-count" type="range" min="1" max="64" value="12"><span id="sensor-count-val">12</span></label></div>
+    <div class="row"><label><input id="sensor-sync" type="checkbox"> Sync to source count</label></div>
     <div class="row"><button id="synth-toggle">Audio out: off</button></div>
     <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="100" value="25"><span id="synth-vol-val">25</span></label></div>
     <h2>Tools</h2>

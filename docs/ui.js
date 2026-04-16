@@ -163,6 +163,13 @@ export class UI {
         this.beginEdit();
         this.scene.emitter[key] = cast(el.value, 10);
         this.refreshEmitterLabels();
+        if (key === 'count' && document.getElementById('sensor-sync').checked) {
+          this.scene.sensorCount = this.scene.emitter.count;
+          const sc = document.getElementById('sensor-count');
+          sc.value = this.scene.sensorCount;
+          document.getElementById('sensor-count-val').textContent = this.scene.sensorCount;
+          this.rebuildSensorReadout();
+        }
         this.onChange();
       });
       el.addEventListener('change', () => this.endEdit());
@@ -173,10 +180,24 @@ export class UI {
       this.beginEdit();
       this.scene.sensorCount = parseInt(sc.value, 10);
       document.getElementById('sensor-count-val').textContent = sc.value;
+      // Manual change overrides sync.
+      document.getElementById('sensor-sync').checked = false;
       this.onChange();
       this.rebuildSensorReadout();
     });
     sc.addEventListener('change', () => this.endEdit());
+
+    // When sync is turned on, snap sensor count to current source count.
+    document.getElementById('sensor-sync').addEventListener('change', e => {
+      if (!e.target.checked) return;
+      this.beginEdit();
+      this.scene.sensorCount = this.scene.emitter.count;
+      sc.value = this.scene.sensorCount;
+      document.getElementById('sensor-count-val').textContent = this.scene.sensorCount;
+      this.rebuildSensorReadout();
+      this.endEdit();
+      this.onChange();
+    });
   }
 
   syncControls() {

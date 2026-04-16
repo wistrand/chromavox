@@ -11,11 +11,11 @@ export function createScene() {
   return {
     bench: { w: 1600, h: 900 },
     emitter: {
-      count: 10, wlMin: 400, wlMax: 700,
+      count: 12, wlMin: 400, wlMax: 700,
       raysPerSource: 512, spreadDeg: 0, apertureFactor: 0.01,
       disabled: new Set(),
     },
-    sensorCount: 16,
+    sensorCount: 12,
     elements: [],
     version: 1,
   };

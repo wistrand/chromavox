@@ -133,12 +133,19 @@ export class Renderer {
     for (let s = 0; s < scene.emitter.count; s++) {
       const y = (s + 0.5) * srcStripH;
       const off = disabled && disabled.has(s);
-      const a = off ? 0.25 : 0.9;
-      this.line(2, y, 20, y, 1, 1, 0.6, a);
+      const a = off ? 0.3 : 1.0;
+      // A few stacked lines to defeat the 1px line-width clamp without
+      // overpowering the bench.
+      for (let dy = -1; dy <= 1; dy++) {
+        this.line(0, y + dy, 14, y + dy, 1, 1, 0.7, a);
+      }
       if (!off && levels && levels[s] > 0.02) {
         const v = Math.min(1, levels[s]);
         const len = 24 + v * 140;
-        this.line(22, y, 22 + len, y, 1, 0.85, 0.4, 0.4 + 0.6 * v);
+        const x0 = 16;
+        for (let dy = -1; dy <= 1; dy++) {
+          this.line(x0, y + dy, x0 + len, y + dy, 1, 0.85, 0.4, 0.4 + 0.6 * v);
+        }
       }
     }
     // Sensor ticks on right wall.
