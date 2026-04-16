@@ -14,9 +14,11 @@ generator:
 - `white` / `pink` — broadband noise generated from a looping noise
   buffer.
 - `keyboard` — bottom-row claviature via keydown/keyup, polyphonic
-  sawtooth. `,` / `.` shift the octave. Selecting this source
-  auto-switches Mode to chromatic and pins Base to the current
-  octave's C (synced with the Base dropdown when octave changes).
+  triangle wave (chosen so a single note mostly occupies one chromatic
+  bucket; a sawtooth's harmonic stack would light several). `,` / `.`
+  shift the octave. Selecting this source auto-switches Mode to
+  chromatic and pins Base to the current octave's C (synced with the
+  Base dropdown when octave changes).
 
 All sources feed a single `AnalyserNode` with `fftSize` and
 `smoothingTimeConstant` set in `mic.js` `enable()`, so downstream code
@@ -53,7 +55,12 @@ drives one voice with multiple sine partials (count is a constant in
 - **Timbre**: harmonic gains come from grouping the sensor's
   wavelength bins; per-voice timbre depends on which colors hit that
   sensor.
-- Per-frame peak normalization across all partials caps loudness.
+- **Slow-decaying peak hold** normalizes per-partial amplitude across
+  frames (`this.peak = max(currentMax, this.peak * decay)`) so a ray
+  briefly sweeping across a sensor doesn't snap the global scale and
+  zipper unrelated voices.
+- Voice-gain transitions use `setTargetAtTime` with a longer time
+  constant for the same reason — soft response to single-frame spikes.
 - Master gain slider drives `this.master.gain`.
 - Output device picker uses `AudioContext.setSinkId()` where
   supported. Older browsers silently fall back to the system default.

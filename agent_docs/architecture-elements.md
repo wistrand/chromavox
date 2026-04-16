@@ -5,6 +5,11 @@ works (e.g. `rabbit`) as long as winding is consistent (CW in y-down).
 Lens surfaces are arc-approximations with a fixed number of segments
 per arc — see `localPolygon` in `docs/scene.js` for the current values.
 
+Element kinds: `prism`, `block`, `mirror`, `lens-convex`, `lens-concave`,
+`circle`, `rabbit`. The `circle` is a regular polygon approximation;
+the count is in `localPolygon`. The renderer's `MAX_EDGES` limit in
+`docs/renderer.js` constrains how many vertices an element can have.
+
 ## Lens parameter constraints
 
 - `lens-convex`: user picks `h` (aperture) and `radius`; sagitta is

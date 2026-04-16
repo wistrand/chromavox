@@ -5,7 +5,7 @@ import { wavelengthToRGB, materialN, elementAbsorption, elementReflectance } fro
 import { worldEdges, pointInPolygon, materialOptics } from './scene.js';
 
 const EPS = 1e-4;
-const MAX_BOUNCES = 12;
+const MAX_BOUNCES = 18;
 const GLASS_LOSS = 0.985;       // per-surface attenuation
 const BASE_INTENSITY = 1.6;
 

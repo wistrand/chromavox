@@ -15,7 +15,9 @@
   shader runs a polygon-SDF loop up to `MAX_EDGES` (defined in
   `docs/renderer.js`) to clip and sample the underlying ray FBO with
   a distortion offset. Polygons with more edges than that will be
-  silently clipped.
+  silently clipped — bump `MAX_EDGES` (and verify the uniform array
+  fits within the GPU's component limit) if you add a new element
+  shape that needs more vertices than the current circle (128).
 
 ## Physics
 

@@ -61,9 +61,10 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Per-element `el.color` overrides both visuals *and* physics: renderer
   replaces tint + edge glow; tracer switches to `elementAbsorption` /
   `elementReflectance` that treat the color as a transmission filter.
-- Layout is a two-row / three-column grid — fixed 54 px toolbar on top,
+- Layout is a two-row / three-column grid — fixed-height toolbar on top,
   left and right panels + stage below. Toolbar stays visible always
-  (`z-index: 20`, fixed height, horizontal scroll on narrow widths).
+  (raised z-index over the drawer overlays, fixed height, horizontal
+  scroll on narrow widths).
 - Window resize scales `el.x` / `el.y` proportionally to the bench-aspect
   change so compositions stay in-bounds; sizes unchanged.
 - Touch: single pointer drags/rotates (shift-drag rotates); two
@@ -71,8 +72,25 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Emitter ticks: short tap toggles, long-press or shift-click solos.
   Long-press uses a pending object with identity-guarded timer so stale
   timers can't fire on subsequent presses. Timing in `UI.onDown`.
-- Every sensor tick on the canvas carries an inline mini-spectrum
-  rendered in the overlay pass from `tracer.sensorBins`, locally
-  normalized per sensor.
+- Inline mini-spectrum painted at each sensor tick on the canvas, drawn
+  only when the right-side spectrum panel is off-screen (so it's
+  always visible somewhere). Logic in `Renderer.buildOverlay`.
+- Vertical frequency labels overlay the canvas left edge, one per
+  emitter row, just above each tick. Labels show note names in
+  chromatic mode, Hz in log mode. Updated whenever count, mode, base,
+  or span changes.
+- Sensor count can auto-track source count via the **Sync** checkbox
+  with a multiplier slider (`sensor-factor`); manual sensor-slider use
+  turns sync off.
+- Help dialog (`?` button or `H` / `?` key) summarises all shortcuts.
 - `navigator.mediaDevices` requires a secure context. `mic.enable('mic')`
   guards and throws a clear error on plain HTTP.
+- Synth sweep glitches mitigated with a slow-decaying peak-hold for the
+  per-frame normalization and a longer voice-gain time constant in
+  `synth.js`.
+- Keyboard claviature voices use `'triangle'` so a single key mostly
+  occupies one chromatic bucket without turning into a full harmonic
+  stack like sawtooth.
+- UI shortcuts ignore key events while a drag is in progress
+  (`if (this.dragging) return;`) so playing keyboard notes mid-drag
+  doesn't hijack the gesture.
