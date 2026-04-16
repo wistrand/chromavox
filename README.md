@@ -1,11 +1,14 @@
 # Chromavox
 
-2D optics raycaster in the browser. Emitters on the left, sensors on the
-right, placeable prisms, blocks, lenses, mirrors, and a rabbit in between.
-Real Snell refraction with Sellmeier (or Cauchy) dispersion, Beer-Lambert
-absorption for colored glass, and dichroic mirrors with wavelength-dependent
-reflectance. Optional audio input modulates per-source intensity by audio
-frequency bucket; optional additive synth plays the sensor readouts back.
+An **optical synthesizer** that runs in the browser. Audio comes in on the
+left wall as a row of light emitters; an additive synth on the right wall
+plays back whatever reaches the sensors. Place prisms, lenses, mirrors,
+colored glass, and dichroic mirrors between them to reshape how pitch is
+mapped, how timbre evolves, and where each note's energy lands.
+
+Underneath is a real 2D optical simulation: Snell refraction with Sellmeier
+(or Cauchy) dispersion, Beer-Lambert absorption for colored glass, and
+dichroic mirrors with wavelength-dependent reflectance.
 
 Plain HTML + ES modules + WebGL2. No dependencies.
 
