@@ -111,7 +111,17 @@ function syncSynthIndepVisibility() {
     document.getElementById(id).style.visibility = on ? 'visible' : 'hidden';
   }
 }
-document.getElementById('synth-independent').addEventListener('change', () => {
+document.getElementById('synth-independent').addEventListener('change', e => {
+  // When turning on, copy current mic-side values into the synth controls
+  // so the audible output doesn't jump until the user explicitly tweaks
+  // them. Both dropdowns share option values so direct assignment works.
+  if (e.target.checked) {
+    document.getElementById('synth-mode').value = document.getElementById('mic-mode').value;
+    document.getElementById('synth-base').value = document.getElementById('mic-base').value;
+    const span = document.getElementById('chromatic-span').value;
+    document.getElementById('synth-span').value = span;
+    document.getElementById('synth-span-val').textContent = span;
+  }
   syncSynthIndepVisibility();
   pushSynthScale();
 });
@@ -264,9 +274,9 @@ document.getElementById('mic-source').addEventListener('change', async e => {
   if (e.target.value === 'keyboard') {
     const modeSel = document.getElementById('mic-mode');
     modeSel.value = 'chromatic';
-    synth.setMode('chromatic');
+    if (!synthIndep()) synth.setMode('chromatic');
   }
-  synth.setBase(parseFloat(nextBase));
+  if (!synthIndep()) synth.setBase(parseFloat(nextBase));
 
   if (!mic.active) return;
   mic.disable();
@@ -284,7 +294,8 @@ document.getElementById('mic-source').addEventListener('change', async e => {
 });
 
 document.getElementById('mic-base').addEventListener('change', e => {
-  synth.setBase(parseFloat(e.target.value));
+  if (!synthIndep()) synth.setBase(parseFloat(e.target.value));
+  rebuildEmitterLabels();
 });
 
 const volSlider = document.getElementById('synth-vol');
