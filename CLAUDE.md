@@ -68,5 +68,11 @@ Detailed notes are split into topic files under `agent_docs/`:
   change so compositions stay in-bounds; sizes unchanged.
 - Touch: single pointer drags/rotates (shift-drag rotates); two
   simultaneous pointers on a selected element pinch-scale + rotate.
+- Emitter ticks: short tap toggles, long-press or shift-click solos.
+  Long-press uses a pending object with identity-guarded timer so stale
+  timers can't fire on subsequent presses. Timing in `UI.onDown`.
+- Every sensor tick on the canvas carries an inline mini-spectrum
+  rendered in the overlay pass from `tracer.sensorBins`, locally
+  normalized per sensor.
 - `navigator.mediaDevices` requires a secure context. `mic.enable('mic')`
   guards and throws a clear error on plain HTTP.

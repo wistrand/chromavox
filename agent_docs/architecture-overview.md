@@ -9,9 +9,10 @@ No dependencies.
 
 ## Module layout
 
-- `docs/index.html`, `docs/style.css` — two-row / three-column grid shell
-  with a fixed 54 px top toolbar; side panels slide in as drawers on
-  ≤860 px.
+- `docs/index.html`, `docs/style.css` — two-row / three-column grid
+  shell with a fixed-height top toolbar; side panels slide in as
+  drawers on the mobile breakpoint (see the `@media` rule in
+  `docs/style.css` for the cutoff).
 - `docs/spectrum.js` — Dan-Bruton wavelength→RGB, Sellmeier/Cauchy dispersion,
   Beer-Lambert absorption, dichroic reflectance, `MATERIALS` table.
 - `docs/scene.js` — data model, local/world polygon geometry, JSON save/load.
@@ -21,7 +22,10 @@ No dependencies.
   screen plus per-element bounding-quad pass that re-samples the FBO with
   a polygon-SDF-driven offset for refractive distortion and material
   tinting, (3) alpha-blended overlay lines for the bench outline, element
-  outlines, emitter/sensor ticks, and selection handle.
+  outlines, emitter/sensor ticks, and an inline per-sensor mini-spectrum
+  painted next to each sensor tick so the wavelength distribution is
+  always visible on the canvas even when the right panel is scrolled or
+  short.
 - `docs/ui.js` — pointer events (mouse + touch unified), property panel,
   save/load, preset dropdown, undo/redo, keyboard shortcuts.
 - `docs/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.
@@ -33,8 +37,9 @@ No dependencies.
 ## Coordinate system
 
 Scene coordinates are "bench pixels" in a logical space with `bench.w`,
-`bench.h`. The renderer re-derives bench size from canvas aspect on resize
-(fixed short axis = 900). All UI input is converted via `UI.canvasToBench`.
+`bench.h`. The renderer re-derives bench size from canvas aspect on
+resize; the fixed short-axis value is in `Renderer.benchSize`. All UI
+input is converted via `UI.canvasToBench`.
 
 Y is **down** (screen convention). Polygon winding and outward-normal sign
 in `worldEdges` depend on this — see the shoelace / `cw` logic. If you

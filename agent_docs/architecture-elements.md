@@ -2,8 +2,8 @@
 
 Defined in `docs/scene.js`. Convex polygons are easy; non-convex also
 works (e.g. `rabbit`) as long as winding is consistent (CW in y-down).
-Lens surfaces are arc-approximations (24 verts per arc for convex, 20
-for concave).
+Lens surfaces are arc-approximations with a fixed number of segments
+per arc — see `localPolygon` in `docs/scene.js` for the current values.
 
 ## Lens parameter constraints
 
@@ -13,23 +13,31 @@ for concave).
 
 ## Default rotations
 
-Chosen so horizontal rays produce a visible effect on placement:
+Chosen in `makeElement` (`docs/scene.js`) so horizontal rays produce a
+visible effect on placement:
 
-- `prism` — π/6 (~30°): avoids flint TIR.
-- `block` — π/6: axis-aligned block has 0° incidence → passes through
-  invisibly.
-- `mirror` — π/4 (45°): axis-aligned thin strip would be grazed by rays.
-- `rabbit`, lenses — 0: on-axis is correct.
+- `prism` — rotated to avoid flint TIR at apex-up / 0° incidence.
+- `block` — rotated so an axis-aligned block doesn't pass rays through
+  invisibly at 0° incidence.
+- `mirror` — rotated to 45° so an axis-aligned thin strip isn't grazed
+  by rays.
+- `rabbit`, lenses — on-axis (rot 0) is correct.
+
+Check `makeElement` for the current values.
 
 ## Adding a new element kind
 
 1. Extend `localPolygon` with its geometry.
-2. Extend `makeElement` with its defaults (size, material, initial `rot`).
+2. Extend `makeElement` with its defaults (size, material, initial
+   `rot`).
 3. Extend UI's `sizeFields` map so the property panel shows the right
-   sliders.
-4. Extend `elementColor` in the renderer (or let it fall through to the
-   default).
-5. Add a tool button in `index.html`.
+   sliders, and `bumpSize` in `bindShortcuts` for arrow-key resize.
+4. Extend `elementOutlineColor` in the renderer (or let it fall through
+   to the default) and optionally add a `LOOK` entry for the element
+   pass.
+5. Add a tool button in `index.html` (inside the `#toolbar .tools`
+   group) — `placeable` set in `UI.bindTools` picks it up
+   automatically.
 
 ## Element ID lifecycle
 

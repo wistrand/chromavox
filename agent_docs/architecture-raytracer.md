@@ -8,76 +8,85 @@ falloff.
 
 ## Notes
 
-- Max bounces: `MAX_BOUNCES = 12`.
-- Per-ray intensity: `1.6 / sqrt(raysPerSource)` — sub-linear so piling on
-  rays brightens the field instead of dimming to nothing.
-- Source modelling: each source is an extended aperture across a fraction
-  of its y-strip (`emitter.apertureFactor`, slider 0–1, default 0.01).
-  Ray origins, wavelengths, and angles use decorrelated golden-ratio
-  sequences so the beam looks continuous rather than an ordered fan.
-- Wavelength assignment: every source emits the same `raysPer`-wide mix
-  from `wlMin..wlMax`. Same mix per source by design. With
-  `emitter.wlPerSource` set (audio in + "Bucket color" option) sources get
+- Max bounces, per-surface glass loss, and absorption cutoff are module
+  constants at the top of `docs/raytracer.js` (`MAX_BOUNCES`,
+  `GLASS_LOSS`, `BASE_INTENSITY`). Prefer reading those instead of
+  quoting numbers.
+- Per-ray intensity scales sub-linearly with `raysPerSource` so piling
+  on rays brightens rather than dims — see the `intensity =` expression
+  in `trace()`.
+- Source modelling: each source is an extended aperture across a
+  fraction of its y-strip (`emitter.apertureFactor`; UI slider in the
+  left panel). Ray origins, wavelengths, and angles use decorrelated
+  golden-ratio sequences so the beam looks continuous.
+- Wavelength assignment: every source emits the same wavelength mix
+  across `emitter.wlMin..wlMax`. Same mix per source by design. With
+  `emitter.wlPerSource` set (audio in + "Bucket color") sources get
   their own narrow wavelength band instead.
-- Disabled sources: `emitter.disabled` is a `Set<number>` of source indices
-  to skip entirely. Toggled by clicking the left-wall tick; shift-click
-  solos.
+- Disabled sources: `emitter.disabled` is a `Set<number>` of source
+  indices to skip entirely. Toggled by clicking the left-wall tick;
+  shift-click or long-press solos.
 - Per-source mic gain: if `emitter.micLevels` is present, each source's
   ray intensity is scaled by `micLevels[s]` (that source's audio bucket
   amplitude).
-- No Fresnel amplitude split. 100% transmission unless TIR. Simpler and
-  fine for pedagogy; adding reflected rays at each dielectric surface
-  would branch the ray tree and change the buffer sizing.
+- No Fresnel amplitude split. Full transmission unless TIR. Adding
+  reflected rays at each dielectric surface would branch the ray tree
+  and change the buffer sizing.
 - Beer-Lambert absorption: while a ray is inside a dielectric, each
-  segment is attenuated by `exp(-α(λ) · d)` where α comes from the
-  material's absorption band. Segment endpoints carry different
-  intensities; the GL line interpolates so a long internal path fades
-  along its length.
-- Dichroic mirrors: mirror materials expose a wavelength-dependent
-  reflectance `R(λ)` instead of a flat 0.98. The non-reflected fraction
-  is absorbed, not transmitted — keeps the ray tree unbranched.
+  segment is attenuated by `exp(-α(λ) · d)` where α comes from
+  `elementAbsorption(el, mat, λ)` in `docs/spectrum.js`. When
+  `el.color` is set, α is derived from the color as a transmission
+  filter; otherwise from the material's absorption band. Segment
+  endpoints carry different intensities; the GL line interpolates so a
+  long internal path fades along its length.
+- Dichroic mirrors: mirror reflectance comes from
+  `elementReflectance(el, mat, λ)`. With `el.color`, reflectance
+  follows the colored filter; otherwise the material's dichroic band.
+  Non-reflected fraction is absorbed, not transmitted — keeps the ray
+  tree unbranched.
 - Ray absorbed at bench walls; sensor wall is the right edge, deposits
-  into a `sensorCount × 64` histogram by (y-strip, wavelength-bin).
-- Starting medium: at ray birth every dielectric polygon is tested and
-  added to an inside-stack (`pointInPolygon`). Matters if a lens is dropped
-  over the emitter line and also when elements nest/overlap.
-- Nested / overlapping dielectrics: the tracer maintains a `stack` of the
-  dielectric elements the ray is currently inside, last-entered on top.
-  The top-of-stack supplies Beer-Lambert α and is the incident/exit
-  medium for Snell. Entering pushes, exiting pops; TIR rolls the pop back
-  so a ray that internally reflects stays in the correct medium.
+  into a `sensorCount × binCount` histogram by (y-strip,
+  wavelength-bin). `binCount` is a `Tracer` instance field.
+- Starting medium: at ray birth every dielectric polygon is tested
+  (`pointInPolygon`) and containing polygons are pushed onto an
+  inside-stack. Matters if a lens is dropped over the emitter line and
+  also when elements nest/overlap.
+- Nested / overlapping dielectrics: `this._stack` holds the dielectric
+  elements the ray is currently inside, last-entered on top. The
+  top-of-stack supplies Beer-Lambert α and is the incident/exit medium
+  for Snell. Entering pushes, exiting pops; TIR rolls the pop back so a
+  ray that internally reflects stays in the correct medium.
+
+## Dispersion gotchas (important)
+
+- Sellmeier `n²(λ) = 1 + Σ Bᵢ λ²/(λ²−Cᵢ)` with λ in µm for real
+  materials; Cauchy `n = A + B/λ²` for synthetic. Coefficients live in
+  `MATERIALS` in `docs/spectrum.js`.
+- **Equilateral-prism TIR constraint**: for a ray to pass through a
+  60° prism, `n < 2` is required. `diamond` exceeds 2 and always TIRs;
+  `hyper` is tuned below 2. Check the `MATERIALS` entries to see which
+  materials satisfy this.
+- **Prism orientation matters**: with `rot=0` (apex up) and horizontal
+  rays, incidence is only 30° — near the TIR cutoff for flint. Default
+  `rot` for prisms is set in `makeElement` (`docs/scene.js`).
+- **Block zig-zag**: rectangular dielectrics always TIR on faces
+  *adjacent* to the entry face (geometry: adjacent-face incidence ≥
+  90°−θc > θc). Rays can only exit through the parallel opposite
+  face, zigzagging off perpendicular walls. Long zigzags hit
+  `MAX_BOUNCES` and leave a stub inside the glass.
 
 ## Performance notes
 
 Hot-loop allocations are avoided:
 
-- The four bench walls are stored on the Tracer and their coordinates
-  are written once per `trace()`, not rebuilt per bounce.
-- The inside-medium `stack` is a single reusable `Array` on the Tracer;
-  `stack.length = 0` at the start of each ray instead of `new Array`.
-- The initial-medium scan iterates a pre-built `this._elementInfos`
-  array by index — no Map iterator allocation.
-- `n1`/`n2` lookups inline `materialN(materialOptics(...))` instead of
-  going through per-ray closures.
+- Bench walls live on the Tracer (`this._walls`) and their coordinates
+  are written once per `trace()`.
+- The inside-medium `stack` is a reusable Tracer field; `stack.length =
+  0` at the start of each ray.
+- The initial-medium scan iterates `this._elementInfos` by index — no
+  Map iterator allocation.
+- `n1`/`n2` lookups inline the Sellmeier/Cauchy dispatch.
 
 Remaining per-frame allocations are outside the ray hot loop: `edges`
 array, `elementMap`, `worldEdges()` polygon/edge objects (per element,
 rebuilt each frame), and one `wavelengthToRGB` result per ray.
-
-## Dispersion gotchas (important)
-
-- Sellmeier `n²(λ) = 1 + Σ B_i λ²/(λ²−C_i)` with λ in µm (Cauchy for
-  synthetic).
-- **Equilateral-prism TIR constraint**: for any ray to pass through a
-  60° prism, `n < 2` is required — otherwise the internal ray hits the
-  exit face beyond the critical angle and total-internally-reflects.
-  `diamond` (n≈2.4) always TIRs; `hyper` is tuned below 2.
-- **Prism orientation matters**: with `rot=0` (apex up) and horizontal
-  rays, incidence is only 30° — near the TIR cutoff for flint. Default
-  `makeElement` gives prisms `rot=π/6` so new placements disperse
-  visibly.
-- **Block zig-zag**: rectangular dielectrics always TIR on faces
-  *adjacent* to the entry face (geometry: adjacent-face incidence ≥
-  90°−θc > θc). Rays can only exit through the parallel opposite face,
-  zigzagging off perpendicular walls. Long zigzags hit `MAX_BOUNCES`
-  and leave a stub inside the glass.

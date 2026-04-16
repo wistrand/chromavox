@@ -1,47 +1,46 @@
 # Architecture: Materials
 
 Defined in `docs/spectrum.js`. Each entry in `MATERIALS` has
-`type: 'dielectric' | 'mirror'`, dispersion data (Sellmeier 3-term for
-real glasses; Cauchy `A, B` for synthetic ones), and one of `absorb`
-(dielectrics) or `reflect` (mirrors). Both are Gaussian-band parametric:
-`{ base, peak, center, sigma }`.
+`type: 'dielectric' | 'mirror'`, dispersion data (Sellmeier coefficients
+for real glasses; Cauchy `A, B` for synthetic ones), and one of
+`absorb` (dielectrics) or `reflect` (mirrors). Both are Gaussian-band
+parametric: `{ base, peak, center, sigma }`.
 
-## Dielectrics
-
-- `crown` (N-BK7, essentially clear)
-- `flint` (N-SF11, rose-tinted — absorbs blue/violet)
-- `fused` (fused silica, clear)
-- `water` (cyan-tinted — absorbs red)
-- `diamond` (real n≈2.4; will TIR through a 60° prism)
-- `hyper` (synthetic, ~4× flint dispersion, magenta-tinted, safely n<2)
-
-## Mirrors
-
-- `mirror` (neutral silver, R≈0.98 flat)
-- `mirror-red` / `mirror-green` / `mirror-blue` (dichroic — narrow band
-  reflectance, rest absorbed)
+Refer to the `MATERIALS` object in `docs/spectrum.js` for the
+authoritative list of materials and their current tuning — the set
+changes over time.
 
 ## Helper functions
 
-- `materialN(mat, λ)` — returns refractive index. Dispatches Sellmeier
-  vs Cauchy based on which fields the material carries.
-- `materialAbsorption(mat, λ)` — returns α in 1/bench-unit. Path lengths
-  are hundreds of units, so peak ~0.004 gives a noticeable gradient over
-  ~200 units.
-- `mirrorReflectance(mat, λ)` — returns R in [0, 1].
+- `materialN(mat, λ)` — refractive index. Dispatches Sellmeier vs
+  Cauchy based on which fields the material carries.
+- `materialAbsorption(mat, λ)` — α in 1/bench-unit from the material's
+  absorption band.
+- `mirrorReflectance(mat, λ)` — R in [0, 1] from the material's
+  reflectance band.
+- `elementAbsorption(el, mat, λ)` — α with `el.color` override: if set,
+  derives α from the color as a transmission filter; otherwise falls
+  back to `materialAbsorption(mat, λ)`.
+- `elementReflectance(el, mat, λ)` — same override logic for mirror
+  reflectance.
+- `hexToRgb(hex)` — shared color parser used by both UI and renderer.
+
+The transmission-filter model's reference path length and the mirror
+reflectance mapping constants live at the top of `docs/spectrum.js`.
 
 ## UI integration
 
-The material `<select>` in the property panel filters `MATERIALS` by
-`type` — dielectric elements see only dielectrics, mirror elements see
-only mirror variants.
+The property panel's material `<select>` filters `MATERIALS` by `type`
+so dielectric elements see only dielectrics and mirror elements see
+only mirror variants. The color override (picker + hue slider) is
+independent of the material choice and, when set, reshapes both
+absorption (glass) or reflectance (mirrors).
 
 ## Scale notes
 
-- α values are per bench unit, not per metre. Adjust in absolute bench
-  coordinates when tuning.
-- `R(λ)` base and peak clamp to `[0, 1]`; sum of the two can exceed 1
-  before clamping.
+- α values are per bench unit, not per metre. Tune in the `absorb`
+  entry of the material.
+- `R(λ)` clamps to `[0, 1]` in `mirrorReflectance`.
 - Cauchy is a truncation of Sellmeier and is accurate enough across the
   visible range; reserve it for synthetic materials where exact
   coefficients aren't available.
