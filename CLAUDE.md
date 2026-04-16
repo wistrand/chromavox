@@ -62,15 +62,38 @@ the loop marks dirty each frame so audio buckets animate.
 - No Fresnel amplitude split. 100% transmission unless TIR. Simpler and fine for
   pedagogy; adding reflected rays at each dielectric surface would branch the
   ray tree and change the buffer sizing.
+- Beer-Lambert absorption: while a ray is inside a dielectric, each segment is
+  attenuated by `exp(-α(λ) · d)` where α comes from the material's absorption
+  band. Segment endpoints carry different intensities; the GL line interpolates
+  so a long internal path fades along its length.
+- Dichroic mirrors: mirror materials expose a wavelength-dependent reflectance
+  `R(λ)` instead of a flat 0.98. The non-reflected fraction is absorbed, not
+  transmitted — keeps the ray tree unbranched.
 - Ray absorbed at bench walls; sensor wall is the right edge, deposits into a
   `sensorCount × 64` histogram by (y-strip, wavelength-bin).
 - Starting medium: `pointInPolygon` test at emitter origin decides if the ray
   starts inside a dielectric. Matters if user drops a lens over the emitter line.
 
+## Materials
+
+Each entry in `MATERIALS` has `type: 'dielectric' | 'mirror'`, dispersion data
+(Sellmeier 3-term for real glasses; Cauchy `A,B` for synthetic ones), and one
+of `absorb` (dielectrics) or `reflect` (mirrors). Both are Gaussian-band
+parametric: `{ base, peak, center, sigma }`.
+
+- Dielectrics: `crown` (N-BK7), `flint` (N-SF11, rose tint), `fused`, `water`
+  (cyan tint), `diamond` (real, n>2), `hyper` (synthetic, magenta tint).
+- Mirrors: `mirror` (neutral silver, R≈0.98), `mirror-red`, `mirror-green`,
+  `mirror-blue` (narrow band reflectance, rest absorbed).
+
+`materialN(mat, λ)` dispatches Sellmeier vs Cauchy. `materialAbsorption(mat, λ)`
+returns α in 1/bench-unit (path lengths are hundreds of units — peak ~0.004
+gives a noticeable gradient over ~200 units). `mirrorReflectance(mat, λ)`
+returns R in [0,1].
+
 ## Dispersion gotchas (important)
 
-- Cauchy `n(λ) = A + B/λ²` with λ in µm. Materials: `crown`, `flint`, `fused`,
-  `water`, `diamond` (real, n>2), `hyper` (synthetic demo, ~4× flint dispersion).
+- Sellmeier `n²(λ) = 1 + Σ B_i λ²/(λ²−C_i)` with λ in µm (Cauchy for synthetic).
 - **Equilateral-prism TIR constraint**: for any ray to pass through a 60° prism,
   `n < 2` is required — otherwise the internal ray hits the exit face beyond the
   critical angle and total-internally-reflects. `diamond` (n≈2.4) always TIRs;

@@ -177,14 +177,17 @@ export class Renderer {
 
 function elementColor(el) {
   switch (el.material) {
-    case 'mirror': return [0.85, 0.85, 1.0, 0.9];
-    case 'flint':  return [1.0, 0.7, 0.8, 0.85];
-    case 'crown':  return [0.6, 0.9, 1.0, 0.85];
-    case 'fused':  return [0.8, 1.0, 0.9, 0.85];
-    case 'water':  return [0.6, 0.8, 1.0, 0.85];
-    case 'diamond':return [1.0, 1.0, 0.8, 0.9];
-    case 'hyper':  return [1.0, 0.5, 1.0, 0.9];
-    default:       return [1, 1, 1, 0.8];
+    case 'mirror':       return [0.85, 0.85, 1.0, 0.9];
+    case 'mirror-red':   return [1.0, 0.4, 0.4, 0.9];
+    case 'mirror-green': return [0.4, 1.0, 0.5, 0.9];
+    case 'mirror-blue':  return [0.4, 0.5, 1.0, 0.9];
+    case 'flint':        return [1.0, 0.7, 0.8, 0.85];
+    case 'crown':        return [0.6, 0.9, 1.0, 0.85];
+    case 'fused':        return [0.8, 1.0, 0.9, 0.85];
+    case 'water':        return [0.6, 0.8, 1.0, 0.85];
+    case 'diamond':      return [1.0, 1.0, 0.8, 0.9];
+    case 'hyper':        return [1.0, 0.5, 1.0, 0.9];
+    default:             return [1, 1, 1, 0.8];
   }
 }
 

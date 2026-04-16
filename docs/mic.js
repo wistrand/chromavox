@@ -15,6 +15,7 @@ export class MicModulator {
     this.pitchHz = 0;
     this.nodes = [];
     this.source = 'mic';
+    this.keyboardOctave = 4;
   }
 
   async enable(source = 'mic') {
@@ -52,6 +53,59 @@ export class MicModulator {
         o.start();
         nodes.push(o, gk);
       }
+      srcNode = mix;
+    } else if (source === 'keyboard') {
+      // ZXCVBNM bottom row + SDGHJ above = one-octave claviature. Comma/period
+      // shift octaves. Multiple simultaneous keys → polyphony. Sawtooth voices
+      // give some harmonic content so the wavelength-grouping synth sees variety.
+      const mix = ctx.createGain();
+      mix.gain.value = 0.35;
+      const KEY_TO_SEMI = {
+        KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5,
+        KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
+      };
+      this.keyboardOctave = 4;
+      const voices = new Map();
+      const midiToHz = m => 440 * Math.pow(2, (m - 69) / 12);
+      const start = code => {
+        if (voices.has(code)) return;
+        const semi = KEY_TO_SEMI[code];
+        if (semi === undefined) return;
+        const midi = 12 * (this.keyboardOctave + 1) + semi;
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = midiToHz(midi);
+        const g = ctx.createGain();
+        g.gain.value = 0;
+        g.gain.setTargetAtTime(1, ctx.currentTime, 0.01);
+        o.connect(g).connect(mix);
+        o.start();
+        voices.set(code, { o, g });
+      };
+      const stop = code => {
+        const v = voices.get(code);
+        if (!v) return;
+        voices.delete(code);
+        const t = ctx.currentTime;
+        v.g.gain.setTargetAtTime(0, t, 0.03);
+        setTimeout(() => { try { v.o.stop(); } catch {} v.g.disconnect(); }, 150);
+      };
+      const onDown = e => {
+        if (e.repeat) return;
+        if (e.code === 'Comma')  { this.keyboardOctave = Math.max(0, this.keyboardOctave - 1); return; }
+        if (e.code === 'Period') { this.keyboardOctave = Math.min(8, this.keyboardOctave + 1); return; }
+        if (KEY_TO_SEMI[e.code] !== undefined) { e.preventDefault(); start(e.code); }
+      };
+      const onUp = e => { if (KEY_TO_SEMI[e.code] !== undefined) stop(e.code); };
+      window.addEventListener('keydown', onDown);
+      window.addEventListener('keyup', onUp);
+      this._kbdCleanup = () => {
+        window.removeEventListener('keydown', onDown);
+        window.removeEventListener('keyup', onUp);
+        for (const v of voices.values()) { try { v.o.stop(); } catch {} }
+        voices.clear();
+      };
+      nodes.push(mix);
       srcNode = mix;
     } else if (source === 'white' || source === 'pink') {
       const sr = ctx.sampleRate;
@@ -100,6 +154,8 @@ export class MicModulator {
     if (!this.active) return;
     this.active = false;
     this.stream?.getTracks().forEach(t => t.stop());
+    this._kbdCleanup?.();
+    this._kbdCleanup = null;
     for (const n of this.nodes) { try { n.stop?.(); } catch {} }
     this.nodes = [];
     this.ctx?.close();

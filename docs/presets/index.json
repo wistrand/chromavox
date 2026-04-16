@@ -5,5 +5,7 @@
   { "label": "Converging lens", "file": "converging-lens.json" },
   { "label": "Diverging lens",  "file": "diverging-lens.json" },
   { "label": "Double prism",    "file": "double-prism.json" },
-  { "label": "Mirror bounce",   "file": "mirror-bounce.json" }
+  { "label": "Mirror bounce",   "file": "mirror-bounce.json" },
+  { "label": "Dichroic mirrors","file": "dichroic.json" },
+  { "label": "Tinted glass",    "file": "tinted-glass.json" }
 ]

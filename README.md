@@ -2,8 +2,10 @@
 
 2D optics raycaster in the browser. Emitters on the left, sensors on the
 right, placeable prisms, blocks, lenses, mirrors, and a rabbit in between.
-Real Snell refraction with Cauchy wavelength-dependent index. Optional
-microphone input modulates per-source intensity by audio frequency bucket.
+Real Snell refraction with Sellmeier (or Cauchy) dispersion, Beer-Lambert
+absorption for colored glass, and dichroic mirrors with wavelength-dependent
+reflectance. Optional microphone input modulates per-source intensity by
+audio frequency bucket.
 
 Plain HTML + ES modules + WebGL2. No dependencies.
 
@@ -43,9 +45,14 @@ ES modules require HTTP, not `file://`. Open http://localhost:8005/.
 
 ## Materials
 
-- `crown` (BK7-ish), `flint` (dense flint), `fused` (fused silica), `water`
-- `diamond` — real n≈2.4, TIRs through any 60° prism
-- `hyper` — synthetic demo, ~4× flint dispersion, tuned to n<2
+Dielectrics (with Beer-Lambert absorption band):
+- `crown` (N-BK7, clear), `flint` (N-SF11, rose-tinted), `fused` (clear),
+  `water` (cyan-tinted), `diamond` (real n≈2.4; TIRs in 60° prisms),
+  `hyper` (synthetic ~4× flint dispersion, magenta-tinted).
+
+Mirrors (wavelength-dependent reflectance):
+- `mirror` (neutral silver), `mirror-red`, `mirror-green`, `mirror-blue`
+  (dichroic — reflects narrow band, absorbs the rest).
 
 For an equilateral prism to transmit any light, `n < 2` is required; diamond
 demonstrates the TIR limit.

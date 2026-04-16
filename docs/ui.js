@@ -201,21 +201,22 @@ export class UI {
     });
     addRow('Rotation', rot);
 
-    // Material (non-mirror only)
-    if (el.kind !== 'mirror') {
-      const sel = document.createElement('select');
-      for (const k of Object.keys(MATERIALS)) {
-        const opt = document.createElement('option');
-        opt.value = k; opt.textContent = k;
-        if (k === el.material) opt.selected = true;
-        sel.appendChild(opt);
-      }
-      sel.addEventListener('change', () => {
-        el.material = sel.value;
-        this.onChange();
-      });
-      addRow('Material', sel);
+    // Material: mirror elements pick among mirror variants; everything else
+    // picks among dielectrics.
+    const wantType = (el.kind === 'mirror') ? 'mirror' : 'dielectric';
+    const sel = document.createElement('select');
+    for (const k of Object.keys(MATERIALS)) {
+      if (MATERIALS[k].type !== wantType) continue;
+      const opt = document.createElement('option');
+      opt.value = k; opt.textContent = k;
+      if (k === el.material) opt.selected = true;
+      sel.appendChild(opt);
     }
+    sel.addEventListener('change', () => {
+      el.material = sel.value;
+      this.onChange();
+    });
+    addRow('Material', sel);
 
     // Size params per kind
     const sizeFields = {

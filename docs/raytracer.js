@@ -1,7 +1,7 @@
 // CPU ray tracer. Emits per-frame line segment vertex data for the WebGL2
 // renderer and updates per-sensor spectrum bins.
 
-import { wavelengthToRGB, cauchyN } from './spectrum.js';
+import { wavelengthToRGB, materialN, materialAbsorption, mirrorReflectance } from './spectrum.js';
 import { worldEdges, pointInPolygon, materialOptics } from './scene.js';
 
 const EPS = 1e-4;
@@ -110,10 +110,11 @@ export class Tracer {
     let x = ox, y = oy, vx = dx, vy = dy;
     let I = intensity;
 
-    // Determine starting medium: inside any glass polygon?
+    // Determine starting medium: inside any dielectric polygon?
     let insideEl = null;
-    for (const [id, v] of elementMap) {
-      if (pointInPolygon(v.polygon, x, y) && materialOptics(v.el.material)) {
+    for (const [, v] of elementMap) {
+      const m = materialOptics(v.el.material);
+      if (m && m.type === 'dielectric' && pointInPolygon(v.polygon, x, y)) {
         insideEl = v.el; break;
       }
     }
@@ -147,81 +148,87 @@ export class Tracer {
       }
 
       const hx = x + vx * tBest, hy = y + vy * tBest;
-      this.emitSeg(x, y, hx, hy, rgb, I);
+
+      // Beer-Lambert absorption along the segment if it was inside a medium.
+      let Iend = I;
+      if (insideEl) {
+        const inMat = materialOptics(insideEl.material);
+        const alpha = materialAbsorption(inMat, wl);
+        if (alpha > 0) {
+          const d = Math.hypot(hx - x, hy - y);
+          Iend = I * Math.exp(-alpha * d);
+        }
+      }
+      this.emitSeg(x, y, hx, hy, rgb, I, Iend);
+      I = Iend;
 
       if (hitWall) {
         if (hitWall.kind === 'sensor') {
-          // Deposit into sensor bin based on y position and wavelength.
           const sIdx = Math.min(this.sensorCount - 1, Math.max(0, Math.floor(hy / sensorStripH)));
           const binIdx = Math.min(this.binCount - 1, Math.max(0,
             Math.floor((wl - 380) / (780 - 380) * this.binCount)));
           this.sensorBins[sIdx * this.binCount + binIdx] += I;
         }
-        return; // absorbed
+        return;
       }
 
-      // Element edge: dispatch by element material.
       const elInfo = elementMap.get(hitEdge.elementId);
-      const mat = elInfo.el.material;
+      const matObj = materialOptics(elInfo.el.material);
+      if (!matObj) return;
 
-      if (mat === 'mirror') {
-        // Reflect.
+      if (matObj.type === 'mirror') {
+        // Wavelength-dependent reflectance; non-reflected fraction is absorbed.
         const nx = hitEdge.nx, ny = hitEdge.ny;
         const vdotn = vx * nx + vy * ny;
         vx = vx - 2 * vdotn * nx;
         vy = vy - 2 * vdotn * ny;
-        I *= 0.98;
+        I *= mirrorReflectance(matObj, wl);
       } else {
-        // Dielectric: Snell with Cauchy dispersion.
-        const glass = materialOptics(mat);
-        if (!glass) return;
-        const nGlass = cauchyN(glass.A, glass.B, wl);
+        // Dielectric: Snell with Sellmeier (or Cauchy) dispersion.
+        const nGlass = materialN(matObj, wl);
 
-        // Outward normal points away from glass interior (into air).
         let nx = hitEdge.nx, ny = hitEdge.ny;
         const vdotn_out = vx * nx + vy * ny;
         let n1, n2;
-        let snx, sny;       // normal pointing into incident medium
+        let snx, sny;
         if (vdotn_out < 0) {
-          // entering glass
           n1 = 1.0; n2 = nGlass;
           snx = nx; sny = ny;
           insideEl = elInfo.el;
         } else {
-          // exiting glass
           n1 = nGlass; n2 = 1.0;
           snx = -nx; sny = -ny;
           insideEl = null;
         }
         const eta = n1 / n2;
-        const cosI = -(vx * snx + vy * sny);      // positive
+        const cosI = -(vx * snx + vy * sny);
         const sin2T = eta * eta * (1 - cosI * cosI);
         if (sin2T > 1) {
-          // Total internal reflection.
-          const vdotn = vx * (-snx) + vy * (-sny);
-          vx = vx - 2 * vdotn * (-snx);
-          vy = vy - 2 * vdotn * (-sny);
+          const vd = vx * (-snx) + vy * (-sny);
+          vx = vx - 2 * vd * (-snx);
+          vy = vy - 2 * vd * (-sny);
+          // TIR stays inside glass — insideEl unchanged from before the exit test.
+          insideEl = elInfo.el;
         } else {
           const cosT = Math.sqrt(1 - sin2T);
           vx = eta * vx + (eta * cosI - cosT) * snx;
           vy = eta * vy + (eta * cosI - cosT) * sny;
         }
-        // Renormalise (guard against drift).
         const len = Math.hypot(vx, vy);
         vx /= len; vy /= len;
         I *= GLASS_LOSS;
       }
 
-      // Advance origin slightly past hit to avoid self-intersection.
       x = hx + vx * EPS * 10;
       y = hy + vy * EPS * 10;
       if (I < 0.002) return;
     }
   }
 
-  emitSeg(x1, y1, x2, y2, rgb, I) {
-    this.pushVertex(x1, y1, rgb[0] * I, rgb[1] * I, rgb[2] * I, I);
-    this.pushVertex(x2, y2, rgb[0] * I, rgb[1] * I, rgb[2] * I, I);
+  emitSeg(x1, y1, x2, y2, rgb, I1, I2) {
+    if (I2 === undefined) I2 = I1;
+    this.pushVertex(x1, y1, rgb[0] * I1, rgb[1] * I1, rgb[2] * I1, I1);
+    this.pushVertex(x2, y2, rgb[0] * I2, rgb[1] * I2, rgb[2] * I2, I2);
   }
 }
 

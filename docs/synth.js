@@ -64,12 +64,12 @@ export class SensorSynth {
     for (let i = 0; i < sensorCount; i++) {
       let freq;
       if (this.mode === 'chromatic') {
-        // Top sensor (i=0) = high pitch, same as log branch. Semitone ladder
-        // mirrors the chromatic mic buckets on the input side.
-        freq = baseHz * Math.pow(semi, (sensorCount - 1) - i);
+        // Sensor i plays the same semitone the mic's bucket i covers — no
+        // inversion, so in an identity scene input/output pitch line up.
+        freq = baseHz * Math.pow(semi, i);
       } else {
         const t = sensorCount > 1 ? i / (sensorCount - 1) : 0;
-        freq = loHz * Math.pow(hiHz / loHz, 1 - t);
+        freq = loHz * Math.pow(hiHz / loHz, t);
       }
       const harmonics = [];
       for (let k = 1; k <= K; k++) {

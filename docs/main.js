@@ -20,6 +20,26 @@ const markDirty = () => { dirty = true; };
 
 const mic = new MicModulator();
 const synth = new SensorSynth();
+
+// Keyboard source tracks its own octave; the chromatic ladder's base note
+// follows that octave so new key presses map to the ladder's bucket 0.
+function currentBaseHz() {
+  if (mic.active && mic.source === 'keyboard') {
+    return 16.352 * Math.pow(2, mic.keyboardOctave);
+  }
+  return parseFloat(document.getElementById('mic-base').value);
+}
+let lastBaseHz = null;
+
+function syncBaseSelect(hz) {
+  const sel = document.getElementById('mic-base');
+  let best = null, bestDist = Infinity;
+  for (const opt of sel.options) {
+    const d = Math.abs(parseFloat(opt.value) - hz);
+    if (d < bestDist) { best = opt; bestDist = d; }
+  }
+  if (best && sel.value !== best.value) sel.value = best.value;
+}
 const ui = new UI(scene, canvas, markDirty);
 ui.rebuildSensorReadout();
 
@@ -51,9 +71,15 @@ document.getElementById('mic-source').addEventListener('change', async e => {
     'mic':       '130.81',
     'white':     '130.81',
     'pink':      '130.81',
+    'keyboard':  '261.63',
   };
   const nextBase = baseBySource[e.target.value];
   if (nextBase) document.getElementById('mic-base').value = nextBase;
+  if (e.target.value === 'keyboard') {
+    const modeSel = document.getElementById('mic-mode');
+    modeSel.value = 'chromatic';
+    synth.setMode('chromatic');
+  }
   synth.setBase(parseFloat(nextBase));
 
   if (!mic.active) return;
@@ -117,8 +143,13 @@ function frame() {
       // source's ray intensity. Optionally, each source also gets its own
       // narrow wavelength band derived from its bucket position.
       const micMode = document.getElementById('mic-mode').value;
-      const baseHz = parseFloat(document.getElementById('mic-base').value);
+      const baseHz = currentBaseHz();
       scene.emitter.micLevels = micBands(mic, scene.emitter.count, micMode, baseHz);
+      if (baseHz !== lastBaseHz) {
+        synth.setBase(baseHz);
+        if (mic.source === 'keyboard') syncBaseSelect(baseHz);
+        lastBaseHz = baseHz;
+      }
       if (document.getElementById('bucket-color').checked) {
         const n = scene.emitter.count;
         const min = new Float32Array(n);
