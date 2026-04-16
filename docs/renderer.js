@@ -70,7 +70,13 @@ precision highp float;
 in vec2 vUV;
 uniform sampler2D uTex;
 out vec4 outColor;
-void main() { outColor = texture(uTex, vUV); }`;
+void main() {
+  // Reinhard tone-map the HDR ray FBO to [0,1] for display. Channels
+  // sum freely past 1 in the FBO; the curve compresses softly so colors
+  // stay distinct instead of clamping to white.
+  vec3 hdr = texture(uTex, vUV).rgb;
+  outColor = vec4(hdr / (1.0 + hdr), 1.0);
+}`;
 
 // Element shader: draws a bounding quad in world space, discards pixels
 // outside the polygon (SDF), and inside the polygon samples the FBO with
@@ -151,10 +157,11 @@ void main() {
   float facing = dot(outward, light);          // -1..+1
   float facingT = clamp(facing * 0.5 + 0.5, 0.0, 1.0);  // 0..1
 
-  // Base sample from the FBO (ray image underneath). The distortion
-  // direction is taken from the polygon centroid, not the nearest edge —
-  // that avoids the medial-axis discontinuity where the nearest-edge
-  // direction flips and produces visible breaks inside the element.
+  // Base sample from the FBO (HDR ray image). The distortion direction
+  // is taken from the polygon centroid, not the nearest edge, to avoid
+  // the medial-axis discontinuity. Reinhard tone-mapped to [0,1] before
+  // mixing so additive ray pile-ups become smooth bright colors instead
+  // of clamping to white.
   vec3 baseRgb;
   if (uOpaque < 0.5) {
     vec2 center = 0.5 * (uAabbMin + uAabbMax);
@@ -165,7 +172,8 @@ void main() {
     vec2 offsetUV = offsetBench / uBench;
     offsetUV.y = -offsetUV.y;
     vec2 uv = clamp(vUV + offsetUV, vec2(0.0), vec2(1.0));
-    baseRgb = texture(uFbo, uv).rgb;
+    vec3 hdr = texture(uFbo, uv).rgb;
+    baseRgb = hdr / (1.0 + hdr);
   } else {
     baseRgb = vec3(0.0);
   }
@@ -231,6 +239,11 @@ export class Renderer {
     const gl = canvas.getContext('webgl2', { antialias: true, premultipliedAlpha: false });
     if (!gl) throw new Error('WebGL2 not supported');
     this.gl = gl;
+    // HDR float framebuffer for rays — required so additive blending can
+    // accumulate past 1.0 without clamping. Tone-mapping happens in the
+    // blit and element fragment shaders. Falls back to RGBA8 if the
+    // extension is unavailable (older mobile GPUs).
+    this.hdrEnabled = !!gl.getExtension('EXT_color_buffer_float');
 
     // --- Programs ---
     this.rayProgram = buildProgram(gl, RAY_VS, RAY_FS);
@@ -324,11 +337,17 @@ export class Renderer {
     this.canvas.width = Math.max(2, Math.floor(rect.width * dpr));
     this.canvas.height = Math.max(2, Math.floor(rect.height * dpr));
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    // Reallocate the FBO color attachment to match.
+    // Reallocate the FBO color attachment as RGBA16F when supported so the
+    // ray pass can accumulate beyond 1.0 in linear HDR space.
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.canvas.width, this.canvas.height, 0,
-      gl.RGBA, gl.UNSIGNED_BYTE, null);
+    if (this.hdrEnabled) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, this.canvas.width, this.canvas.height, 0,
+        gl.RGBA, gl.HALF_FLOAT, null);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.canvas.width, this.canvas.height, 0,
+        gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.fboTex, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
