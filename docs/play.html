@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Chromavox</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%23dceeff'/><stop offset='1' stop-color='%2378a8d8'/></linearGradient></defs><line x1='1' y1='14' x2='31' y2='20' stroke='%23ffe488' stroke-width='2' stroke-linecap='round'/><polygon points='16,5 27,25 5,25' fill='url(%23g)' fill-opacity='0.55' stroke='url(%23g)' stroke-width='1.6' transform='rotate(12 16 16)'/></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="toolbar">
+    <div class="tools">
+      <div class="tool-menu-wrap">
+        <button id="add-toggle" type="button">Add ▾</button>
+        <div id="add-menu" class="tool-menu">
+          <div class="tool-menu-item" data-tool="prism">       <span class="tmi-label">Prism</span></div>
+          <div class="tool-menu-item" data-tool="block">       <span class="tmi-label">Block</span></div>
+          <div class="tool-menu-item" data-tool="lens-convex"> <span class="tmi-label">Convex Lens</span></div>
+          <div class="tool-menu-item" data-tool="lens-concave"><span class="tmi-label">Concave Lens</span></div>
+          <div class="tool-menu-item" data-tool="mirror">      <span class="tmi-label">Mirror</span></div>
+          <div class="tool-menu-item" data-tool="circle">      <span class="tmi-label">Circle</span></div>
+          <div class="tool-menu-item" data-tool="rabbit">      <span class="tmi-label">Rabbit</span></div>
+        </div>
+      </div>
+      <button data-tool="select" class="active">Select</button>
+      <button data-tool="delete">Delete</button>
+    </div>
+    <span class="tb-sep"></span>
+    <div class="tool-menu-wrap">
+      <button id="mic-toggle">Audio in: off</button>
+      <button id="mic-options" type="button" class="opts-toggle" aria-label="Audio in options">▾</button>
+      <div id="mic-menu" class="options-menu">
+        <div class="row"><label>Source <select id="mic-source"><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keyboard</option></select></label></div>
+        <div class="row" id="mic-device-row"><label>Device <select id="mic-device"><option value="">default</option></select></label></div>
+        <div class="row"><label>Mode <select id="mic-mode">
+          <option value="log">log</option>
+          <option value="chromatic" selected>chromatic</option>
+          <option value="major">major</option>
+          <option value="minor">minor</option>
+          <option value="pentaMajor">penta major</option>
+          <option value="pentaMinor">penta minor</option>
+          <option value="wholeTone">whole tone</option>
+          <option value="blues">blues</option>
+        </select></label></div>
+        <div class="row" id="chromatic-span-row"><label>Span <input id="chromatic-span" type="range" min="1" max="12" value="1" step="1"><span id="chromatic-span-val">1</span></label></div>
+        <div class="row"><label>Smoothing <input id="mic-smoothing" type="range" min="0" max="95" value="60"><span id="mic-smoothing-val">0.60</span></label></div>
+        <div class="row"><label>Base <select id="mic-base">
+          <option value="32.70">C1</option>
+          <option value="65.41">C2</option>
+          <option value="87.31">F2</option>
+          <option value="110">A2</option>
+          <option value="130.81" selected>C3</option>
+          <option value="174.61">F3</option>
+          <option value="220">A3</option>
+          <option value="261.63">C4</option>
+          <option value="440">A4</option>
+          <option value="523.25">C5</option>
+          <option value="1046.5">C6</option>
+          <option value="2093">C7</option>
+        </select></label></div>
+        <div class="row"><label><input id="bucket-color" type="checkbox"> Bucket color</label></div>
+        <div class="row"><label>Visual rate <input id="visual-rate" type="range" min="0" max="100" value="50"><span id="visual-rate-val">1.00×</span></label></div>
+        <div class="row"><label>Onset sens. <input id="onset-sens" type="range" min="0" max="100" value="50"><span id="onset-sens-val">0.50</span></label></div>
+      </div>
+    </div>
+    <div class="tool-menu-wrap">
+      <button id="synth-toggle">Audio out: off</button>
+      <button id="synth-options" type="button" class="opts-toggle" aria-label="Audio out options">▾</button>
+      <div id="synth-menu" class="options-menu">
+        <div class="row"><label>Device <select id="synth-device"><option value="">default</option></select></label></div>
+        <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="100" value="25"><span id="synth-vol-val">25</span></label></div>
+        <div class="row"><label><input id="synth-independent" type="checkbox"> Independent scale</label></div>
+        <div class="row" id="synth-mode-row"><label>Mode <select id="synth-mode">
+          <option value="log">log</option>
+          <option value="chromatic" selected>chromatic</option>
+          <option value="major">major</option>
+          <option value="minor">minor</option>
+          <option value="pentaMajor">penta major</option>
+          <option value="pentaMinor">penta minor</option>
+          <option value="wholeTone">whole tone</option>
+          <option value="blues">blues</option>
+        </select></label></div>
+        <div class="row" id="synth-span-row"><label>Span <input id="synth-span" type="range" min="1" max="12" value="1" step="1"><span id="synth-span-val">1</span></label></div>
+        <div class="row" id="synth-base-row"><label>Base <select id="synth-base">
+          <option value="32.70">C1</option>
+          <option value="65.41">C2</option>
+          <option value="87.31">F2</option>
+          <option value="110">A2</option>
+          <option value="130.81" selected>C3</option>
+          <option value="174.61">F3</option>
+          <option value="220">A3</option>
+          <option value="261.63">C4</option>
+          <option value="440">A4</option>
+          <option value="523.25">C5</option>
+          <option value="1046.5">C6</option>
+          <option value="2093">C7</option>
+        </select></label></div>
+      </div>
+    </div>
+    <span class="tb-sep"></span>
+    <label class="tb-check"><input id="distort-toggle" type="checkbox"> Distort</label>
+    <span class="tb-sep"></span>
+    <button id="save">Save</button>
+    <button id="load">Load</button>
+    <button id="clear">Clear</button>
+    <span class="tb-sep"></span>
+    <label class="tb-preset">Preset <select id="preset-select"><option value="">…</option></select></label>
+    <span class="tb-sep"></span>
+    <button id="help-toggle" aria-label="Help">?</button>
+    <input id="file-input" type="file" accept="application/json" hidden>
+  </header>
+
+  <dialog id="help-dialog">
+    <h2>Chromavox</h2>
+    <p>Optical synthesizer: audio in modulates left-wall light emitters; rays
+       cross the bench through your placed prisms / lenses / mirrors / glass;
+       what reaches the right wall drives an additive synth out.</p>
+    <h3>Mouse &amp; touch</h3>
+    <ul>
+      <li><b>Tool button</b> — drop element at bench center.</li>
+      <li><b>Click</b> element to select; <b>drag</b> to move.</li>
+      <li><b>Shift-drag</b> or <b>right-button drag</b> — rotate.</li>
+      <li><b>Two-finger pinch</b> (touch) — scale + rotate.</li>
+      <li><b>Click left-wall tick</b> — toggle that source on/off.</li>
+      <li><b>Shift-click</b> or <b>long-press</b> tick — solo.</li>
+    </ul>
+    <h3>Keyboard</h3>
+    <ul>
+      <li><b>Arrows</b> — move selected element ±5</li>
+      <li><b>Shift + ←/→</b> — rotate ±1°</li>
+      <li><b>Shift + ↑/↓</b> — resize ±8</li>
+      <li><b>Backspace / Delete</b> — delete selected</li>
+      <li><b>Ctrl+Z / Ctrl+Shift+Z</b> — undo / redo</li>
+      <li><b>Q</b> — toggle audio out</li>
+      <li><b>H</b> or <b>?</b> — this help</li>
+    </ul>
+    <h3>Keyboard claviature (Audio in &gt; Source = keyboard)</h3>
+    <p><kbd>Z S X D C V G B H N J M</kbd> — one octave of piano keys.
+       <kbd>,</kbd> / <kbd>.</kbd> shift octave down / up.</p>
+    <button id="help-close">Close</button>
+  </dialog>
+
+  <aside id="left-panel" class="panel">
+    <h2>Emitters</h2>
+    <div class="row"><label>Sources <input id="emitter-count" type="range" min="1" max="64" value="12"><span id="emitter-count-val">12</span></label></div>
+    <div class="row"><label>λ min (nm) <input id="wl-min" type="range" min="380" max="780" value="400"><span id="wl-min-val">400</span></label></div>
+    <div class="row"><label>λ max (nm) <input id="wl-max" type="range" min="380" max="780" value="700"><span id="wl-max-val">700</span></label></div>
+    <div class="row"><label>Rays/source <input id="rays-per" type="range" min="1" max="2000" value="512"><span id="rays-per-val">512</span></label></div>
+    <div class="row"><label>Spread° <input id="spread" type="range" min="0" max="60" value="0"><span id="spread-val">0</span></label></div>
+    <div class="row"><label>Aperture <input id="aperture" type="range" min="0" max="100" value="1"><span id="aperture-val">0.01</span></label></div>
+
+    <h2>Sensors</h2>
+    <div class="row"><label>Count <input id="sensor-count" type="range" min="1" max="128" value="24"><span id="sensor-count-val">24</span></label></div>
+    <div class="row"><label><input id="sensor-sync" type="checkbox" checked> Sync to source count</label></div>
+    <div class="row" id="sensor-factor-row"><label>Factor <input id="sensor-factor" type="range" min="1" max="8" value="2" step="1"><span id="sensor-factor-val">2</span></label></div>
+
+    <h2>Selected</h2>
+    <div id="prop-panel"><em>No selection</em></div>
+
+  </aside>
+
+  <main id="stage">
+    <div id="bench-viewport">
+      <canvas id="gl"></canvas>
+      <div id="emitter-labels"></div>
+      <div id="sensor-labels"></div>
+    </div>
+  </main>
+
+  <aside id="right-panel" class="panel">
+    <div id="sensor-readout"></div>
+  </aside>
+
+  <button id="left-toggle"  class="panel-toggle panel-toggle-left"  aria-label="Toggle left panel">☰</button>
+  <button id="right-toggle" class="panel-toggle panel-toggle-right" aria-label="Toggle right panel">☰</button>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

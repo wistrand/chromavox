@@ -2,9 +2,11 @@
 
 `docs/raytracer.js` produces per-frame segment records for the WebGL2
 renderer and updates per-sensor spectrum bins. Each segment is a single
-12-float entry (`[p1x, p1y, p2x, p2y, c1rgb*I1, I1, c2rgb*I2, I2]`) that
-the renderer expands into an instanced SDF quad with per-fragment soft
-falloff.
+14-float entry (`[p1x, p1y, p2x, p2y, c1rgb*I1, I1, c2rgb*I2, I2,
+tStart, tEnd]`) that the renderer expands into an instanced SDF quad
+with per-fragment soft falloff. The trailing `tStart`/`tEnd` pair drives
+the Phase 2 chase animation (rays only render once the visual clock
+crosses each fragment's interpolated arrival time).
 
 ## Notes
 
@@ -39,6 +41,36 @@ falloff.
   filter; otherwise from the material's absorption band. Segment
   endpoints carry different intensities; the GL line interpolates so a
   long internal path fades along its length.
+- Audio delay: while a ray is inside a material with a `delayK` field
+  (seconds per bench unit), `rayTimeAudio += delayK · d` accumulates in
+  the same Beer-Lambert block. Capped at `MAX_DELAY = 2 s`. The synth
+  reads the per-sensor amplitude-weighted mean (computed in
+  `rebuildSensorsGated`) as `tracer.sensorDelay[s]` and drives per-voice
+  `DelayNode`s.
+- Visual chase: a parallel accumulator `rayTimeVisual += propK · d`
+  tracks where the wavefront has reached. `propK` is `delayK` inside a
+  delay material, otherwise `VACUUM_PROP_K` (default `0` — lightspeed
+  outside delay glass). Per-segment `tStart`/`tEnd` are written into the
+  segment record so the renderer can `discard` fragments not yet
+  reached. With the default, scenes without a delay element emit
+  segments with `tStart == tEnd == 0`, keeping `tracer.maxT = 0` and
+  drawing instantly — the chase only ever visibly animates where a
+  ray threads a `delayK` material.
+- Sensor deposits: castRay does **not** populate `sensorBins` directly;
+  it appends one row to `sensorEvents` (5 floats: `[sIdx, binIdx, I,
+  rayTimeVisual, rayTimeAudio]`). Each frame `main.js` calls
+  `tracer.rebuildSensorsGated(uTphysical)` which walks the event log
+  and re-populates `sensorBins`/`sensorDelay`/`sensorWeight`, skipping
+  events with `rayTimeVisual > uTphysical` so the synth-facing
+  histogram fills in over the chase. `tracer.totalEnergy` caches the
+  un-gated aggregate energy for the mic onset detector.
+- `tracer.maxT` is updated from **every** `emitSeg(tEnd)`, not only on
+  sensor hits — otherwise rays that get absorbed at a non-sensor wall
+  (top/bottom/left bench edges, or ones that exceed `MAX_BOUNCES`)
+  would have segments with `tEnd > 0` but a `maxT` stuck at 0, and the
+  renderer's `discard` would eat them. When there's no delay material
+  in the scene, every `tEnd` is 0 and `maxT == 0` — `main.js` detects
+  that and bypasses the leading-edge fade entirely.
 - Dichroic mirrors: mirror reflectance comes from
   `elementReflectance(el, mat, λ)`. With `el.color`, reflectance
   follows the colored filter; otherwise the material's dichroic band.

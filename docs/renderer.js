@@ -19,12 +19,14 @@ in vec2 aCorner;
 in vec4 aSeg;
 in vec4 aCol1;
 in vec4 aCol2;
+in vec2 aTime;
 uniform vec2 uBench;
 uniform float uWidth;
 out float vAlong;
 out float vSide;
 out vec4 vCol1;
 out vec4 vCol2;
+out vec2 vTime;
 void main() {
   vec2 p1 = aSeg.xy;
   vec2 p2 = aSeg.zw;
@@ -41,6 +43,7 @@ void main() {
   vSide = aCorner.y;
   vCol1 = aCol1;
   vCol2 = aCol2;
+  vTime = aTime;
 }`;
 
 const RAY_FS = `#version 300 es
@@ -49,12 +52,22 @@ in float vAlong;
 in float vSide;
 in vec4 vCol1;
 in vec4 vCol2;
+in vec2 vTime;
+uniform float uT;
+uniform float uHeadWidth;
 out vec4 outColor;
 void main() {
   float d = abs(vSide);
   float amp = 1.0 - smoothstep(0.0, 1.0, d);
   vec4 c = mix(vCol1, vCol2, vAlong);
-  outColor = vec4(c.rgb * amp, c.a * amp);
+  // Phase 2 chase: each fragment's arrival time is a linear interpolation
+  // of the segment's tStart..tEnd. Discard pixels not yet reached, soft-fade
+  // the leading edge so the wavefront doesn't read as a hard sweep line.
+  float tAt = mix(vTime.x, vTime.y, vAlong);
+  if (tAt > uT) discard;
+  float head = 1.0 - smoothstep(uT - uHeadWidth, uT, tAt);
+  float a = amp * head;
+  outColor = vec4(c.rgb * a, c.a * a);
 }`;
 
 const BLIT_VS = `#version 300 es
@@ -226,6 +239,7 @@ const LOOK = {
   water:         { tint: [0.50, 0.75, 1.00], tintStrength: 0.10, magnitude: 4,  falloff: 55, edgeGlow: [0.5, 0.7, 1.0], edgeGlowAmp: 0.30, edgeWidth: 5,  opaque: false },
   diamond:       { tint: [1.00, 1.00, 0.90], tintStrength: 0.04, magnitude: 13, falloff: 22, edgeGlow: [1.0, 1.0, 0.8], edgeGlowAmp: 0.80, edgeWidth: 2,  opaque: false },
   hyper:         { tint: [1.00, 0.50, 1.00], tintStrength: 0.12, magnitude: 15, falloff: 30, edgeGlow: [1.0, 0.5, 1.0], edgeGlowAmp: 0.45, edgeWidth: 3,  opaque: false },
+  slowGlass:     { tint: [0.55, 0.45, 0.95], tintStrength: 0.18, magnitude: 9,  falloff: 50, edgeGlow: [0.7, 0.6, 1.0], edgeGlowAmp: 0.45, edgeWidth: 4,  opaque: false },
   mirror:        { tint: [0.75, 0.80, 0.95], tintStrength: 1.0,  magnitude: 0,  falloff: 1,  edgeGlow: [1.0, 1.0, 1.0], edgeGlowAmp: 0.70, edgeWidth: 2,  opaque: true },
   'mirror-red':  { tint: [0.95, 0.25, 0.25], tintStrength: 1.0,  magnitude: 0,  falloff: 1,  edgeGlow: [1.0, 0.6, 0.6], edgeGlowAmp: 0.65, edgeWidth: 2,  opaque: true },
   'mirror-green':{ tint: [0.25, 0.90, 0.40], tintStrength: 1.0,  magnitude: 0,  falloff: 1,  edgeGlow: [0.6, 1.0, 0.7], edgeGlowAmp: 0.65, edgeWidth: 2,  opaque: true },
@@ -248,12 +262,15 @@ export class Renderer {
     // --- Programs ---
     this.rayProgram = buildProgram(gl, RAY_VS, RAY_FS);
     this.ray = {
-      aCorner: gl.getAttribLocation(this.rayProgram, 'aCorner'),
-      aSeg:    gl.getAttribLocation(this.rayProgram, 'aSeg'),
-      aCol1:   gl.getAttribLocation(this.rayProgram, 'aCol1'),
-      aCol2:   gl.getAttribLocation(this.rayProgram, 'aCol2'),
-      uBench:  gl.getUniformLocation(this.rayProgram, 'uBench'),
-      uWidth:  gl.getUniformLocation(this.rayProgram, 'uWidth'),
+      aCorner:    gl.getAttribLocation(this.rayProgram, 'aCorner'),
+      aSeg:       gl.getAttribLocation(this.rayProgram, 'aSeg'),
+      aCol1:      gl.getAttribLocation(this.rayProgram, 'aCol1'),
+      aCol2:      gl.getAttribLocation(this.rayProgram, 'aCol2'),
+      aTime:      gl.getAttribLocation(this.rayProgram, 'aTime'),
+      uBench:     gl.getUniformLocation(this.rayProgram, 'uBench'),
+      uWidth:     gl.getUniformLocation(this.rayProgram, 'uWidth'),
+      uT:         gl.getUniformLocation(this.rayProgram, 'uT'),
+      uHeadWidth: gl.getUniformLocation(this.rayProgram, 'uHeadWidth'),
     };
 
     this.blitProgram = buildProgram(gl, BLIT_VS, BLIT_FS);
@@ -323,6 +340,12 @@ export class Renderer {
     // Width of rays in bench units. 2–3 is a nice range for a 900-tall bench.
     this.rayWidth = 2.5;
 
+    // Phase 2 chase clock (seconds). Defaults large so rays render fully.
+    // main.js writes this each frame from the visual clock; the leading
+    // edge has a soft fade `headWidth` seconds wide.
+    this.uT = 1e9;
+    this.headWidth = 0.04;
+
     // Refractive distortion through glass is optional; the rim glint and
     // tint stay on regardless.
     this.distortEnabled = false;
@@ -373,10 +396,12 @@ export class Renderer {
     gl.useProgram(this.rayProgram);
     gl.uniform2f(this.ray.uBench, scene.bench.w, scene.bench.h);
     gl.uniform1f(this.ray.uWidth, this.rayWidth);
+    gl.uniform1f(this.ray.uT, this.uT);
+    gl.uniform1f(this.ray.uHeadWidth, this.headWidth);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.segBuf);
     gl.bufferData(gl.ARRAY_BUFFER,
-      tracer.segmentData.subarray(0, tracer.segmentCount * 12), gl.DYNAMIC_DRAW);
-    const segStride = 12 * 4;
+      tracer.segmentData.subarray(0, tracer.segmentCount * 14), gl.DYNAMIC_DRAW);
+    const segStride = 14 * 4;
     gl.enableVertexAttribArray(this.ray.aSeg);
     gl.vertexAttribPointer(this.ray.aSeg, 4, gl.FLOAT, false, segStride, 0);
     gl.vertexAttribDivisor(this.ray.aSeg, 1);
@@ -386,6 +411,9 @@ export class Renderer {
     gl.enableVertexAttribArray(this.ray.aCol2);
     gl.vertexAttribPointer(this.ray.aCol2, 4, gl.FLOAT, false, segStride, 8 * 4);
     gl.vertexAttribDivisor(this.ray.aCol2, 1);
+    gl.enableVertexAttribArray(this.ray.aTime);
+    gl.vertexAttribPointer(this.ray.aTime, 2, gl.FLOAT, false, segStride, 12 * 4);
+    gl.vertexAttribDivisor(this.ray.aTime, 1);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.rayCornerBuf);
     gl.enableVertexAttribArray(this.ray.aCorner);
     gl.vertexAttribPointer(this.ray.aCorner, 2, gl.FLOAT, false, 0, 0);
@@ -396,6 +424,7 @@ export class Renderer {
     gl.vertexAttribDivisor(this.ray.aSeg, 0);
     gl.vertexAttribDivisor(this.ray.aCol1, 0);
     gl.vertexAttribDivisor(this.ray.aCol2, 0);
+    gl.vertexAttribDivisor(this.ray.aTime, 0);
 
     // --- Pass 2a: blit FBO → screen ---
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -631,6 +660,7 @@ function elementOutlineColor(el) {
     case 'water':        return [0.6, 0.8, 1.0, 0.6];
     case 'diamond':      return [1.0, 1.0, 0.8, 0.7];
     case 'hyper':        return [1.0, 0.5, 1.0, 0.7];
+    case 'slowGlass':    return [0.7, 0.6, 1.0, 0.7];
     default:             return [1, 1, 1, 0.6];
   }
 }

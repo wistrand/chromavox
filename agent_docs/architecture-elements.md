@@ -40,7 +40,7 @@ Check `makeElement` for the current values.
 4. Extend `elementOutlineColor` in the renderer (or let it fall through
    to the default) and optionally add a `LOOK` entry for the element
    pass.
-5. Add a tool button in `index.html` (inside the `#toolbar .tools`
+5. Add a tool button in `play.html` (inside the `#toolbar .tools`
    group) — `placeable` set in `UI.bindTools` picks it up
    automatically.
 

@@ -1,13 +1,23 @@
 // CPU ray tracer. Emits per-frame segment records for the WebGL2 renderer
 // and updates per-sensor spectrum bins.
 
-import { wavelengthToRGB, materialN, elementAbsorption, elementReflectance } from './spectrum.js';
+import { wavelengthToRGB, materialN, elementAbsorption, elementReflectance, elementDelay } from './spectrum.js';
 import { worldEdges, pointInPolygon, materialOptics } from './scene.js';
 
 const EPS = 1e-4;
 const MAX_BOUNCES = 18;
 const GLASS_LOSS = 0.985;       // per-surface attenuation
 const BASE_INTENSITY = 1.6;
+// Hard cap on per-ray accumulated audio delay; matches the synth-side
+// `DelayNode.maxDelayTime`. Pathological paths through deep delay glass
+// stop accumulating beyond this.
+const MAX_DELAY = 2.0;
+// Visual-only propagation rate in vacuum (seconds per bench unit).
+// Zero = lightspeed: rays outside delay materials draw in instantly and
+// only segments inside a `delayK` material crawl. Keeps the "slow glass"
+// effect localised to the glass; scenes without a delay element have
+// `tracer.maxT = 0` so RAF goes straight back to idle.
+const VACUUM_PROP_K = 0;
 
 // Per-frame output buffers, reused across frames.
 // segmentData is laid out as 12 floats per ray segment:
@@ -17,9 +27,25 @@ export class Tracer {
   constructor() {
     this.segmentData = new Float32Array(0);
     this.segmentCount = 0;
-    this.sensorBins = null;                    // Float32Array [sensor][bin] flat
+    this.sensorBins = null;                    // Float32Array [sensor][bin] flat — gated snapshot
+    this.sensorDelay = null;                   // Float32Array [sensor] mean arrival time (s) — gated
+    this.sensorWeight = null;                  // Float32Array [sensor] Σ(I) — gated, for normalisation
     this.sensorCount = 0;
     this.binCount = 64;
+    // Phase 2: per-sensor-hit event log. The gated sensor* arrays above are
+    // recomputed each frame from this log via rebuildSensorsGated(uT) so the
+    // synth-facing histogram and visual readouts can be ramped in over the
+    // chase animation.
+    // Each event = 5 floats: [sIdx, binIdx, I, rayTimeVisual, rayTimeAudio].
+    this.sensorEvents = new Float32Array(0);
+    this.sensorEventCount = 0;
+    // Maximum visual-clock arrival time across all rays for this trace —
+    // main.js uses it to know when the chase has fully drawn in.
+    this.maxT = 0;
+    // Total sensor-deposit energy this trace (sum of event I), unaffected
+    // by the chase gate. Used by the mic onset detector so a re-arm doesn't
+    // chase its own tail by reading half-filled gated bins.
+    this.totalEnergy = 0;
     // Reusable scratch — avoid allocating inside the ray hot loop.
     this._stack = [];
     this._walls = [
@@ -32,9 +58,15 @@ export class Tracer {
   }
 
   ensureSegmentCapacity(n) {
-    const needed = n * 12;
+    const needed = n * 14;
     if (this.segmentData.length < needed) {
       this.segmentData = new Float32Array(Math.max(needed, this.segmentData.length * 2 || 4096));
+    }
+  }
+  ensureSensorEventCapacity(n) {
+    const needed = n * 5;
+    if (this.sensorEvents.length < needed) {
+      this.sensorEvents = new Float32Array(Math.max(needed, this.sensorEvents.length * 2 || 1024));
     }
   }
 
@@ -67,9 +99,14 @@ export class Tracer {
     if (this.sensorCount !== sensorCount || !this.sensorBins) {
       this.sensorCount = sensorCount;
       this.sensorBins = new Float32Array(sensorCount * this.binCount);
-    } else {
-      this.sensorBins.fill(0);
+      this.sensorDelay = new Float32Array(sensorCount);
+      this.sensorWeight = new Float32Array(sensorCount);
     }
+    // Gated arrays are owned by rebuildSensorsGated; trace() just clears the
+    // event log + per-trace scalars and lets castRay populate events.
+    this.sensorEventCount = 0;
+    this.maxT = 0;
+    this.totalEnergy = 0;
     const sensorX = bench.w - 4;
     const sensorStripH = bench.h / sensorCount;
 
@@ -83,6 +120,8 @@ export class Tracer {
     // Estimate max segments to avoid re-alloc per ray.
     const totalRays = nSrc * raysPer;
     this.ensureSegmentCapacity(totalRays * (MAX_BOUNCES + 1));
+    // One sensor event per ray that hits the sensor wall (≤ totalRays).
+    this.ensureSensorEventCapacity(totalRays);
 
     const wlMin = emitter.wlMin, wlMax = emitter.wlMax;
     const wlRange = Math.max(1, wlMax - wlMin);
@@ -118,11 +157,54 @@ export class Tracer {
                      edges, elementMap, elementInfos, W, sensorStripH);
       }
     }
+
+    // Aggregate energy across this trace — used by the mic onset detector
+    // and unaffected by chase gating.
+    let total = 0;
+    const evts = this.sensorEvents;
+    for (let i = 0; i < this.sensorEventCount; i++) {
+      total += evts[i * 5 + 2];
+    }
+    this.totalEnergy = total;
+  }
+
+  // Reconstruct sensorBins / sensorDelay / sensorWeight from the event log,
+  // including only events that have arrived by `uT` (rayTimeVisual ≤ uT).
+  // Pass Infinity to materialise the full state.
+  rebuildSensorsGated(uT) {
+    if (!this.sensorBins) return;
+    this.sensorBins.fill(0);
+    this.sensorDelay.fill(0);
+    this.sensorWeight.fill(0);
+    const n = this.sensorEventCount;
+    const ev = this.sensorEvents;
+    const binCount = this.binCount;
+    for (let i = 0; i < n; i++) {
+      const e = i * 5;
+      if (ev[e + 3] > uT) continue;
+      const sIdx = ev[e] | 0;
+      const binIdx = ev[e + 1] | 0;
+      const I = ev[e + 2];
+      const rtAudio = ev[e + 4];
+      this.sensorBins[sIdx * binCount + binIdx] += I;
+      this.sensorDelay[sIdx] += rtAudio * I;
+      this.sensorWeight[sIdx] += I;
+    }
+    for (let s = 0; s < this.sensorCount; s++) {
+      const w = this.sensorWeight[s];
+      if (w > 0) this.sensorDelay[s] /= w;
+    }
   }
 
   castRay(ox, oy, dx, dy, wl, rgb, intensity, edges, elementMap, elementInfos, walls, sensorStripH) {
     let x = ox, y = oy, vx = dx, vy = dy;
     let I = intensity;
+    // Phase 1: rayTimeAudio accumulates only inside delay materials —
+    // drives sensorDelay → DelayNode echo length.
+    // Phase 2: rayTimeVisual accumulates over every segment (vacuum +
+    // material) — drives the chase animation and sensor gating.
+    let rayTimeAudio = 0;
+    let rayTimeVisual = 0;
 
     // Stack of dielectric elements the ray is currently inside, last-entered
     // on top. Reused across rays — reset length instead of allocating.
@@ -160,19 +242,32 @@ export class Tracer {
 
       const hx = x + vx * tBest, hy = y + vy * tBest;
 
-      // Beer-Lambert absorption along the segment if it was inside a medium.
-      // Per-element color overrides the material's absorption band.
+      // Beer-Lambert absorption + audio delay along the segment if it was
+      // inside a medium. Per-element color overrides the material's
+      // absorption band; audio delay only accumulates inside delay
+      // materials. Visual propagation always accumulates: vacuum at
+      // VACUUM_PROP_K, slower (= delayK) inside delay glass.
       let Iend = I;
+      const d = Math.hypot(hx - x, hy - y);
+      let dK = 0;
       if (stack.length > 0) {
         const insideEl = stack[stack.length - 1];
         const inMat = materialOptics(insideEl.material);
         const alpha = elementAbsorption(insideEl, inMat, wl);
-        if (alpha > 0) {
-          const d = Math.hypot(hx - x, hy - y);
-          Iend = I * Math.exp(-alpha * d);
+        dK = elementDelay(insideEl, inMat);
+        if (alpha > 0) Iend = I * Math.exp(-alpha * d);
+        if (dK > 0) {
+          rayTimeAudio += dK * d;
+          if (rayTimeAudio > MAX_DELAY) rayTimeAudio = MAX_DELAY;
         }
       }
-      this.emitSeg(x, y, hx, hy, rgb, I, Iend);
+      const propK = dK > VACUUM_PROP_K ? dK : VACUUM_PROP_K;
+      const tStart = rayTimeVisual;
+      rayTimeVisual += propK * d;
+      // With the default VACUUM_PROP_K = 0 this is a no-op outside delay
+      // glass — segments get tStart == tEnd and draw instantly.
+      if (rayTimeVisual > MAX_DELAY) rayTimeVisual = MAX_DELAY;
+      this.emitSeg(x, y, hx, hy, rgb, I, Iend, tStart, rayTimeVisual);
       I = Iend;
 
       if (hitWall) {
@@ -180,7 +275,16 @@ export class Tracer {
           const sIdx = Math.min(this.sensorCount - 1, Math.max(0, Math.floor(hy / sensorStripH)));
           const binIdx = Math.min(this.binCount - 1, Math.max(0,
             Math.floor((wl - 380) / (780 - 380) * this.binCount)));
-          this.sensorBins[sIdx * this.binCount + binIdx] += I;
+          // Sensor histograms are reconstructed each frame from this event
+          // log via rebuildSensorsGated(uT). Direct writes from castRay
+          // would defeat the chase gate.
+          const e = this.sensorEventCount * 5;
+          this.sensorEvents[e    ] = sIdx;
+          this.sensorEvents[e + 1] = binIdx;
+          this.sensorEvents[e + 2] = I;
+          this.sensorEvents[e + 3] = rayTimeVisual;
+          this.sensorEvents[e + 4] = rayTimeAudio;
+          this.sensorEventCount++;
         }
         return;
       }
@@ -256,14 +360,21 @@ export class Tracer {
     }
   }
 
-  emitSeg(x1, y1, x2, y2, rgb, I1, I2) {
+  emitSeg(x1, y1, x2, y2, rgb, I1, I2, tStart, tEnd) {
     if (I2 === undefined) I2 = I1;
-    const i = this.segmentCount * 12;
+    if (tStart === undefined) tStart = 0;
+    if (tEnd === undefined) tEnd = tStart;
+    const i = this.segmentCount * 14;
     const d = this.segmentData;
     d[i    ] = x1; d[i + 1] = y1; d[i + 2] = x2; d[i + 3] = y2;
     d[i + 4] = rgb[0] * I1; d[i + 5] = rgb[1] * I1; d[i + 6] = rgb[2] * I1; d[i + 7] = I1;
     d[i + 8] = rgb[0] * I2; d[i + 9] = rgb[1] * I2; d[i + 10] = rgb[2] * I2; d[i + 11] = I2;
+    d[i + 12] = tStart; d[i + 13] = tEnd;
     this.segmentCount++;
+    // Track max segment end time across the whole trace, not just sensor
+    // hits — otherwise rays that get absorbed at non-sensor walls would
+    // be discarded by the renderer (their tEnd > 0 but maxT stuck at 0).
+    if (tEnd > this.maxT) this.maxT = tEnd;
   }
 }
 

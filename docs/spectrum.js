@@ -79,6 +79,20 @@ export function materialAbsorption(mat, wlNm) {
   return base + a.peak * Math.exp(-d * d);
 }
 
+// Per-bench-unit audio delay coefficient. Tracer multiplies this by the
+// internal segment length when accumulating ray-arrival time at sensors.
+export function materialDelay(mat) {
+  return (mat && mat.delayK) || 0;
+}
+
+// Per-element delay override: if the element has its own `delayK` field
+// (set from the property panel slider), use it; otherwise fall back to the
+// material's `delayK`.
+export function elementDelay(el, mat) {
+  if (el && typeof el.delayK === 'number') return el.delayK;
+  return materialDelay(mat);
+}
+
 // Dichroic mirror reflectance R(λ) in [0,1]. Neutral mirrors have a flat base.
 export function mirrorReflectance(mat, wlNm) {
   const r = mat && mat.reflect;
@@ -164,6 +178,14 @@ export const MATERIALS = {
     type: 'dielectric',
     A: 1.5000, B: 0.03000,
     absorb: { base: 0.0002, peak: 0.005, center: 540, sigma: 55 }, // magenta: absorbs green
+  },
+  slowGlass: {
+    type: 'dielectric',
+    sellmeier: [1.03961212, 0.00600069867, 0.231792344, 0.0200179144, 1.01046945, 103.560653],
+    absorb: { base: 0.0001 },
+    // Seconds of audio delay per bench unit of interior path. Composes with
+    // refraction + absorption; only applies inside the polygon.
+    delayK: 0.002,
   },
 
   // Mirrors. Silver is neutral; dichroics reflect a narrow band and absorb the rest.

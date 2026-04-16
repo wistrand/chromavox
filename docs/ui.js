@@ -62,12 +62,36 @@ function hslToHex(h, s, l) {
   return '#' + to2(0) + to2(8) + to2(4);
 }
 
+// Fingerprint of delay-relevant scene state. The chase only re-arms when
+// a delay element is added/removed, moved, reshaped, or its delayK is
+// tweaked — editing a non-delay element (or any element in a scene with
+// no delay material at all) leaves this fingerprint unchanged and
+// therefore doesn't drain the current ray image.
+function delayFingerprint(scene) {
+  const parts = [];
+  for (const el of scene.elements) {
+    const mat = MATERIALS[el.material];
+    const matDelay = mat && mat.delayK ? mat.delayK : 0;
+    const elDelay = typeof el.delayK === 'number' ? el.delayK : 0;
+    const effective = elDelay > 0 ? elDelay : matDelay;
+    if (effective <= 0) continue;
+    parts.push(
+      el.id, el.material, effective.toFixed(6),
+      el.x | 0, el.y | 0, (el.rot || 0).toFixed(3),
+      el.w | 0, el.h | 0, el.size | 0, el.color || ''
+    );
+  }
+  return parts.join('|');
+}
+
 class History {
   constructor(limit = 50) {
     this.past = [];
     this.future = [];
     this.limit = limit;
     this.pending = null;
+    // Remembered fingerprint at `beginEdit` time — set alongside `pending`.
+    this.pendingDelayFp = '';
   }
   _snap(scene) {
     return JSON.stringify({
@@ -99,16 +123,26 @@ class History {
   begin(scene) {
     if (this.pending !== null) return;
     this.pending = this._snap(scene);
+    this.pendingDelayFp = delayFingerprint(scene);
   }
+  // Returns { changed, delayChanged }. `changed` reflects any scene diff
+  // (drives undo/redo). `delayChanged` is a narrower flag used by main.js
+  // to decide whether to re-arm the visual chase animation.
   commit(scene) {
-    if (this.pending === null) return;
+    if (this.pending === null) return { changed: false, delayChanged: false };
     const cur = this._snap(scene);
+    const curDelayFp = delayFingerprint(scene);
+    let changed = false;
     if (cur !== this.pending) {
       this.past.push(this.pending);
       if (this.past.length > this.limit) this.past.shift();
       this.future.length = 0;
+      changed = true;
     }
+    const delayChanged = curDelayFp !== this.pendingDelayFp;
     this.pending = null;
+    this.pendingDelayFp = '';
+    return { changed, delayChanged };
   }
   undo(scene) {
     if (!this.past.length) return false;
@@ -127,10 +161,14 @@ class History {
 }
 
 export class UI {
-  constructor(scene, canvas, onChange) {
+  constructor(scene, canvas, onChange, onRearm) {
     this.scene = scene;
     this.canvas = canvas;
     this.onChange = onChange;
+    // Optional: fired when a commit actually changes the scene, or when a
+    // scene is loaded via preset/file. Phase 2 uses this to restart the
+    // visual chase animation.
+    this.onRearm = onRearm || (() => {});
     this.tool = 'select';
     this.selected = null;
     this.dragging = null;
@@ -147,7 +185,11 @@ export class UI {
   // Don't commit history while a drag is in flight — otherwise an
   // unrelated event (Shift keyup, slider change) can prematurely seal the
   // pending snapshot and the rest of the drag won't be recorded.
-  endEdit()   { if (this.dragging) return; this.history.commit(this.scene); }
+  endEdit()   {
+    if (this.dragging) return;
+    const { delayChanged } = this.history.commit(this.scene);
+    if (delayChanged) this.onRearm();
+  }
 
   bindShortcuts() {
     const STEP = 5;
@@ -686,7 +728,7 @@ export class UI {
     // default is restored.
     const MATERIAL_COLOR_HINT = {
       crown: '#8ccbff', flint: '#ffb3cc', fused: '#d9ffe6', water: '#80bfff',
-      diamond: '#ffffe6', hyper: '#ff80ff',
+      diamond: '#ffffe6', hyper: '#ff80ff', slowGlass: '#9b80e0',
       mirror: '#bfccff', 'mirror-red': '#ff6666',
       'mirror-green': '#66ff6e', 'mirror-blue': '#6670ff',
     };
@@ -736,6 +778,41 @@ export class UI {
       const fallback = MATERIAL_COLOR_HINT[el.material] || '#cccccc';
       colorInput.value = fallback;
       hueInput.value = hexToHue(fallback);
+      this.onChange();
+    });
+
+    // Delay slider — overrides the material's `delayK`. Audio echo per
+    // bench unit of internal path. Mirrors don't accumulate inside-stack
+    // time so the slider has no effect on them; shown for consistency.
+    const DELAY_MAX = 0.005; // s per bench unit; max ~1 s through 200 units
+    const delayRow = document.createElement('div');
+    delayRow.style.display = 'flex';
+    delayRow.style.gap = '4px';
+    const delayInput = document.createElement('input');
+    delayInput.type = 'range';
+    delayInput.min = 0; delayInput.max = 100; delayInput.step = 1;
+    delayInput.style.flex = '1';
+    const matDelay = MATERIALS[el.material]?.delayK ?? 0;
+    const initialDelay = (typeof el.delayK === 'number') ? el.delayK : matDelay;
+    delayInput.value = Math.round((initialDelay / DELAY_MAX) * 100);
+    const delayResetBtn = document.createElement('button');
+    delayResetBtn.textContent = '×';
+    delayResetBtn.title = 'Reset to material default';
+    delayRow.appendChild(delayInput);
+    delayRow.appendChild(delayResetBtn);
+    addRow('Delay', delayRow);
+
+    delayInput.addEventListener('input', () => {
+      this.beginEdit();
+      el.delayK = (parseInt(delayInput.value, 10) / 100) * DELAY_MAX;
+      this.onChange();
+    });
+    delayInput.addEventListener('change', () => this.endEdit());
+    delayResetBtn.addEventListener('click', () => {
+      this.beginEdit();
+      delete el.delayK;
+      this.endEdit();
+      delayInput.value = Math.round((matDelay / DELAY_MAX) * 100);
       this.onChange();
     });
 

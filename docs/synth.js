@@ -6,6 +6,11 @@
 
 import { scaleFreq } from './spectrum.js';
 
+// Per-voice DelayNode max time. Matches the tracer's MAX_DELAY hard cap.
+// Fixed at construction (Web Audio constraint), so this is the absolute
+// ceiling for echo length — anything longer is clamped.
+const MAX_DELAY = 2.0;
+
 export class SensorSynth {
   constructor() {
     this.active = false;
@@ -21,6 +26,9 @@ export class SensorSynth {
     // Slow-decaying peak hold for amplitude normalization. Avoids zippering
     // when a ray sweeps across sensors and the instantaneous max jumps.
     this.peak = 1e-6;
+    // Wet/dry mix for the per-voice delay tap. dry stays at 1; wet > 0
+    // produces an audible echo proportional to that voice's mean delay.
+    this.wet = 0.5;
   }
 
   setStep(stepSemi) {
@@ -74,12 +82,7 @@ export class SensorSynth {
 
   rebuild(sensorCount) {
     if (!this.ctx) return;
-    for (const v of this.voices) {
-      for (const h of v.harmonics) {
-        try { h.osc.stop(); } catch {}
-        h.gain.disconnect();
-      }
-    }
+    this._teardownVoices();
     this.voices = [];
     const K = 6; // partials per voice
     const loHz = 110, hiHz = 1800;
@@ -90,14 +93,23 @@ export class SensorSynth {
     for (let i = 0; i < sensorCount; i++) {
       let freq;
       if (this.mode !== 'log') {
-        // Sensor i plays the i-th scale degree (with stepDeg degrees per
-        // bucket). Same formula as the mic side so ladders stay aligned
-        // when scale + base + step match.
         freq = scaleFreq(baseHz, scaleName, i, stepDeg);
       } else {
         const t = sensorCount > 1 ? i / (sensorCount - 1) : 0;
         freq = loHz * Math.pow(hiHz / loHz, t);
       }
+      // Per-voice mixer + dry/wet split + DelayNode. Each harmonic feeds
+      // the mixer; mixer splits to dry → master and wet → delay → master.
+      const voiceMix = this.ctx.createGain();
+      voiceMix.gain.value = 1;
+      const dryGain = this.ctx.createGain();
+      dryGain.gain.value = 1;
+      const wetGain = this.ctx.createGain();
+      wetGain.gain.value = this.wet;
+      const delayNode = this.ctx.createDelay(MAX_DELAY);
+      delayNode.delayTime.value = 0;
+      voiceMix.connect(dryGain).connect(this.master);
+      voiceMix.connect(wetGain).connect(delayNode).connect(this.master);
       const harmonics = [];
       for (let k = 1; k <= K; k++) {
         const f = freq * k;
@@ -107,16 +119,29 @@ export class SensorSynth {
         osc.frequency.value = f;
         const gain = this.ctx.createGain();
         gain.gain.value = 0;
-        osc.connect(gain).connect(this.master);
+        osc.connect(gain).connect(voiceMix);
         osc.start();
         harmonics.push({ osc, gain });
       }
-      this.voices.push({ freq, harmonics });
+      this.voices.push({ freq, harmonics, voiceMix, dryGain, wetGain, delayNode });
     }
     this.count = sensorCount;
   }
 
-  update(sensorBins, binCount, sensorCount) {
+  _teardownVoices() {
+    for (const v of this.voices) {
+      for (const h of v.harmonics) {
+        try { h.osc.stop(); } catch {}
+        h.gain.disconnect();
+      }
+      v.voiceMix?.disconnect();
+      v.dryGain?.disconnect();
+      v.wetGain?.disconnect();
+      v.delayNode?.disconnect();
+    }
+  }
+
+  update(sensorBins, binCount, sensorCount, sensorDelay) {
     if (!this.active) return;
     if (sensorCount !== this.count) this.rebuild(sensorCount);
     let maxPartial = 1e-6;
@@ -147,17 +172,18 @@ export class SensorSynth {
         // sweeping across sensor strips.
         h.gain.gain.setTargetAtTime(v, now, 0.06);
       }
+      // Drive this voice's delay tap from the per-sensor mean arrival time.
+      // Smoothing keeps voice → DelayNode parameter changes click-free.
+      if (sensorDelay) {
+        const d = Math.min(MAX_DELAY, Math.max(0, sensorDelay[s] || 0));
+        voice.delayNode.delayTime.setTargetAtTime(d, now, 0.05);
+      }
     }
   }
 
   disable() {
     if (!this.active) return;
-    for (const v of this.voices) {
-      for (const h of v.harmonics) {
-        try { h.osc.stop(); } catch {}
-        h.gain.disconnect();
-      }
-    }
+    this._teardownVoices();
     this.voices = [];
     this.master?.disconnect();
     this.ctx?.close();

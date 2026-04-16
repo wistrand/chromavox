@@ -19,7 +19,10 @@ npm start          # node serve.js, port 8005
 node serve.js 9000 # override port
 ```
 
-ES modules require HTTP, not `file://`. Open http://localhost:8005/.
+ES modules require HTTP, not `file://`. Open http://localhost:8005/ for
+the landing page and http://localhost:8005/play (or `/play.html`) for the
+app itself. `serve.js` emulates GitHub Pages' clean-URL fallback so
+extensionless paths resolve to the matching `.html`.
 
 ## Use
 
@@ -45,7 +48,8 @@ ES modules require HTTP, not `file://`. Open http://localhost:8005/.
 
 ## Layout
 
-- `docs/index.html`, `docs/style.css` — shell and panels.
+- `docs/index.html` — static landing page (centered logo, no links).
+- `docs/play.html`, `docs/style.css` — app shell and panels.
 - `docs/spectrum.js` — wavelength→RGB, Sellmeier/Cauchy dispersion,
   Beer-Lambert absorption, dichroic reflectance, material table.
 - `docs/scene.js` — data model, polygon geometry, JSON save/load.

@@ -22,10 +22,14 @@ const TYPES = {
   '.map':  'application/json; charset=utf-8',
 };
 
+function isInsideRoot(abs) {
+  return abs.startsWith(ROOT + sep) || abs === ROOT;
+}
+
 function safePath(urlPath) {
   const clean = decodeURIComponent(urlPath.split('?')[0]);
   const abs = normalize(join(ROOT, clean));
-  if (!abs.startsWith(ROOT + sep) && abs !== ROOT) return null;
+  if (!isInsideRoot(abs)) return null;
   return abs;
 }
 
@@ -33,9 +37,24 @@ const server = createServer(async (req, res) => {
   try {
     let path = safePath(req.url);
     if (!path) { res.writeHead(403); res.end('Forbidden'); return; }
-    let s;
-    try { s = await stat(path); } catch { res.writeHead(404); res.end('Not found'); return; }
-    if (s.isDirectory()) path = join(path, 'index.html');
+    let s = null;
+    try { s = await stat(path); } catch {}
+    // GitHub Pages clean-URL fallback: `/foo` serves `/foo.html` when
+    // `foo` doesn't exist as a file or directory. Kept behind a miss so
+    // an existing extensionless file still wins. Re-validate containment
+    // after appending so we never escape ROOT via this codepath.
+    if (!s && !extname(path)) {
+      const candidate = normalize(path + '.html');
+      if (isInsideRoot(candidate)) {
+        try { s = await stat(candidate); path = candidate; } catch {}
+      }
+    }
+    if (!s) { res.writeHead(404); res.end('Not found'); return; }
+    if (s.isDirectory()) {
+      const candidate = normalize(join(path, 'index.html'));
+      if (!isInsideRoot(candidate)) { res.writeHead(403); res.end('Forbidden'); return; }
+      path = candidate;
+    }
     const body = await readFile(path);
     const type = TYPES[extname(path).toLowerCase()] || 'application/octet-stream';
     res.writeHead(200, {

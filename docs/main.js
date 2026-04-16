@@ -41,7 +41,28 @@ function syncBaseSelect(hz) {
   }
   if (best && sel.value !== best.value) sel.value = best.value;
 }
-const ui = new UI(scene, canvas, markDirty);
+// Phase 2 visual chase: per-frame clocks driven from a shared epoch. uTphysical
+// is real time elapsed since the last re-arm and gates the synth-facing
+// sensor histogram (audio always real-time). uTvisual is the slider-multiplied
+// clock that drives the renderer's ray draw-in. They diverge below/above 1× so
+// the audio echo can lead or trail the visible wavefront.
+let chaseStart = performance.now() / 1000;
+let lastFrameTime = chaseStart;
+let uTvisualAccum = 0;
+let visualRate = 1;
+// Sentinel for the idle render guard: while a chase is in flight we record
+// the last uTvisual we drew; when chase ends we set it to Infinity to mark
+// "final frame already on screen, no further redraws needed until dirty".
+let lastRenderedT = -Infinity;
+function rearmChase() {
+  const now = performance.now() / 1000;
+  chaseStart = now;
+  lastFrameTime = now;
+  uTvisualAccum = 0;
+  lastRenderedT = -Infinity;
+}
+
+const ui = new UI(scene, canvas, markDirty, rearmChase);
 ui.rebuildSensorReadout();
 
 const distortToggle = document.getElementById('distort-toggle');
@@ -139,6 +160,35 @@ document.getElementById('synth-span').addEventListener('input', e => {
   if (synthIndep()) pushSynthScale();
 });
 syncSynthIndepVisibility();
+
+// Visual rate: slider 0..100 → log-mapped 0.05× … 4×, default 1× at 50.
+const visualRateSlider = document.getElementById('visual-rate');
+const visualRateLabel = document.getElementById('visual-rate-val');
+const VR_MIN = Math.log(0.05), VR_MAX = Math.log(4);
+function applyVisualRate() {
+  const t = parseInt(visualRateSlider.value, 10) / 100;
+  visualRate = Math.exp(VR_MIN + t * (VR_MAX - VR_MIN));
+  visualRateLabel.textContent = visualRate.toFixed(2) + '×';
+}
+applyVisualRate();
+visualRateSlider.addEventListener('input', applyVisualRate);
+
+// Onset sensitivity 0..1: 0 = never re-arm on audio, 1 = any change re-arms.
+const onsetSlider = document.getElementById('onset-sens');
+const onsetLabel = document.getElementById('onset-sens-val');
+let onsetSensitivity = 0.5;
+function applyOnsetSensitivity() {
+  onsetSensitivity = parseInt(onsetSlider.value, 10) / 100;
+  onsetLabel.textContent = onsetSensitivity.toFixed(2);
+}
+applyOnsetSensitivity();
+onsetSlider.addEventListener('input', applyOnsetSensitivity);
+
+// Onset detector state. Slowly-decaying envelope of post-optics aggregate
+// energy; a sharp rise above the envelope (modulated by sensitivity) re-arms
+// the chase. Cooldown prevents back-to-back re-arms during a sustained note.
+let onsetEnv = 0;
+let lastOnsetTime = -Infinity;
 
 const smoothingSlider = document.getElementById('mic-smoothing');
 const smoothingLabel = document.getElementById('mic-smoothing-val');
@@ -440,15 +490,59 @@ function frame() {
       dirty = true;
     }
   }
-  if (dirty) {
-    dirty = false;
-    tracer.trace(scene);
+  // Dual clocks share an epoch — chaseStart — that re-armings reset.
+  // Audio gating uses uTphysical (real seconds since re-arm) so echo timing
+  // stays a function of geometry. Visual gating uses uTvisual, integrated
+  // as `Σ dt·visualRate` so a mid-chase slider change applies going forward
+  // instead of jumping the wavefront back or ahead.
+  const now = performance.now() / 1000;
+  const dt = Math.max(0, now - lastFrameTime);
+  lastFrameTime = now;
+  uTvisualAccum += dt * visualRate;
+  const uTphysical = now - chaseStart;
+  const uTvisual = uTvisualAccum;
+
+  // Re-trace + re-render on dirty flag; otherwise keep stepping the chase
+  // until the visual wavefront has fully drawn in. After that the scene is
+  // static and we can let RAF idle until the next dirty.
+  let traced = false;
+  if (dirty) { dirty = false; tracer.trace(scene); traced = true; }
+  const chaseInFlight = uTvisual < tracer.maxT || uTphysical < tracer.maxT;
+  if (traced || chaseInFlight || lastRenderedT !== Infinity) {
+    tracer.rebuildSensorsGated(uTphysical);
+    // When the scene contains no delay material, every segment has
+    // tStart == tEnd == 0 and no chase is needed; push uT well past the
+    // fragment shader's leading-edge fade window so those rays render at
+    // full opacity from frame one (matches pre-Phase-2 behaviour).
+    renderer.uT = tracer.maxT > 0 ? uTvisual : 1e6;
     renderer.draw(scene, tracer);
     updateSensorReadout();
+    // Once the chase has finished and we've drawn the final state, mark
+    // lastRenderedT so we don't keep re-rendering identical frames.
+    lastRenderedT = chaseInFlight ? uTvisual : Infinity;
   }
+
   if (synth.active) {
-    synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount);
+    synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount, tracer.sensorDelay);
   }
+
+  // Mic-side onset detector. Compares per-trace aggregate energy against a
+  // peak-hold envelope; a sustained note runs flat (no re-arm), a sudden
+  // burst spikes the ratio above (1 + margin) and re-arms.
+  if (mic.active && onsetSensitivity > 0) {
+    const energy = tracer.totalEnergy;
+    const cooldown = Math.max(0.2, tracer.maxT * 0.3);
+    const margin = (1 - onsetSensitivity) * 1.0;  // sens=1 → 0 margin, sens=0 → 1.0
+    if (energy > onsetEnv * (1 + margin) + 1e-3 && now - lastOnsetTime > cooldown) {
+      rearmChase();
+      lastOnsetTime = now;
+    }
+    // Fast attack (jump up) / slow decay (envelope follower).
+    onsetEnv = energy > onsetEnv ? energy : onsetEnv * 0.97;
+  } else {
+    onsetEnv = 0;
+  }
+
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

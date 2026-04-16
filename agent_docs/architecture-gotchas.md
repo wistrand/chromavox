@@ -8,9 +8,13 @@
   emitter/sensor ticks, element polygons, per-sensor mini-spectrum)
   still use line primitives; emitter ticks stack a few parallel 1 px
   lines vertically to look thicker.
-- Additive blending is not physically accurate for monochromatic beams
-  piling up — overlap saturates to white regardless of wavelength. A
-  true fix would require an HDR framebuffer and tone-mapping pass.
+- Additive blending is the right model for accumulated light. With
+  the HDR ray FBO (`RGBA16F` + Reinhard tone-mapping) channels can
+  freely sum past 1.0 and get compressed softly on display, so dense
+  overlap stays colorful rather than clamping to white. The fallback
+  path (when `EXT_color_buffer_float` isn't available) clamps at 1.0
+  before the tonemap and exhibits the old neon-white-on-overlap
+  behaviour.
 - Element interiors are drawn as bounding-box quads; the fragment
   shader runs a polygon-SDF loop up to `MAX_EDGES` (defined in
   `docs/renderer.js`) to clip and sample the underlying ray FBO with
@@ -32,6 +36,22 @@
   *last-entered* as the current medium. For deliberately ambiguous
   overlaps, the picked medium depends on which element the ray
   entered first.
+
+## Phase 2 chase
+
+- `tracer.maxT` is updated in `emitSeg` from every segment's `tEnd`,
+  not only on sensor hits. Moving that back onto sensor hits breaks
+  rays that get absorbed at non-sensor walls — the renderer's
+  fragment-shader `discard` eats them because `uT > maxT = 0`.
+- When `tracer.maxT == 0` (no delay material in the scene), `main.js`
+  writes `renderer.uT = 1e6` instead of `uTvisual` so the leading-edge
+  fade doesn't partially dim rays at startup. Don't remove this guard
+  without also removing the `smoothstep` fade for the no-delay case.
+- Re-arm is gated by `delayFingerprint(scene)` — editing a non-delay
+  element doesn't drain the current ray image. If you add a new
+  material kind that contributes to delay, make sure
+  `delayFingerprint` picks it up or its edits will silently fail to
+  re-arm the chase.
 
 ## Audio
 
@@ -59,7 +79,7 @@
 - Slider sanity: nothing prevents `wlMin > wlMax`; the tracer handles
   it but the output gets weird.
 - Large ray counts are capped by the slider max in
-  `docs/index.html`. The per-segment buffer can balloon at high
+  `docs/play.html`. The per-segment buffer can balloon at high
   counts; watch for perf drops on low-end mobile.
 - The element material dropdown filters by element kind
   (`dielectric` / `mirror`); switching a mirror to a dielectric is

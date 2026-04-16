@@ -51,13 +51,21 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Rays render via instanced SDF quads, not GL line primitives — width
   and soft falloff are controlled by `renderer.rayWidth` and the
   fragment shader.
-- Element rendering is a three-pass pipeline: rays → FBO → screen blit →
-  per-element SDF distortion pass sampling the FBO → overlay lines. Each
-  material has a `LOOK` entry in `renderer.js` controlling tint,
-  distortion magnitude, falloff, edge glow, and opacity. Sharp vs soft
-  edges come from `edgeWidth`; refractive distortion comes from
-  `magnitude` and `falloff`. Distortion itself is opt-in via the Distort
-  toggle (defaults off); rim glint and tint stay on regardless.
+- Element rendering is a three-pass pipeline: rays → HDR FBO →
+  tonemapped blit to screen → per-element SDF distortion pass sampling
+  the same HDR FBO (also tonemapped) → overlay lines. Each material
+  has a `LOOK` entry in `renderer.js` controlling tint, distortion
+  magnitude, falloff, edge glow, and opacity. Sharp vs soft edges come
+  from `edgeWidth`; refractive distortion comes from `magnitude` and
+  `falloff`. Distortion itself is opt-in via the Distort toggle
+  (defaults off); rim glint and tint stay on regardless.
+- HDR rendering: ray FBO is `RGBA16F` (via `EXT_color_buffer_float`)
+  so additive ray sums accumulate past 1.0 in linear space. Both blit
+  and element fragment shaders apply Reinhard tone-map
+  (`hdr / (1 + hdr)`) when sampling the FBO so dense overlap stays
+  colorful instead of clamping to white. Falls back to `RGBA8` if the
+  extension is unavailable; tonemap is harmless on already-clamped
+  values.
 - Per-element `el.color` overrides both visuals *and* physics: renderer
   replaces tint + edge glow; tracer switches to `elementAbsorption` /
   `elementReflectance` that treat the color as a transmission filter.
@@ -107,13 +115,24 @@ Detailed notes are split into topic files under `agent_docs/`:
   coverage with no overlap.
 - Synth side can run **independent** of the mic side via the
   `Independent scale` checkbox — separate Mode/Base/Span controls
-  appear that drive the synth ladder. Off (default), synth follows
-  mic so input-output pitch corresponds under identity optics.
+  appear (and stay visible but **disabled / dimmed** via the
+  `row-disabled` class when not active). Off (default), synth follows
+  mic so input-output pitch corresponds under identity optics. Same
+  treatment for the sensor `Factor` slider when `Sync to source count`
+  is unchecked.
 - Mic smoothing is exposed as a slider (`AnalyserNode.smoothingTimeConstant`)
   for per-keyboard-style snappy response or smoother envelope tracking.
 - Toolbar's element placement is a div-based dropdown (`Add ▾`) so each
   menu item has space for custom renderings (currently shows an SVG
   thumbnail rendered from the element's own `localPolygon`).
+- Audio in / Audio out are split-button dropdowns: the main button
+  toggles the audio state on/off; the `▾` opens an options menu
+  (`#mic-menu`, `#synth-menu`) containing all the related selects /
+  sliders / checkboxes. Menus are `position: fixed` so the toolbar's
+  `overflow-x` doesn't clip them.
+- Vertical labels exist on **both** sides of the canvas: emitter
+  labels on the left edge (mic-side scale) and sensor labels on the
+  right edge (synth-side scale). They diverge when Independent is on.
 - `endEdit` short-circuits while `this.dragging` is set so unrelated
   events (Shift keyup, slider change) can't prematurely seal the drag's
   pending history snapshot.

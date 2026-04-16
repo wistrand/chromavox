@@ -16,6 +16,8 @@ changes over time.
   Cauchy based on which fields the material carries.
 - `materialAbsorption(mat, λ)` — α in 1/bench-unit from the material's
   absorption band.
+- `materialDelay(mat)` — seconds of audio delay per bench unit of
+  interior path. Returns 0 if the material has no `delayK` field.
 - `mirrorReflectance(mat, λ)` — R in [0, 1] from the material's
   reflectance band.
 - `elementAbsorption(el, mat, λ)` — α with `el.color` override: if set,
@@ -44,3 +46,29 @@ absorption (glass) or reflectance (mirrors).
 - Cauchy is a truncation of Sellmeier and is accurate enough across the
   visible range; reserve it for synthetic materials where exact
   coefficients aren't available.
+
+## Delay materials
+
+Any dielectric can carry an optional `delayK` field — seconds per bench
+unit of internal path. The tracer maintains two parallel time
+accumulators inside the ray hot loop (see
+`architecture-raytracer.md`):
+
+- `rayTimeAudio` — advances **only while inside** a `delayK`
+  material. Clamped to `MAX_DELAY = 2 s` to match the
+  `DelayNode.maxDelayTime` ceiling on the synth side. The synth reads
+  the amplitude-weighted per-sensor mean as `tracer.sensorDelay[s]`
+  and drives a per-voice `DelayNode`.
+- `rayTimeVisual` — advances across every segment at `propK = max(
+  delayK, VACUUM_PROP_K )`. With the default `VACUUM_PROP_K = 0`,
+  vacuum is lightspeed: segments outside delay glass emit with
+  `tStart == tEnd == 0` and render instantly; only segments inside a
+  `delayK` material crawl. Per-segment `tStart`/`tEnd` drive the
+  fragment shader's chase animation.
+
+The shipped material `slowGlass` is a crown-glass-shaped dielectric
+with `delayK = 0.002` (2 ms per bench unit). Composes naturally with
+refraction + absorption; nothing else in the tracer or renderer needs
+to know it's "special". A per-element `el.delayK` slider in the
+property panel lets any dielectric carry its own delay override — the
+fingerprint logic in `ui.js` picks up that field too.
