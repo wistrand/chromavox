@@ -54,10 +54,41 @@ html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: 
 #toolbar .tb-sep { width: 1px; height: 26px; background: var(--border); margin: 0 6px; flex: 0 0 auto; }
 #toolbar .tb-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 #toolbar .tb-check input { margin: 0; }
+#toolbar .tb-preset { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+#toolbar .tb-preset select { font: inherit; padding: 4px 6px; background: #1d222a; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; }
 
 /* Left-panel tool grid style only applies when the class is there (kept for
    legacy — the toolbar uses flex, not grid). */
 .panel .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+
+/* Add-element menu. Anchored to the Add button; rows are divs so future
+   custom renderings (icons, thumbnails, previews) can drop in. */
+.tool-menu-wrap { position: relative; flex-shrink: 0; }
+#add-toggle { min-width: 110px; }
+.tool-menu {
+  display: none;
+  position: fixed;       /* fixed so the toolbar's overflow-x doesn't clip it */
+  min-width: 160px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px;
+  z-index: 30;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.tool-menu.open { display: block; }
+.tool-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink);
+}
+.tool-menu-item:hover { background: #1d222a; }
+.tmi-label { flex: 1; }
 
 button { background: #1d222a; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font: inherit; cursor: pointer; }
 button:hover { border-color: var(--accent); }

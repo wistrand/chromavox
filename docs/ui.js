@@ -118,7 +118,10 @@ export class UI {
   }
 
   beginEdit() { this.history.begin(this.scene); }
-  endEdit()   { this.history.commit(this.scene); }
+  // Don't commit history while a drag is in flight — otherwise an
+  // unrelated event (Shift keyup, slider change) can prematurely seal the
+  // pending snapshot and the rest of the drag won't be recorded.
+  endEdit()   { if (this.dragging) return; this.history.commit(this.scene); }
 
   bindShortcuts() {
     const STEP = 5;
@@ -299,29 +302,63 @@ export class UI {
 
   // --- Tool palette ---
   bindTools() {
-    const btns = document.querySelectorAll('.tools button');
+    const btns = document.querySelectorAll('.tools > button');
     const placeable = new Set(['prism', 'block', 'lens-convex', 'lens-concave', 'mirror', 'rabbit', 'circle']);
+
+    const place = kind => {
+      this.beginEdit();
+      const cx = this.scene.bench.w / 2;
+      const cy = this.scene.bench.h / 2;
+      const el = makeElement(kind, cx, cy);
+      this.scene.elements.push(el);
+      this.select(el);
+      this.endEdit();
+      this.onChange();
+      btns.forEach(x => x.classList.toggle('active', x.dataset.tool === 'select'));
+      this.tool = 'select';
+    };
+
     btns.forEach(b => b.addEventListener('click', () => {
       const kind = b.dataset.tool;
       if (placeable.has(kind)) {
-        // Place immediately at the center of the bench, then fall back to
-        // select so the user can drag / rotate / delete right away.
-        this.beginEdit();
-        const cx = this.scene.bench.w / 2;
-        const cy = this.scene.bench.h / 2;
-        const el = makeElement(kind, cx, cy);
-        this.scene.elements.push(el);
-        this.select(el);
-        this.endEdit();
-        this.onChange();
-        btns.forEach(x => x.classList.toggle('active', x.dataset.tool === 'select'));
-        this.tool = 'select';
+        place(kind);
       } else {
         btns.forEach(x => x.classList.remove('active'));
         b.classList.add('active');
         this.tool = kind;
       }
     }));
+
+    // Add-element menu (div-based so future custom renderings fit).
+    const addMenu = document.getElementById('add-menu');
+    const addToggle = document.getElementById('add-toggle');
+    const closeMenu = () => addMenu.classList.remove('open');
+    addToggle.addEventListener('click', e => {
+      e.stopPropagation();
+      if (addMenu.classList.contains('open')) {
+        addMenu.classList.remove('open');
+        return;
+      }
+      const r = addToggle.getBoundingClientRect();
+      addMenu.style.top = `${r.bottom + 4}px`;
+      addMenu.style.left = `${r.left}px`;
+      addMenu.classList.add('open');
+    });
+    addMenu.querySelectorAll('.tool-menu-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const kind = item.dataset.tool;
+        if (placeable.has(kind)) place(kind);
+        closeMenu();
+      });
+    });
+    document.addEventListener('click', e => {
+      if (addMenu.classList.contains('open') && !addMenu.contains(e.target) && e.target !== addToggle) {
+        closeMenu();
+      }
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && addMenu.classList.contains('open')) closeMenu();
+    });
   }
 
   // --- Canvas pointer events ---

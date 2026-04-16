@@ -84,6 +84,16 @@ document.getElementById('chromatic-span').addEventListener('input', e => {
   rebuildEmitterLabels();
 });
 
+const smoothingSlider = document.getElementById('mic-smoothing');
+const smoothingLabel = document.getElementById('mic-smoothing-val');
+const applySmoothing = () => {
+  const v = parseInt(smoothingSlider.value, 10) / 100;
+  smoothingLabel.textContent = v.toFixed(2);
+  mic.setSmoothing(v);
+};
+applySmoothing();
+smoothingSlider.addEventListener('input', applySmoothing);
+
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 function freqToNote(hz) {
   const m = Math.round(12 * Math.log2(hz / 440)) + 69;

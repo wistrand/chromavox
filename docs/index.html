@@ -11,14 +11,19 @@
 <div id="app">
   <header id="toolbar">
     <div class="tools">
+      <div class="tool-menu-wrap">
+        <button id="add-toggle" type="button">Add ▾</button>
+        <div id="add-menu" class="tool-menu">
+          <div class="tool-menu-item" data-tool="prism">       <span class="tmi-label">Prism</span></div>
+          <div class="tool-menu-item" data-tool="block">       <span class="tmi-label">Block</span></div>
+          <div class="tool-menu-item" data-tool="lens-convex"> <span class="tmi-label">Convex Lens</span></div>
+          <div class="tool-menu-item" data-tool="lens-concave"><span class="tmi-label">Concave Lens</span></div>
+          <div class="tool-menu-item" data-tool="mirror">      <span class="tmi-label">Mirror</span></div>
+          <div class="tool-menu-item" data-tool="circle">      <span class="tmi-label">Circle</span></div>
+          <div class="tool-menu-item" data-tool="rabbit">      <span class="tmi-label">Rabbit</span></div>
+        </div>
+      </div>
       <button data-tool="select" class="active">Select</button>
-      <button data-tool="prism">Prism</button>
-      <button data-tool="block">Block</button>
-      <button data-tool="lens-convex">Convex</button>
-      <button data-tool="lens-concave">Concave</button>
-      <button data-tool="mirror">Mirror</button>
-      <button data-tool="circle">Circle</button>
-      <button data-tool="rabbit">Rabbit</button>
       <button data-tool="delete">Delete</button>
     </div>
     <span class="tb-sep"></span>
@@ -30,6 +35,8 @@
     <button id="save">Save</button>
     <button id="load">Load</button>
     <button id="clear">Clear</button>
+    <span class="tb-sep"></span>
+    <label class="tb-preset">Preset <select id="preset-select"><option value="">…</option></select></label>
     <span class="tb-sep"></span>
     <button id="help-toggle" aria-label="Help">?</button>
     <input id="file-input" type="file" accept="application/json" hidden>
@@ -79,6 +86,7 @@
     <div class="row" id="mic-device-row"><label>Device <select id="mic-device"><option value="">default</option></select></label></div>
     <div class="row"><label>Mode <select id="mic-mode"><option value="log">log</option><option value="chromatic" selected>chromatic</option></select></label></div>
     <div class="row" id="chromatic-span-row"><label>Span <input id="chromatic-span" type="range" min="1" max="12" value="1" step="1"><span id="chromatic-span-val">1</span></label></div>
+    <div class="row"><label>Smoothing <input id="mic-smoothing" type="range" min="0" max="95" value="60"><span id="mic-smoothing-val">0.60</span></label></div>
     <div class="row"><label>Base <select id="mic-base">
       <option value="32.70">C1</option>
       <option value="65.41">C2</option>
@@ -105,8 +113,6 @@
     <h2>Selected</h2>
     <div id="prop-panel"><em>No selection</em></div>
 
-    <h2>Scene</h2>
-    <div class="row"><label>Preset <select id="preset-select"><option value="">…</option></select></label></div>
   </aside>
 
   <main id="stage">

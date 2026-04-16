@@ -16,6 +16,12 @@ export class MicModulator {
     this.nodes = [];
     this.source = 'mic';
     this.keyboardOctave = 4;
+    this.smoothing = 0.6;
+  }
+
+  setSmoothing(v) {
+    this.smoothing = Math.max(0, Math.min(0.99, v));
+    if (this.analyser) this.analyser.smoothingTimeConstant = this.smoothing;
   }
 
   async enable(source = 'mic', deviceId = null) {
@@ -24,7 +30,7 @@ export class MicModulator {
     const ctx = new AC();
     const an = ctx.createAnalyser();
     an.fftSize = 8192;
-    an.smoothingTimeConstant = 0.6;
+    an.smoothingTimeConstant = this.smoothing;
 
     let srcNode, stream = null;
     const nodes = [];
