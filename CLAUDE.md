@@ -56,4 +56,17 @@ Detailed notes are split into topic files under `agent_docs/`:
   material has a `LOOK` entry in `renderer.js` controlling tint,
   distortion magnitude, falloff, edge glow, and opacity. Sharp vs soft
   edges come from `edgeWidth`; refractive distortion comes from
-  `magnitude` and `falloff`.
+  `magnitude` and `falloff`. Distortion itself is opt-in via the Distort
+  toggle (defaults off); rim glint and tint stay on regardless.
+- Per-element `el.color` overrides both visuals *and* physics: renderer
+  replaces tint + edge glow; tracer switches to `elementAbsorption` /
+  `elementReflectance` that treat the color as a transmission filter.
+- Layout is a two-row / three-column grid — fixed 54 px toolbar on top,
+  left and right panels + stage below. Toolbar stays visible always
+  (`z-index: 20`, fixed height, horizontal scroll on narrow widths).
+- Window resize scales `el.x` / `el.y` proportionally to the bench-aspect
+  change so compositions stay in-bounds; sizes unchanged.
+- Touch: single pointer drags/rotates (shift-drag rotates); two
+  simultaneous pointers on a selected element pinch-scale + rotate.
+- `navigator.mediaDevices` requires a secure context. `mic.enable('mic')`
+  guards and throws a clear error on plain HTTP.

@@ -71,7 +71,9 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 #prop-panel { font-size: 12px; }
 #prop-panel .prop { margin: 4px 0; }
 #prop-panel input[type=number], #prop-panel input[type=range] { width: 100%; }
-#panel-toggle { display: none; position: absolute; top: 8px; left: 8px; z-index: 10; width: 36px; height: 36px; padding: 0; }
+.panel-toggle { display: none; position: absolute; top: 62px; z-index: 10; width: 36px; height: 36px; padding: 0; }
+.panel-toggle-left  { left: 8px; }
+.panel-toggle-right { right: 8px; }
 
 @media (max-width: 860px) {
   #app {
@@ -86,5 +88,5 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
   #right-panel { right: 0; transform: translateX(100%); }
   #app.show-left #left-panel { transform: translateX(0); box-shadow: 0 0 30px rgba(0,0,0,0.5); }
   #app.show-right #right-panel { transform: translateX(0); box-shadow: 0 0 30px rgba(0,0,0,0.5); }
-  #panel-toggle { display: block; top: 62px; }
+  .panel-toggle { display: block; }
 }

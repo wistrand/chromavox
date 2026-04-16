@@ -339,6 +339,22 @@ export class UI {
         break;
     }
   }
+  _applyEmitterToggle(sIdx, solo) {
+    const n = this.scene.emitter.count;
+    const dis = this.scene.emitter.disabled || (this.scene.emitter.disabled = new Set());
+    this.beginEdit();
+    if (solo) {
+      const onlyOn = !dis.has(sIdx) && dis.size === n - 1;
+      dis.clear();
+      if (!onlyOn) {
+        for (let i = 0; i < n; i++) if (i !== sIdx) dis.add(i);
+      }
+    } else {
+      if (dis.has(sIdx)) dis.delete(sIdx); else dis.add(sIdx);
+    }
+    this.endEdit();
+    this.onChange();
+  }
   _startPinchIfTwoPointers() {
     if (this.pointers.size !== 2 || !this.selected) return;
     const pts = [...this.pointers.values()];
@@ -384,23 +400,25 @@ export class UI {
       return;
     }
 
-    // Click on left-wall tick area toggles that source. Shift-click solos it.
+    // Click on left-wall tick area toggles that source. Shift-click or long
+    // press (≥450 ms) solos it.
     if (x >= 0 && x <= 30) {
       const n = this.scene.emitter.count;
       const sIdx = Math.max(0, Math.min(n - 1, Math.floor(y / (this.scene.bench.h / n))));
-      const dis = this.scene.emitter.disabled || (this.scene.emitter.disabled = new Set());
-      this.beginEdit();
       if (e.shiftKey) {
-        const onlyOn = !dis.has(sIdx) && dis.size === n - 1;
-        dis.clear();
-        if (!onlyOn) {
-          for (let i = 0; i < n; i++) if (i !== sIdx) dis.add(i);
-        }
-      } else {
-        if (dis.has(sIdx)) dis.delete(sIdx); else dis.add(sIdx);
+        this._applyEmitterToggle(sIdx, true);
+        return;
       }
-      this.endEdit();
-      this.onChange();
+      const pending = { pointerId: e.pointerId, sIdx, x, y, applied: false, timer: 0 };
+      this.emitterPending = pending;
+      // Identity check inside the closure: a stale timer from a previous
+      // press must not fire against the current pending object.
+      pending.timer = setTimeout(() => {
+        if (this.emitterPending === pending) {
+          this._applyEmitterToggle(sIdx, true);
+          pending.applied = true;
+        }
+      }, 450);
       return;
     }
 
@@ -446,6 +464,15 @@ export class UI {
     if (this.pointers.has(e.pointerId)) {
       this.pointers.set(e.pointerId, { x, y });
     }
+    // Cancel a pending emitter long-press if the pointer drifts too far.
+    if (this.emitterPending && this.emitterPending.pointerId === e.pointerId) {
+      const dx = x - this.emitterPending.x, dy = y - this.emitterPending.y;
+      if (dx * dx + dy * dy > 18 * 18) {
+        clearTimeout(this.emitterPending.timer);
+        this.emitterPending = null;
+      }
+      return;
+    }
     if (!this.dragging || !this.selected) return;
     if (this.dragging.type === 'pinch' && this.pointers.size >= 2) {
       const pts = [...this.pointers.values()];
@@ -472,6 +499,15 @@ export class UI {
   onUp(e) {
     try { this.canvas.releasePointerCapture(e.pointerId); } catch {}
     this.pointers.delete(e.pointerId);
+    // Emitter long-press / click resolution.
+    if (this.emitterPending && this.emitterPending.pointerId === e.pointerId) {
+      clearTimeout(this.emitterPending.timer);
+      if (!this.emitterPending.applied) {
+        this._applyEmitterToggle(this.emitterPending.sIdx, false);
+      }
+      this.emitterPending = null;
+      return;
+    }
     // End pinch only when fewer than two pointers remain.
     if (this.dragging?.type === 'pinch' && this.pointers.size < 2) {
       this.dragging = null;
@@ -679,18 +715,13 @@ export class UI {
 
     this.bindPresets();
 
-    // Mobile panel toggle.
-    const tog = document.getElementById('panel-toggle');
-    tog.addEventListener('click', () => {
-      const app = document.getElementById('app');
-      if (app.classList.contains('show-left')) {
-        app.classList.remove('show-left');
-        app.classList.add('show-right');
-      } else if (app.classList.contains('show-right')) {
-        app.classList.remove('show-right');
-      } else {
-        app.classList.add('show-left');
-      }
+    // Per-side drawer toggles. Simple on/off each.
+    const app = document.getElementById('app');
+    document.getElementById('left-toggle').addEventListener('click', () => {
+      app.classList.toggle('show-left');
+    });
+    document.getElementById('right-toggle').addEventListener('click', () => {
+      app.classList.toggle('show-right');
     });
   }
 

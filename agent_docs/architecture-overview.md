@@ -9,7 +9,9 @@ No dependencies.
 
 ## Module layout
 
-- `docs/index.html`, `docs/style.css` — 3-column shell; drawer panels on ≤860px.
+- `docs/index.html`, `docs/style.css` — two-row / three-column grid shell
+  with a fixed 54 px top toolbar; side panels slide in as drawers on
+  ≤860 px.
 - `docs/spectrum.js` — Dan-Bruton wavelength→RGB, Sellmeier/Cauchy dispersion,
   Beer-Lambert absorption, dichroic reflectance, `MATERIALS` table.
 - `docs/scene.js` — data model, local/world polygon geometry, JSON save/load.

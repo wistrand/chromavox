@@ -10,6 +10,7 @@
 //      outlines, selection handle). Alpha blend.
 
 import { worldEdges } from './scene.js';
+import { wavelengthToRGB } from './spectrum.js';
 
 const MAX_EDGES = 64;
 
@@ -404,7 +405,7 @@ export class Renderer {
     }
 
     // --- Pass 3: overlay (alpha-blended lines) ---
-    this.buildOverlay(scene);
+    this.buildOverlay(scene, tracer);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.overlayProgram);
@@ -495,9 +496,11 @@ export class Renderer {
     this.overlayCount++;
   }
 
-  buildOverlay(scene) {
+  buildOverlay(scene, tracer) {
     this.overlayCount = 0;
-    let estimate = 8 + scene.emitter.count * 2 + scene.sensorCount * 2;
+    const binCount = tracer?.binCount ?? 64;
+    // Per-sensor mini-spectrum is 64 bins × 6 stacked lines × 2 verts per line.
+    let estimate = 8 + scene.emitter.count * 2 + scene.sensorCount * (2 + binCount * 6);
     for (const el of scene.elements) estimate += 100;
     this.ensureOverlayCapacity(estimate * 2);
 
@@ -527,6 +530,37 @@ export class Renderer {
     for (let s = 0; s < scene.sensorCount; s++) {
       const y = (s + 0.5) * senStripH;
       this.line(bench.w - 20, y, bench.w - 2, y, 0.6, 1, 0.9, 0.9);
+    }
+
+    // Inline mini-spectrum next to each sensor tick — shows the per-sensor
+    // wavelength distribution directly on the bench so users can read it
+    // even when the side-panel readout is scrolled or tiny.
+    if (tracer && tracer.sensorBins && tracer.sensorCount === scene.sensorCount) {
+      const stripW = Math.min(72, bench.w * 0.06);
+      const stripH = Math.min(6, senStripH * 0.45);
+      const x0 = bench.w - 22 - stripW;
+      const binW = stripW / binCount;
+      for (let s = 0; s < scene.sensorCount; s++) {
+        const y = (s + 0.5) * senStripH;
+        // Local normalization per sensor so the readout is always colored.
+        let maxVal = 1e-6;
+        for (let b = 0; b < binCount; b++) {
+          const v = tracer.sensorBins[s * binCount + b];
+          if (v > maxVal) maxVal = v;
+        }
+        for (let b = 0; b < binCount; b++) {
+          const v = tracer.sensorBins[s * binCount + b] / maxVal;
+          if (v < 0.02) continue;
+          const wl = 380 + (b + 0.5) / binCount * 400;
+          const rgb = wavelengthToRGB(wl);
+          const r = rgb[0] * v, g = rgb[1] * v, bl = rgb[2] * v;
+          const bx = x0 + b * binW;
+          // Stack thin lines to give the strip visible height.
+          for (let dy = -stripH * 0.5; dy <= stripH * 0.5; dy += 1) {
+            this.line(bx, y + dy, bx + binW + 0.5, y + dy, r, g, bl, 0.95);
+          }
+        }
+      }
     }
 
     for (const el of scene.elements) {

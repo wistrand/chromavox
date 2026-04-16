@@ -40,6 +40,16 @@
   noiseSuppression=false`. On Linux/PipeWire some drivers still apply
   processing out of our control; verify with OS tools like
   `pavucontrol`.
+- `navigator.mediaDevices` is only defined in a **secure context** — HTTPS
+  or `localhost`. Plain HTTP on a LAN hostname leaves it `undefined`, so
+  `mic.enable('mic')` throws a clear guard error instead of crashing.
+  Workarounds: serve over HTTPS (e.g. `ngrok`, `cloudflared`), flip the
+  browser's "treat insecure origin as secure" flag
+  (`chrome://flags/#unsafely-treat-insecure-origin-as-secure` /
+  Firefox `about:config` `media.devices.insecure.enabled`
+  + `media.getusermedia.insecure.enabled`), or pick a synthetic source
+  (sine / harmonics / noise / keyboard) which doesn't need
+  `mediaDevices`.
 
 ## UI / state
 
@@ -51,3 +61,10 @@
 - The element material dropdown filters by element kind
   (dielectric/mirror); switching a mirror's material to a dielectric
   value is not possible from the UI — change via JSON edit if needed.
+- Window resize scales element positions proportionally via the
+  aspect change but does **not** rescale their sizes. On very extreme
+  resizes you may want to manually shrink large elements. Presets loaded
+  into an odd-aspect viewport reflow cleanly via the same path.
+- Toolbar is fixed at 54 px with `box-sizing: border-box` and
+  `overflow-x: auto`; on narrow viewports the horizontal scrollbar
+  appears inside the bar rather than compressing it.
