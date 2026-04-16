@@ -71,8 +71,9 @@ export class MicModulator {
       srcNode = mix;
     } else if (source === 'keyboard') {
       // ZXCVBNM bottom row + SDGHJ above = one-octave claviature. Comma/period
-      // shift octaves. Multiple simultaneous keys → polyphony. Sawtooth voices
-      // give some harmonic content so the wavelength-grouping synth sees variety.
+      // shift octaves. Multiple simultaneous keys → polyphony. Triangle voices
+      // keep one key mostly in one chromatic bucket while still giving the
+      // sensor synth a little odd-harmonic timbre to chew on.
       const mix = ctx.createGain();
       mix.gain.value = 0.35;
       const KEY_TO_SEMI = {
@@ -88,7 +89,7 @@ export class MicModulator {
         if (semi === undefined) return;
         const midi = 12 * (this.keyboardOctave + 1) + semi;
         const o = ctx.createOscillator();
-        o.type = 'sawtooth';
+        o.type = 'triangle';
         o.frequency.value = midiToHz(midi);
         const g = ctx.createGain();
         g.gain.value = 0;

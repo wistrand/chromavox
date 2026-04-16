@@ -16,6 +16,9 @@ export class SensorSynth {
     this.baseHz = 130.81;
     this.sinkId = '';
     this.stepSemi = 1;
+    // Slow-decaying peak hold for amplitude normalization. Avoids zippering
+    // when a ray sweeps across sensors and the instantaneous max jumps.
+    this.peak = 1e-6;
   }
 
   setStep(stepSemi) {
@@ -112,7 +115,6 @@ export class SensorSynth {
   update(sensorBins, binCount, sensorCount) {
     if (!this.active) return;
     if (sensorCount !== this.count) this.rebuild(sensorCount);
-    // Normalise so a bright scene doesn't clip; track max partial across frame.
     let maxPartial = 1e-6;
     const now = this.ctx.currentTime;
     const norm = 1 / Math.sqrt(sensorCount);
@@ -126,17 +128,20 @@ export class SensorSynth {
         for (let b = b0; b < b1; b++) sum += sensorBins[s * binCount + b];
         const avg = sum / Math.max(1, b1 - b0);
         if (avg > maxPartial) maxPartial = avg;
-        // Stash raw value in a scratch slot on the gain node to avoid a second
-        // allocation; read back after the scale factor is known.
         voice.harmonics[k]._raw = avg;
       }
     }
-    const scale = norm / maxPartial;
+    // Peak-hold with slow decay so the normalization scale doesn't snap
+    // when a ray sweep momentarily quadruples the instantaneous max.
+    this.peak = Math.max(maxPartial, this.peak * 0.94);
+    const scale = norm / this.peak;
     for (let s = 0; s < sensorCount; s++) {
       const voice = this.voices[s];
       for (const h of voice.harmonics) {
         const v = Math.pow(Math.max(0, h._raw) * scale, 1.3);
-        h.gain.gain.setTargetAtTime(v, now, 0.03);
+        // Slightly longer time constant smooths transient spikes from rays
+        // sweeping across sensor strips.
+        h.gain.gain.setTargetAtTime(v, now, 0.06);
       }
     }
   }

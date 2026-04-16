@@ -16,6 +16,7 @@
       <button data-tool="lens-convex">Convex</button>
       <button data-tool="lens-concave">Concave</button>
       <button data-tool="mirror">Mirror</button>
+      <button data-tool="circle">Circle</button>
       <button data-tool="rabbit">Rabbit</button>
       <button data-tool="delete">Delete</button>
     </div>
@@ -62,8 +63,9 @@
     <div class="row"><label><input id="bucket-color" type="checkbox"> Bucket color</label></div>
 
     <h2>Sensors</h2>
-    <div class="row"><label>Count <input id="sensor-count" type="range" min="1" max="64" value="12"><span id="sensor-count-val">12</span></label></div>
-    <div class="row"><label><input id="sensor-sync" type="checkbox"> Sync to source count</label></div>
+    <div class="row"><label>Count <input id="sensor-count" type="range" min="1" max="64" value="24"><span id="sensor-count-val">24</span></label></div>
+    <div class="row"><label><input id="sensor-sync" type="checkbox" checked> Sync to source count</label></div>
+    <div class="row"><label>Factor <input id="sensor-factor" type="range" min="1" max="8" value="2" step="1"><span id="sensor-factor-val">2</span></label></div>
     <div class="row"><label>Device <select id="synth-device"><option value="">default</option></select></label></div>
     <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="100" value="25"><span id="synth-vol-val">25</span></label></div>
 
@@ -76,6 +78,7 @@
 
   <main id="stage">
     <canvas id="gl"></canvas>
+    <div id="emitter-labels"></div>
   </main>
 
   <aside id="right-panel" class="panel">

@@ -12,7 +12,7 @@
 import { worldEdges } from './scene.js';
 import { wavelengthToRGB } from './spectrum.js';
 
-const MAX_EDGES = 64;
+const MAX_EDGES = 128;
 
 const RAY_VS = `#version 300 es
 in vec2 aCorner;
@@ -527,22 +527,24 @@ export class Renderer {
       }
     }
     const senStripH = bench.h / scene.sensorCount;
-    for (let s = 0; s < scene.sensorCount; s++) {
-      const y = (s + 0.5) * senStripH;
-      this.line(bench.w - 20, y, bench.w - 2, y, 0.6, 1, 0.9, 0.9);
+
+    // Mini-spectrum is drawn directly on the right wall (overlapping the
+    // sensor tick area) only when the right side-panel readout isn't on
+    // screen — e.g. mobile drawer closed, or panel scrolled off.
+    const rp = (typeof document !== 'undefined') ? document.getElementById('right-panel') : null;
+    let showMini = false;
+    if (rp) {
+      const rr = rp.getBoundingClientRect();
+      showMini = rr.width === 0 || rr.left >= window.innerWidth - 1;
     }
 
-    // Inline mini-spectrum next to each sensor tick — shows the per-sensor
-    // wavelength distribution directly on the bench so users can read it
-    // even when the side-panel readout is scrolled or tiny.
-    if (tracer && tracer.sensorBins && tracer.sensorCount === scene.sensorCount) {
+    if (showMini && tracer && tracer.sensorBins && tracer.sensorCount === scene.sensorCount) {
       const stripW = Math.min(72, bench.w * 0.06);
       const stripH = Math.min(6, senStripH * 0.45);
-      const x0 = bench.w - 22 - stripW;
+      const x0 = bench.w - 2 - stripW;
       const binW = stripW / binCount;
       for (let s = 0; s < scene.sensorCount; s++) {
         const y = (s + 0.5) * senStripH;
-        // Local normalization per sensor so the readout is always colored.
         let maxVal = 1e-6;
         for (let b = 0; b < binCount; b++) {
           const v = tracer.sensorBins[s * binCount + b];
@@ -555,11 +557,16 @@ export class Renderer {
           const rgb = wavelengthToRGB(wl);
           const r = rgb[0] * v, g = rgb[1] * v, bl = rgb[2] * v;
           const bx = x0 + b * binW;
-          // Stack thin lines to give the strip visible height.
           for (let dy = -stripH * 0.5; dy <= stripH * 0.5; dy += 1) {
             this.line(bx, y + dy, bx + binW + 0.5, y + dy, r, g, bl, 0.95);
           }
         }
+      }
+    } else {
+      // Plain ticks when the side-panel readout is taking the role.
+      for (let s = 0; s < scene.sensorCount; s++) {
+        const y = (s + 0.5) * senStripH;
+        this.line(bench.w - 20, y, bench.w - 2, y, 0.6, 1, 0.9, 0.9);
       }
     }
 

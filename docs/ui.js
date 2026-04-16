@@ -124,7 +124,6 @@ export class UI {
     const STEP = 5;
     const ROT_STEP = 1 * Math.PI / 180;
     const SIZE_STEP = 8;
-    const SIZE_STEP_FINE = 1;
     const bumpSize = (el, d) => {
       switch (el.kind) {
         case 'prism':
@@ -145,11 +144,19 @@ export class UI {
         case 'lens-concave':
           el.h = Math.max(40, el.h + d);
           break;
+        case 'circle':
+          el.radius = Math.max(15, el.radius + d);
+          break;
       }
     };
 
     window.addEventListener('keydown', e => {
       if (e.target.matches('input, select, textarea')) return;
+
+      // Don't let UI shortcuts compete with an in-progress mouse drag —
+      // lets the user play keyboard notes (or anything else) while moving
+      // an element without delete/move/rotate/undo hijacking the gesture.
+      if (this.dragging) return;
 
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 'z' && !e.shiftKey) {
@@ -180,12 +187,12 @@ export class UI {
       let handled = true;
       if (e.shiftKey && e.key === 'ArrowLeft')       { this.beginEdit(); this.selected.rot -= ROT_STEP; }
       else if (e.shiftKey && e.key === 'ArrowRight') { this.beginEdit(); this.selected.rot += ROT_STEP; }
-      else if (e.shiftKey && e.key === 'ArrowUp')    { this.beginEdit(); bumpSize(this.selected,  SIZE_STEP_FINE); }
-      else if (e.shiftKey && e.key === 'ArrowDown')  { this.beginEdit(); bumpSize(this.selected, -SIZE_STEP_FINE); }
+      else if (e.shiftKey && e.key === 'ArrowUp')    { this.beginEdit(); bumpSize(this.selected,  SIZE_STEP); }
+      else if (e.shiftKey && e.key === 'ArrowDown')  { this.beginEdit(); bumpSize(this.selected, -SIZE_STEP); }
       else if (e.key === 'ArrowLeft')  { this.beginEdit(); this.selected.x -= STEP; }
       else if (e.key === 'ArrowRight') { this.beginEdit(); this.selected.x += STEP; }
-      else if (e.key === 'ArrowUp')    { this.beginEdit(); bumpSize(this.selected,  SIZE_STEP); }
-      else if (e.key === 'ArrowDown')  { this.beginEdit(); bumpSize(this.selected, -SIZE_STEP); }
+      else if (e.key === 'ArrowUp')    { this.beginEdit(); this.selected.y -= STEP; }
+      else if (e.key === 'ArrowDown')  { this.beginEdit(); this.selected.y += STEP; }
       else handled = false;
 
       if (handled) {
@@ -210,6 +217,18 @@ export class UI {
       ['spread', 'spreadDeg', parseInt],
       ['aperture', 'apertureFactor', v => parseInt(v, 10) / 100],
     ];
+    const sc = document.getElementById('sensor-count');
+    const sensorFactor = () =>
+      Math.max(1, parseInt(document.getElementById('sensor-factor').value, 10) || 1);
+    const applySync = () => {
+      const target = Math.min(parseInt(sc.max, 10),
+        Math.max(1, this.scene.emitter.count * sensorFactor()));
+      this.scene.sensorCount = target;
+      sc.value = target;
+      document.getElementById('sensor-count-val').textContent = target;
+      this.rebuildSensorReadout();
+    };
+
     for (const [id, key, cast] of map) {
       const el = document.getElementById(id);
       if (key === 'apertureFactor') el.value = Math.round(this.scene.emitter[key] * 100);
@@ -219,17 +238,12 @@ export class UI {
         this.scene.emitter[key] = cast(el.value, 10);
         this.refreshEmitterLabels();
         if (key === 'count' && document.getElementById('sensor-sync').checked) {
-          this.scene.sensorCount = this.scene.emitter.count;
-          const sc = document.getElementById('sensor-count');
-          sc.value = this.scene.sensorCount;
-          document.getElementById('sensor-count-val').textContent = this.scene.sensorCount;
-          this.rebuildSensorReadout();
+          applySync();
         }
         this.onChange();
       });
       el.addEventListener('change', () => this.endEdit());
     }
-    const sc = document.getElementById('sensor-count');
     sc.value = this.scene.sensorCount;
     sc.addEventListener('input', () => {
       this.beginEdit();
@@ -242,17 +256,25 @@ export class UI {
     });
     sc.addEventListener('change', () => this.endEdit());
 
-    // When sync is turned on, snap sensor count to current source count.
+    // When sync is turned on, snap sensor count to source × factor.
     document.getElementById('sensor-sync').addEventListener('change', e => {
       if (!e.target.checked) return;
       this.beginEdit();
-      this.scene.sensorCount = this.scene.emitter.count;
-      sc.value = this.scene.sensorCount;
-      document.getElementById('sensor-count-val').textContent = this.scene.sensorCount;
-      this.rebuildSensorReadout();
+      applySync();
       this.endEdit();
       this.onChange();
     });
+
+    // Factor slider re-syncs immediately if sync is on.
+    const factorIn = document.getElementById('sensor-factor');
+    factorIn.addEventListener('input', () => {
+      document.getElementById('sensor-factor-val').textContent = factorIn.value;
+      if (!document.getElementById('sensor-sync').checked) return;
+      this.beginEdit();
+      applySync();
+      this.onChange();
+    });
+    factorIn.addEventListener('change', () => this.endEdit());
   }
 
   syncControls() {
@@ -278,7 +300,7 @@ export class UI {
   // --- Tool palette ---
   bindTools() {
     const btns = document.querySelectorAll('.tools button');
-    const placeable = new Set(['prism', 'block', 'lens-convex', 'lens-concave', 'mirror', 'rabbit']);
+    const placeable = new Set(['prism', 'block', 'lens-convex', 'lens-concave', 'mirror', 'rabbit', 'circle']);
     btns.forEach(b => b.addEventListener('click', () => {
       const kind = b.dataset.tool;
       if (placeable.has(kind)) {
@@ -336,6 +358,9 @@ export class UI {
       case 'lens-concave':
         el.h = Math.max(40, base.h * s);
         el.radius = Math.max(80, base.radius * s);
+        break;
+      case 'circle':
+        el.radius = Math.max(15, base.radius * s);
         break;
     }
   }
@@ -640,6 +665,7 @@ export class UI {
     const sizeFields = {
       'prism':        [['size', 40, 300]],
       'rabbit':       [['size', 60, 300]],
+      'circle':       [['radius', 20, 300]],
       'block':        [['w', 40, 400], ['h', 20, 300]],
       'lens-convex':  [['h', 40, 300], ['radius', 80, 1200]],
       'lens-concave': [['w', 20, 200], ['h', 40, 300], ['radius', 80, 800]],

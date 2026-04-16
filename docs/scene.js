@@ -15,7 +15,7 @@ export function createScene() {
       raysPerSource: 512, spreadDeg: 0, apertureFactor: 0.01,
       disabled: new Set(),
     },
-    sensorCount: 12,
+    sensorCount: 24,
     elements: [],
     version: 1,
   };
@@ -39,6 +39,7 @@ export function makeElement(kind, x, y) {
     case 'lens-concave': return { ...base, w: 30, h: 110, radius: 220, material: 'crown' };
     case 'mirror':       return { ...base, rot: Math.PI / 4, w: 180, h: 6, material: 'mirror' };
     case 'rabbit':       return { ...base, size: 140, material: 'crown' };
+    case 'circle':       return { ...base, radius: 80, material: 'crown' };
     default: throw new Error('unknown element kind: ' + kind);
   }
 }
@@ -53,6 +54,17 @@ export function localPolygon(el) {
         { x: s / 2, y: h / 3 },
         { x: -s / 2, y: h / 3 },
       ];
+    }
+    case 'circle': {
+      const R = el.radius;
+      const N = 128;
+      const pts = [];
+      // Clockwise winding in y-down: angle goes around the right side first.
+      for (let i = 0; i < N; i++) {
+        const a = (i / N) * 2 * Math.PI;
+        pts.push({ x: R * Math.cos(a), y: R * Math.sin(a) });
+      }
+      return pts;
     }
     case 'block':
     case 'mirror': {

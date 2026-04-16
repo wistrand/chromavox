@@ -81,7 +81,46 @@ document.getElementById('chromatic-span').addEventListener('input', e => {
   const v = parseInt(e.target.value, 10) || 1;
   document.getElementById('chromatic-span-val').textContent = v;
   synth.setStep(v);
+  rebuildEmitterLabels();
 });
+
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+function freqToNote(hz) {
+  const m = Math.round(12 * Math.log2(hz / 440)) + 69;
+  const oct = Math.floor(m / 12) - 1;
+  return NOTE_NAMES[((m % 12) + 12) % 12] + oct;
+}
+function rebuildEmitterLabels() {
+  const host = document.getElementById('emitter-labels');
+  if (!host) return;
+  host.innerHTML = '';
+  const n = scene.emitter.count;
+  const mode = document.getElementById('mic-mode').value;
+  const base = currentBaseHz();
+  const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
+  for (let i = 0; i < n; i++) {
+    let txt;
+    if (mode === 'chromatic') {
+      const hz = base * Math.pow(2, (i * stepSemi) / 12);
+      txt = freqToNote(hz);
+    } else {
+      const lo = 80, hi = 6000;
+      const t = n > 1 ? i / (n - 1) : 0;
+      const hz = Math.exp(Math.log(lo) + t * (Math.log(hi) - Math.log(lo)));
+      txt = hz >= 1000 ? `${(hz / 1000).toFixed(1)}k` : `${Math.round(hz)}`;
+    }
+    const div = document.createElement('div');
+    div.className = 'emitter-label';
+    div.textContent = txt;
+    div.style.top = `${((i + 0.5) / n) * 100}%`;
+    host.appendChild(div);
+  }
+}
+rebuildEmitterLabels();
+['mic-mode', 'mic-base', 'mic-source', 'chromatic-span', 'emitter-count']
+  .forEach(id => document.getElementById(id).addEventListener('input', rebuildEmitterLabels));
+['mic-mode', 'mic-base', 'mic-source']
+  .forEach(id => document.getElementById(id).addEventListener('change', rebuildEmitterLabels));
 
 window.addEventListener('keydown', e => {
   if (e.target.matches('input, select, textarea')) return;
@@ -253,6 +292,7 @@ function frame() {
       if (baseHz !== lastBaseHz) {
         synth.setBase(baseHz);
         if (mic.source === 'keyboard') syncBaseSelect(baseHz);
+        rebuildEmitterLabels();
         lastBaseHz = baseHz;
       }
       if (document.getElementById('bucket-color').checked) {

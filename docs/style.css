@@ -64,6 +64,17 @@ button:hover { border-color: var(--accent); }
 button.active { background: var(--accent); color: #061018; border-color: var(--accent); }
 #stage { position: relative; background: #000; }
 #gl { width: 100%; height: 100%; display: block; touch-action: none; }
+#emitter-labels { position: absolute; top: 0; left: 0; bottom: 0; width: 56px; pointer-events: none; z-index: 4; }
+.emitter-label {
+  position: absolute;
+  left: 4px;
+  transform: translate(0, calc(-100% - 3px));
+  font-size: 10px;
+  color: rgba(220, 230, 240, 0.85);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 3px #000, 0 0 6px #000;
+}
 #sensor-readout { display: flex; flex-direction: column; min-height: 100%; }
 .sensor-bar { flex: 1 1 0; min-height: 14px; background: #000; position: relative; overflow: hidden; border-top: 1px solid var(--border); }
 .sensor-bar:first-child { border-top: 0; }
