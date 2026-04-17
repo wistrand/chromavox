@@ -559,7 +559,7 @@ export class Renderer {
     const disabled = scene.emitter.disabled;
     const srcStripH = bench.h / scene.emitter.count;
     for (let s = 0; s < scene.emitter.count; s++) {
-      const y = (s + 0.5) * srcStripH;
+      const y = (scene.emitter.count - 1 - s + 0.5) * srcStripH;
       const off = disabled && disabled.has(s);
       const a = off ? 0.3 : 1.0;
       for (let dy = -1; dy <= 1; dy++) {
@@ -592,7 +592,7 @@ export class Renderer {
       const x0 = bench.w - 2 - stripW;
       const binW = stripW / binCount;
       for (let s = 0; s < scene.sensorCount; s++) {
-        const y = (s + 0.5) * senStripH;
+        const y = (scene.sensorCount - 1 - s + 0.5) * senStripH;
         let maxVal = 1e-6;
         for (let b = 0; b < binCount; b++) {
           const v = tracer.sensorBins[s * binCount + b];
@@ -613,7 +613,7 @@ export class Renderer {
     } else {
       // Plain ticks when the side-panel readout is taking the role.
       for (let s = 0; s < scene.sensorCount; s++) {
-        const y = (s + 0.5) * senStripH;
+        const y = (scene.sensorCount - 1 - s + 0.5) * senStripH;
         this.line(bench.w - 20, y, bench.w - 2, y, 0.6, 1, 0.9, 0.9);
       }
     }
@@ -679,13 +679,15 @@ export class Renderer {
     this._peakMax = Math.max(curMax, this._peakMax * 0.95);
 
     for (let s = 0; s < scene.sensorCount; s++) {
+      // Flip: DOM bar 0 (top of panel) = sensor N-1 (top of bench).
+      const si = scene.sensorCount - 1 - s;
       const c = bars[s].querySelector('canvas');
       const ctx = c.getContext('2d');
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, c.width, c.height);
 
       // Gaussian blur across bins: [0.25, 0.5, 0.25] kernel.
-      const base = s * binCount;
+      const base = si * binCount;
       const blur = this._blurBuf;
       for (let b = 0; b < binCount; b++) {
         const prev = b > 0 ? this._displayBins[base + b - 1] : this._displayBins[base + b];

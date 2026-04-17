@@ -371,7 +371,7 @@ export class PushController {
 
       const barH = Math.max(1, Math.floor(regionH / sensorCount));
       for (let s = 0; s < sensorCount; s++) {
-        const dy = s * barH;
+        const dy = (sensorCount - 1 - s) * barH;
         if (dy >= regionH) break;
         for (let x = 0; x < specW; x++) {
           const b = Math.floor(x / specW * binCount);
@@ -631,9 +631,8 @@ export class PushController {
     // overrides whatever the in-key layout set at that pad.
     for (let row = 0; row < PAD_ROWS; row++) {
       // Flip: row 0 (bottom pad) = bottom-of-bench sensors, row 7 (top) = top.
-      const flipped = PAD_ROWS - 1 - row;
-      const s0 = Math.floor(flipped * sensorCount / PAD_ROWS);
-      const s1 = Math.min(sensorCount, Math.floor((flipped + 1) * sensorCount / PAD_ROWS));
+      const s0 = Math.floor(row * sensorCount / PAD_ROWS);
+      const s1 = Math.min(sensorCount, Math.floor((row + 1) * sensorCount / PAD_ROWS));
       // Find the dominant wavelength bin (highest intensity) across the
       // sensor group — shows the strongest color, not a washed-out average.
       let bestV = 0, bestWl = 0, totalI = 0;

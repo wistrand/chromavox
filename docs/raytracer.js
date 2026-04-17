@@ -291,7 +291,7 @@ export class Tracer {
     const disabled = emitter.disabled;
     for (let s = 0; s < nSrc; s++) {
       if (disabled && disabled.has(s)) continue;
-      const ey0 = s * srcStripH;
+      const ey0 = (nSrc - 1 - s) * srcStripH;
       const apertureH = srcStripH * (emitter.apertureFactor ?? 0.01);
       const wlMinS = wlPer ? wlPer.min[s] : wlMin;
       const wlMaxS = wlPer ? wlPer.max[s] : wlMax;
@@ -675,7 +675,7 @@ export class Tracer {
 
       if (hitWall) {
         if (hitWall.kind === 'sensor') {
-          const sIdx = Math.min(this.sensorCount - 1, Math.max(0, Math.floor(hy / sensorStripH)));
+          const sIdx = Math.min(this.sensorCount - 1, Math.max(0, this.sensorCount - 1 - Math.floor(hy / sensorStripH)));
           const binIdx = Math.min(this.binCount - 1, Math.max(0,
             Math.floor((wl - 380) / (780 - 380) * this.binCount)));
           if (this._isSecondary) {

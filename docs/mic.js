@@ -185,6 +185,8 @@ export class MicModulator {
       const onMessage = e => {
         const bytes = [...e.data];
         const [status, note, vel] = bytes;
+        // Skip system-realtime messages (0xF0+): Active Sensing, Clock, etc.
+        if (status >= 0xF0) return;
         const cmd = status & 0xf0;
         if (cmd === 0x90 && vel > 0) {
           this._midiNotes.set(note, vel / 127);

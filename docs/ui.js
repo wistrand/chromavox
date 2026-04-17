@@ -534,7 +534,7 @@ export class UI {
     // press (≥450 ms) solos it.
     if (x >= 0 && x <= 30) {
       const n = this.scene.emitter.count;
-      const sIdx = Math.max(0, Math.min(n - 1, Math.floor(y / (this.scene.bench.h / n))));
+      const sIdx = Math.max(0, Math.min(n - 1, n - 1 - Math.floor(y / (this.scene.bench.h / n))));
       if (e.shiftKey) {
         this._applyEmitterToggle(sIdx, true);
         return;

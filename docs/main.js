@@ -346,7 +346,7 @@ function rebuildEmitterLabels() {
     const div = document.createElement('div');
     div.className = 'emitter-label';
     div.textContent = txt;
-    div.style.top = `${((i + 0.5) / n) * 100}%`;
+    div.style.top = `${((n - 1 - i + 0.5) / n) * 100}%`;
     host.appendChild(div);
   }
 }
@@ -377,7 +377,7 @@ function rebuildSensorLabels() {
     const div = document.createElement('div');
     div.className = 'sensor-label';
     div.textContent = txt;
-    div.style.top = `${((i + 0.5) / n) * 100}%`;
+    div.style.top = `${((n - 1 - i + 0.5) / n) * 100}%`;
     host.appendChild(div);
   }
 }

@@ -187,6 +187,30 @@ matching. See `notes/push3-midi.md` for details.
 
 - **Play** (CC 85): toggles Audio out on press (clicks `synthBtn`).
 
+## Push 3 CC differences from Push 2
+
+Some CCs behave differently on Push 3 hardware compared to the Push 2
+spec:
+
+- **CC 70** (0x46) — large selection wheel. Cycles through scene
+  elements (see below). Not listed in the Push 2 spec.
+- **CC 79** (0x4F) — volume encoder. Adjusts synth master volume
+  (see below). Push 2 spec calls this "Master encoder".
+- Both CC 70 and CC 79 send `val=127` for clockwise and `val=1` for
+  counter-clockwise. This differs from track encoders (CC 71-78)
+  which use relative-around-64.
+
+## Element selection via Push wheel
+
+CC 70 cycles through `scene.elements`. Clockwise = next, counter-
+clockwise = previous, wraps around. If nothing is selected, the
+first turn picks `scene.elements[0]`.
+
+## Volume control via Push
+
+CC 79 adjusts the synth volume slider by +/-2 per detent. Updates
+both `synth.setVolume` and the DOM slider/label.
+
 ## Push display sidecar
 
 The Push 3 display (960x160, USB bulk) can't be driven from the
@@ -219,3 +243,5 @@ USB. See `notes/push3-display.md` for protocol details.
 
 - **Scene buttons** (CC 36-43): preset load.
 - **Touch strip**: map to sim rate or ray width.
+- **Selection wheel LED feedback**: highlight the selected element on
+  the Push display.

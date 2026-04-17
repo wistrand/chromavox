@@ -141,14 +141,20 @@ number with velocity = palette color index.
 
 ## Encoders
 
-Relative CC messages (increment/decrement around 64).
+Track encoders send relative CC messages (increment/decrement around
+64). The large wheel and volume encoder differ (see note below).
 
 | CC | Encoder |
 |---|---|
+| 70 | Large selection wheel (Push 3; not in Push 2 spec) |
 | 71-78 | Track encoders 1-8 (left to right) |
-| 79 | Master encoder |
+| 79 | Volume / Master encoder |
 | 14 | Tempo |
 | 15 | Swing |
+
+**Push 3 note**: CC 70 and CC 79 send `val=127` for clockwise and
+`val=1` for counter-clockwise (NOT relative-around-64 like track
+encoders CC 71-78).
 
 ## Touch strip
 
