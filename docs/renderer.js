@@ -237,7 +237,7 @@ const DEFAULT_LOOK = LOOK.crown;
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', { antialias: true, premultipliedAlpha: false });
+    const gl = canvas.getContext('webgl2', { antialias: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('WebGL2 not supported');
     this.gl = gl;
     // HDR float framebuffer for rays — required so additive blending can

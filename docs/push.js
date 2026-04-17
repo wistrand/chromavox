@@ -13,6 +13,20 @@
 import { wavelengthToRGB, SCALES } from './spectrum.js';
 import { makeElement, localPolygon } from './scene.js';
 
+function hslToRgb(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r, g, b;
+  if (h < 60)       { r = c; g = x; b = 0; }
+  else if (h < 120) { r = x; g = c; b = 0; }
+  else if (h < 180) { r = 0; g = c; b = x; }
+  else if (h < 240) { r = 0; g = x; b = c; }
+  else if (h < 300) { r = x; g = 0; b = c; }
+  else              { r = c; g = 0; b = x; }
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+
 const PAD_BASE = 36;
 const PAD_ROWS = 8;
 const PAD_COLS = 8;
@@ -100,12 +114,280 @@ export class PushController {
       this.output.send([0x90, PAD_BASE + i, 0]);
     }
     this._playInitAnimation();
+    this._connectDisplay();
   }
 
   detach() {
     this._stopInitAnimation();
+    this._disconnectDisplay();
     this.clearPads();
     this.output = null;
+  }
+
+  // --- Display WebSocket (optional, connects to tools/push-display.js) ---
+
+  _displayWs = null;
+  displayConnected = false;
+  static DISPLAY_URL = 'ws://localhost:9100';
+  static DISPLAY_W = 960;
+  static DISPLAY_H = 160;
+
+  _displayRetryTimer = 0;
+
+  _connectDisplay() {
+    if (this._displayWs) return;
+    try {
+      const ws = new WebSocket(PushController.DISPLAY_URL);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => {
+        this.displayConnected = true;
+        this._displayRetryTimer = 0;
+      };
+      ws.onclose = () => {
+        this.displayConnected = false;
+        this._displayWs = null;
+        this._scheduleDisplayRetry();
+      };
+      ws.onerror = () => {
+        this.displayConnected = false;
+        this._displayWs = null;
+      };
+      this._displayWs = ws;
+    } catch {
+      this._scheduleDisplayRetry();
+    }
+  }
+
+  _scheduleDisplayRetry() {
+    if (this._displayRetryTimer || !this.output) return;
+    this._displayRetryTimer = setTimeout(() => {
+      this._displayRetryTimer = 0;
+      if (this.output && !this._displayWs) this._connectDisplay();
+    }, 2000);
+  }
+
+  _disconnectDisplay() {
+    if (this._displayRetryTimer) { clearTimeout(this._displayRetryTimer); this._displayRetryTimer = 0; }
+    if (this._displayWs) {
+      try { this._displayWs.close(); } catch {}
+      this._displayWs = null;
+      this.displayConnected = false;
+    }
+  }
+
+  // Send a raw 16-bit RGB565 frame to the display helper. The helper
+  // handles the XOR mask and USB bulk transfer. `buf` should be
+  // HEIGHT * (WIDTH*2 + 128) bytes = 327,680 bytes.
+  sendDisplayFrame(buf) {
+    if (!this._displayWs || this._displayWs.readyState !== 1) return;
+    this._displayWs.send(buf);
+  }
+
+  // Built-in hello: spectral gradient with "CHROMAVOX" text.
+  _sendHelloDisplay() {
+    const W = PushController.DISPLAY_W, H = PushController.DISPLAY_H;
+    const LINE_STRIDE = W * 2 + 128;
+    const buf = new Uint8Array(H * LINE_STRIDE);
+    for (let y = 0; y < H; y++) {
+      const off = y * LINE_STRIDE;
+      for (let x = 0; x < W; x++) {
+        const hue = (x / W) * 360;
+        const l = 0.12 + 0.08 * Math.sin(y / H * Math.PI);
+        const [r, g, b] = hslToRgb(hue, 0.8, l);
+        const v = ((r >> 3) & 0x1F) | (((g >> 2) & 0x3F) << 5) | (((b >> 3) & 0x1F) << 11);
+        buf[off + x * 2] = v & 0xFF;
+        buf[off + x * 2 + 1] = (v >> 8) & 0xFF;
+      }
+    }
+    // Crude 5x7 text "CHROMAVOX" centered.
+    const CHARS = {
+      C:[0x0E,0x11,0x10,0x10,0x10,0x11,0x0E], H:[0x11,0x11,0x11,0x1F,0x11,0x11,0x11],
+      R:[0x1E,0x11,0x11,0x1E,0x14,0x12,0x11], O:[0x0E,0x11,0x11,0x11,0x11,0x11,0x0E],
+      M:[0x11,0x1B,0x15,0x15,0x11,0x11,0x11], A:[0x0E,0x11,0x11,0x1F,0x11,0x11,0x11],
+      V:[0x11,0x11,0x11,0x11,0x0A,0x0A,0x04], X:[0x11,0x0A,0x04,0x04,0x04,0x0A,0x11],
+    };
+    const text = 'CHROMAVOX', cw = 5, ch = 7, sc = 3, gap = 2;
+    const tw = text.length * (cw * sc + gap) - gap;
+    const sx = Math.floor((W - tw) / 2), sy = Math.floor((H - ch * sc) / 2);
+    for (let ci = 0; ci < text.length; ci++) {
+      const gl = CHARS[text[ci]]; if (!gl) continue;
+      const ox = sx + ci * (cw * sc + gap);
+      for (let r = 0; r < ch; r++) {
+        for (let c = 0; c < cw; c++) {
+          if (!(gl[r] & (1 << (cw - 1 - c)))) continue;
+          for (let dy = 0; dy < sc; dy++) for (let dx = 0; dx < sc; dx++) {
+            const px = ox + c * sc + dx, py = sy + r * sc + dy;
+            if (px < 0 || px >= W || py < 0 || py >= H) continue;
+            const o = py * LINE_STRIDE + px * 2;
+            buf[o] = 0xFF; buf[o + 1] = 0xFF;
+          }
+        }
+      }
+    }
+    this.sendDisplayFrame(buf);
+  }
+
+  // --- Display: sensor spectrograms from right-panel canvases ---
+
+  // Grab the sensor-readout canvases, downscale them into the right
+  // portion of the Push display frame, and send. The hello background
+  // is regenerated as a dim gradient on the left; sensor bars fill the
+  // right side. Called from main.js frame loop when displayConnected.
+  _displayBuf = null;
+  _scratchCanvas = null;
+  _scratchCtx = null;
+
+  _lastDisplaySend = 0;
+
+  // Send a rectangular region of RGB565 pixels to the display helper.
+  // The helper composites it onto its cached background frame.
+  // Message format: 8-byte header [x_lo, x_hi, y_lo, y_hi, w_lo, w_hi, h_lo, h_hi]
+  //                + w * h * 2 bytes of RGB565 pixel data.
+  // Send a region as PNG: 8-byte header (x, y as uint16 LE) + PNG data.
+  // Width/height come from the PNG itself. Async (canvas.toBlob).
+  _sendRegionPng(x, y, canvas) {
+    if (!this._displayWs || this._displayWs.readyState !== 1) return;
+    const ws = this._displayWs;
+    canvas.toBlob(blob => {
+      if (!blob || !ws || ws.readyState !== 1) return;
+      blob.arrayBuffer().then(ab => {
+        const header = new Uint8Array(4);
+        header[0] = x & 0xFF; header[1] = (x >> 8) & 0xFF;
+        header[2] = y & 0xFF; header[3] = (y >> 8) & 0xFF;
+        const msg = new Uint8Array(4 + ab.byteLength);
+        msg.set(header);
+        msg.set(new Uint8Array(ab), 4);
+        ws.send(msg);
+      });
+    }, 'image/png');
+  }
+
+  _scratchCanvas = null;
+  _scratchCtx = null;
+
+  // Send bench canvas (downscaled, left) + sensor spectrograms (right)
+  // as two region updates. Throttled to ~10fps.
+  updateDisplay(sensorBins, binCount, sensorCount, glCanvas) {
+    if (!this.displayConnected || !sensorBins) return;
+    const now = performance.now();
+    if (now - this._lastDisplaySend < 100) return;
+    this._lastDisplaySend = now;
+
+    const W = PushController.DISPLAY_W, H = PushController.DISPLAY_H;
+    const specW = Math.floor(W * 0.1);
+
+    // Ensure scratch canvases exist.
+    if (!this._scratchCanvas) {
+      this._scratchCanvas = document.createElement('canvas');
+      this._scratchCtx = this._scratchCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    if (!this._specCanvas) {
+      this._specCanvas = document.createElement('canvas');
+      this._specCtx = this._specCanvas.getContext('2d');
+    }
+
+    // --- Bench region (left): GL readPixels → full-size canvas → drawImage downscale → PNG ---
+    // Using drawImage for bilinear filtering so thin rays survive the downsample.
+    let benchRenderedW = 0;
+    if (glCanvas) {
+      const gl = glCanvas.getContext('webgl2');
+      if (gl) {
+        const sw = glCanvas.width, sh = glCanvas.height;
+        const dw = Math.round(H * (sw / sh));
+        const dh = H;
+        benchRenderedW = dw;
+
+        if (!this._glReadBuf || this._glReadBuf.length !== sw * sh * 4) {
+          this._glReadBuf = new Uint8Array(sw * sh * 4);
+        }
+        gl.readPixels(0, 0, sw, sh, gl.RGBA, gl.UNSIGNED_BYTE, this._glReadBuf);
+
+        // Blit GL pixels to a full-size offscreen canvas (Y-flipped).
+        if (!this._glCanvas2d) {
+          this._glCanvas2d = document.createElement('canvas');
+          this._glCtx2d = this._glCanvas2d.getContext('2d');
+        }
+        this._glCanvas2d.width = sw;
+        this._glCanvas2d.height = sh;
+        const fullImg = this._glCtx2d.createImageData(sw, sh);
+        const src = this._glReadBuf;
+        const dst = fullImg.data;
+        for (let y = 0; y < sh; y++) {
+          const srcRow = (sh - 1 - y) * sw * 4;
+          const dstRow = y * sw * 4;
+          for (let x = 0; x < sw; x++) {
+            const si = srcRow + x * 4, di = dstRow + x * 4;
+            dst[di] = src[si]; dst[di+1] = src[si+1];
+            dst[di+2] = src[si+2]; dst[di+3] = 255;
+          }
+        }
+        this._glCtx2d.putImageData(fullImg, 0, 0);
+
+        // Progressive halving then final bilinear step — preserves thin
+        // lines that a single large-ratio downsample would lose.
+        // Ping-pong between two canvases so source isn't cleared mid-step.
+        if (!this._halfCanvas) {
+          this._halfCanvas = document.createElement('canvas');
+          this._halfCtx = this._halfCanvas.getContext('2d');
+        }
+        const cvs = [this._scratchCanvas, this._halfCanvas];
+        const ctxs = [this._scratchCtx, this._halfCtx];
+        let cw = sw, ch = sh, srcCv = this._glCanvas2d, step = 0;
+        while (cw > dw * 2 || ch > dh * 2) {
+          const nw = Math.max(dw, Math.ceil(cw / 2));
+          const nh = Math.max(dh, Math.ceil(ch / 2));
+          const dst = cvs[step & 1];
+          const dctx = ctxs[step & 1];
+          dst.width = nw; dst.height = nh;
+          dctx.imageSmoothingEnabled = true;
+          dctx.imageSmoothingQuality = 'medium';
+          dctx.drawImage(srcCv, 0, 0, nw, nh);
+          srcCv = dst; cw = nw; ch = nh; step++;
+        }
+        // Final step to exact target size.
+        const final = cvs[step & 1];
+        const fctx = ctxs[step & 1];
+        final.width = dw; final.height = dh;
+        fctx.imageSmoothingEnabled = true;
+        fctx.imageSmoothingQuality = 'medium';
+        fctx.drawImage(srcCv, 0, 0, dw, dh);
+        this._sendRegionPng(0, 0, final);
+      }
+    }
+
+    // --- Sensor region: render to canvas → PNG, right of bench ---
+    if (sensorCount > 0) {
+      const regionH = H;
+      this._specCanvas.width = specW;
+      this._specCanvas.height = regionH;
+      const ctx = this._specCtx;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, specW, regionH);
+
+      let maxVal = 1e-6;
+      for (let i = 0; i < sensorBins.length; i++) {
+        if (sensorBins[i] > maxVal) maxVal = sensorBins[i];
+      }
+
+      const barH = Math.max(1, Math.floor(regionH / sensorCount));
+      for (let s = 0; s < sensorCount; s++) {
+        const dy = s * barH;
+        if (dy >= regionH) break;
+        for (let x = 0; x < specW; x++) {
+          const b = Math.floor(x / specW * binCount);
+          const v = sensorBins[s * binCount + b] / maxVal;
+          if (v < 0.01) continue;
+          const wl = 380 + (b + 0.5) / binCount * 400;
+          const rgb = wavelengthToRGB(wl);
+          const r = Math.round(rgb[0] * Math.min(1, v) * 255);
+          const g = Math.round(rgb[1] * Math.min(1, v) * 255);
+          const bl = Math.round(rgb[2] * Math.min(1, v) * 255);
+          ctx.fillStyle = `rgb(${r},${g},${bl})`;
+          ctx.fillRect(x, dy, 1, barH);
+        }
+      }
+      this._sendRegionPng(benchRenderedW, 0, this._specCanvas);
+    }
   }
 
   // Update scale layout. Called from main.js when mode changes.

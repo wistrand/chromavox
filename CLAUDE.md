@@ -11,8 +11,9 @@ Plain HTML + ES modules + WebGL2, no dependencies.
 ## Run
 
 ```
-npm start          # node serve.js, port 8005
-node serve.js 9000 # override port
+npm start                    # node serve.js, port 8005
+node serve.js 9000           # override port
+node serve.js --push-display # also spawn Push display sidecar
 ```
 
 ES modules require HTTP (not `file://`). Server ROOT is `docs/`, which is

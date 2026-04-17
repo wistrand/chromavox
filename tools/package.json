@@ -1,0 +1,15 @@
+{
+  "name": "chromavox-push-display",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local helper: bridges WebSocket frames to the Push 2/3 display via libusb",
+  "scripts": {
+    "start": "node push-display.js"
+  },
+  "dependencies": {
+    "pngjs": "^7.0.0",
+    "usb": "^2.14.0",
+    "ws": "^8.18.0"
+  }
+}

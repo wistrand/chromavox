@@ -23,6 +23,11 @@
   fits within the GPU's component limit) if you add a new element
   shape that needs more vertices than the current circle (128).
 
+- `preserveDrawingBuffer: true` is set on the WebGL context so that
+  `gl.readPixels` returns valid data for the Push display downsample.
+  This has a minor performance cost on some GPUs but is required for
+  reliable readback.
+
 ## Physics
 
 - `hyper` and `diamond` materials illustrate the `n < 2` TIR

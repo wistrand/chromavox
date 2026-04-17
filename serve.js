@@ -7,7 +7,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 
 const ROOT = resolve(new URL('./docs/', import.meta.url).pathname);
-const PORT = parseInt(process.argv[2] || process.env.PORT || '8005', 10);
+const portArg = process.argv.find(a => /^\d+$/.test(a));
+const PORT = parseInt(portArg || process.env.PORT || '8005', 10);
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -71,3 +72,17 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`chromavox: http://localhost:${PORT}/`);
 });
+
+// Optionally spawn the Push display helper.
+// Usage: node serve.js [port] --push-display
+if (process.argv.includes('--push-display')) {
+  import('node:child_process').then(({ spawn }) => {
+    const toolsDir = resolve(new URL('./tools/', import.meta.url).pathname);
+    const child = spawn(process.execPath, ['push-display.js'], {
+      cwd: toolsDir,
+      stdio: 'inherit',
+    });
+    child.on('error', err => console.warn('push-display: failed to start:', err.message));
+    process.on('exit', () => child.kill());
+  });
+}

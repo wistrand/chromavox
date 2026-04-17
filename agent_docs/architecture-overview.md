@@ -45,10 +45,12 @@ No dependencies.
   voice with per-sample gain smoothing.
 - `docs/push.js` — Ableton Push 2/3 integration: 8x8 RGB pixel map,
   dynamic palette management, sensor-to-pad color mapping, encoder-to-
-  element dispatch, and in-key layout computation. The Push hardware
-  sends fixed notes 36-99; `push.js` computes scale-degree layout
-  (`row * rowOffset + col`) in software via `fourthOffset()`.
-  `push.setScale(scaleName)` updates row offset and scale length.
+  element dispatch, in-key layout computation, and Push display bridge.
+  The Push hardware sends fixed notes 36-99; `push.js` computes
+  scale-degree layout (`row * rowOffset + col`) in software via
+  `fourthOffset()`. `push.setScale(scaleName)` updates row offset and
+  scale length. `_connectDisplay()` streams bench canvas and sensor
+  spectrogram PNGs to the display sidecar via WebSocket.
 - `docs/main.js` — wiring + dirty-flag render loop + device pickers +
   localStorage persistence (auto-save on `markDirty`, restore on load).
   Spectrum readout smoothing (`_displayBins`, `_peakMax`, `_blurBuf`)
@@ -60,6 +62,11 @@ No dependencies.
   emulates GitHub Pages' clean-URL fallback: a request for `/foo` falls
   back to `/foo.html` when `foo` doesn't exist. Containment is checked
   both on the incoming URL and on the appended/directory-index path.
+  `--push-display` flag spawns `tools/push-display.js` as a child
+  process. Port argument only picks up numeric argv (skips flags).
+- `tools/push-display.js` — Node.js sidecar that bridges WebSocket
+  (port 9100) to Push USB display. Dependencies: `usb`, `pngjs`, `ws`
+  (`tools/package.json`). See `agent_docs/architecture-push.md`.
 
 ## Coordinate system
 

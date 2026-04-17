@@ -2,7 +2,8 @@
 
 ## Audio in (`docs/mic.js`)
 
-Toggle `Audio in` in the toolbar. `mic-source` picks the signal
+Toggle `Audio in` in the toolbar (or press `A`; Push Play button
+CC 85 also toggles). `mic-source` picks the signal
 generator:
 
 - `microphone` — real mic via `getUserMedia`. Browser AGC / AEC / NS

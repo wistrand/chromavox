@@ -46,21 +46,30 @@ The Push 3 is a composite USB device with 6 interfaces:
 - Chrome won't show composite devices with kernel-claimed interfaces
   on Linux.
 
-## Workaround: sidecar process
+## Sidecar process (implemented)
 
-A small local helper (~50 lines) bridges browser → display:
+`tools/push-display.js` bridges browser → display:
 
-1. Browser renders to a 960x160 canvas
-2. Sends pixel data to the helper via WebSocket
-3. Helper writes to the Push display via libusb bulk transfer
+1. Shows a hello frame on startup (spectral gradient + logo + CHROMAVOX text)
+2. Listens on `ws://localhost:9100` for PNG region updates from the browser
+3. Composites regions onto the base frame using a regionMap
+4. Refreshes the USB display at 30fps
 
-The helper uses `node-usb` (or Python `usb.core`) and only claims
-interface 0, leaving MIDI/audio interfaces for the OS.
+Dependencies: `usb`, `pngjs`, `ws` (in `tools/package.json`).
+Only claims interface 0, leaving MIDI/audio interfaces for the OS.
 
-Existing implementation for Push 2:
+Start via `node serve.js --push-display` or standalone
+`cd tools && node push-display.js`.
+
+Browser side (`push.js`): `_connectDisplay()` connects with retry
+every 2s. Sends two PNG regions per update at ~10fps: bench canvas
+(left, progressive-halving downsample from GL readPixels) and sensor
+spectrograms (right, rendered from sensorBins). Protocol: 4-byte
+header (x, y as uint16 LE) + PNG bytes.
+
+Reference implementation for Push 2:
 [ableton-push-canvas-display](https://github.com/halfbyte/ableton-push-canvas-display)
-(Node.js, archived May 2025, Push 2 only, but protocol is likely
-identical for Push 3).
+(Node.js, archived May 2025, Push 2 only, protocol identical for Push 3).
 
 ## Push 3 vs Push 2 differences
 
@@ -71,11 +80,14 @@ identical for Push 3).
 - The Push 2 official spec is at:
   https://github.com/Ableton/push-interface/blob/main/doc/AbletonPush2MIDIDisplayInterface.asc
 
-## What we could display
+## What is displayed
 
-If the sidecar bridge is built:
-- Mirror the Chromavox bench canvas (960x160 crop/downsample)
-- Sensor spectrum bars per voice
+Currently:
+- Bench canvas (left region, aspect-preserved progressive-halving downsample)
+- Sensor spectrogram (right region, rendered from sensorBins)
+- Hello frame on startup (spectral gradient + logo + CHROMAVOX text)
+
+Future:
 - Element names and property values under each encoder
 - Scale/mode/base info
 - Delay particle count

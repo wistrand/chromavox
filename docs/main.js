@@ -130,8 +130,8 @@ push.onCC = (cc, val) => {
 };
 // Route mic CC events: transport buttons handled here, encoders to Push.
 mic.onCC = (cc, val) => {
-  // Play button (CC 85) toggles audio in. Only on press (val > 0).
-  if (cc === 85 && val > 0) { micBtn.click(); return; }
+  // Play button (CC 85) toggles audio out. Only on press (val > 0).
+  if (cc === 85 && val > 0) { synthBtn.click(); return; }
   push.handleCC(cc, val);
 };
 
@@ -737,6 +737,11 @@ function frame() {
     dirty = false;
     tracer.trace(scene);
     renderer.draw(scene, tracer);
+    // Read GL pixels for Push display immediately after draw, while
+    // the framebuffer is guaranteed to still have content.
+    if (push.output) {
+      push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas);
+    }
     renderer.updateReadout(scene, tracer);
   }
 
@@ -744,7 +749,7 @@ function frame() {
     synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount);
   }
 
-  // Push pad LED feedback: color pads by sensor dominant wavelength.
+  // Push pad LED feedback (no GL dependency — runs every frame).
   if (push.output) {
     push.updateFromSensors(tracer.sensorBins, tracer.binCount, scene.sensorCount, scene.emitter, scene.runtime);
   }

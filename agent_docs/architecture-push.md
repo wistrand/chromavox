@@ -163,7 +163,9 @@ way regardless of kind.
 
 - **Attach**: `push.attach(midiAccess, inputPort)` — finds the
   matching output port by name, tests SysEx with a dummy palette
-  entry, resets pixel map and palette state, plays the init animation.
+  entry, resets pixel map and palette state, sends 64 Note On
+  messages with velocity 0 to clear any LEDs left over from a
+  previous session, then plays the init animation.
 - **Detach**: `push.detach()` — clears all pad LEDs via flush,
   nulls output.
 - **Scale change**: `push.setScale(scaleName)` — updates row offset
@@ -183,12 +185,37 @@ matching. See `notes/push3-midi.md` for details.
 
 ## Push transport buttons
 
-- **Play** (CC 85): toggles Audio in on press (same as the `A` key
-  shortcut).
+- **Play** (CC 85): toggles Audio out on press (clicks `synthBtn`).
+
+## Push display sidecar
+
+The Push 3 display (960x160, USB bulk) can't be driven from the
+browser (WebUSB can't claim interfaces on composite USB devices).
+A Node.js sidecar (`tools/push-display.js`) bridges WebSocket to
+USB. See `notes/push3-display.md` for protocol details.
+
+- **Start**: `node serve.js --push-display` (spawns child process),
+  or standalone `cd tools && node push-display.js`.
+- **Dependencies**: `usb`, `pngjs`, `ws` (in `tools/package.json`).
+- **Hello frame**: on startup, composites a spectral gradient + logo
+  + CHROMAVOX text onto the display.
+- **Protocol**: browser connects via `ws://localhost:9100`. Each
+  message is a 4-byte header (x, y as uint16 LE) + PNG bytes. The
+  sidecar composites regions onto the base frame using a regionMap
+  and refreshes at 30fps.
+- **Browser side** (`push.js`): `_connectDisplay()` connects with
+  retry every 2s. Sends two PNG regions per update at ~10fps: bench
+  canvas (left, progressive-halving downsample from GL readPixels)
+  and sensor spectrograms (right, rendered from sensorBins).
+  `_sendRegionPng(x, y, canvas)` uses `canvas.toBlob('image/png')`.
+- **preserveDrawingBuffer**: WebGL context uses
+  `preserveDrawingBuffer: true` for reliable GL readPixels.
+- **Progressive halving downsample**: bench bitmap ping-pongs between
+  two offscreen canvases, halving dimensions each step (~2:1) with
+  bilinear `imageSmoothingEnabled` for quality. Preserves thin ray
+  lines that single-step downsampling would lose.
 
 ## Future extensions
 
 - **Scene buttons** (CC 36-43): preset load.
 - **Touch strip**: map to sim rate or ray width.
-- **Display text**: Push 2/3 support SysEx display commands — could
-  show sensor labels or element names.
