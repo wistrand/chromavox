@@ -1,6 +1,6 @@
 // Entry: wire scene, tracer, renderer, UI; run the frame loop.
 
-import { createScene } from './scene.js';
+import { createScene, serializeScene, deserializeScene } from './scene.js';
 import { Tracer } from './raytracer.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
@@ -9,15 +9,31 @@ import { MicModulator, micBands } from './mic.js';
 import { SensorSynth } from './synth.js';
 import { scaleFreq } from './spectrum.js';
 
+const STORAGE_KEY = 'chromavox-scene';
+
 const canvas = document.getElementById('gl');
 const renderer = new Renderer(canvas);
-const scene = createScene();
+let scene;
+try {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  scene = saved ? deserializeScene(saved) : createScene();
+} catch {
+  scene = createScene();
+}
 // Sync bench size to canvas aspect so content fills the viewport.
 Object.assign(scene.bench, renderer.benchSize());
 const tracer = new Tracer();
 
 let dirty = true;
-const markDirty = () => { dirty = true; };
+const markDirty = () => {
+  dirty = true;
+  try { localStorage.setItem(STORAGE_KEY, serializeScene(scene)); } catch {}
+};
+function resetDisplay() {
+  _displayBins = new Float32Array(0);
+  _peakMax = 1e-6;
+  tracer.resetPersistence();
+}
 let lastFrameTime = performance.now() / 1000;
 
 const mic = new MicModulator();
@@ -42,7 +58,8 @@ function syncBaseSelect(hz) {
   }
   if (best && sel.value !== best.value) sel.value = best.value;
 }
-const ui = new UI(scene, canvas, markDirty);
+const ui = new UI(scene, canvas, markDirty, resetDisplay);
+ui.syncControls();
 ui.rebuildSensorReadout();
 
 const distortToggle = document.getElementById('distort-toggle');

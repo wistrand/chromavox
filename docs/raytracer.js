@@ -792,6 +792,16 @@ export class Tracer {
     for (const p of this._pools.values()) n += p.count;
     return n;
   }
+
+  // Clear all persistence state (exit segment cache, sensor persist
+  // accumulator, particle pools). Called on scene clear / load so stale
+  // data doesn't bleed into the new scene.
+  resetPersistence() {
+    this._exitSegCount = 0;
+    if (this._sensorPersist) this._sensorPersist.fill(0);
+    this._pools.clear();
+    this._localPolys.clear();
+  }
 }
 
 function raySeg(ox, oy, dx, dy, ax, ay, bx, by) {

@@ -1,6 +1,6 @@
 // UI: input handling, property panel, save/load.
 
-import { makeElement, worldEdges, pointInPolygon, serializeScene, deserializeScene, bumpIdCeiling } from './scene.js';
+import { makeElement, worldEdges, pointInPolygon, serializeScene, deserializeScene, bumpIdCeiling, createScene } from './scene.js';
 import { MATERIALS } from './spectrum.js';
 
 // Undo/redo. Snapshots the mutable scene state (elements, emitter settings,
@@ -127,10 +127,11 @@ class History {
 }
 
 export class UI {
-  constructor(scene, canvas, onChange) {
+  constructor(scene, canvas, onChange, onSceneReset) {
     this.scene = scene;
     this.canvas = canvas;
     this.onChange = onChange;
+    this.onSceneReset = onSceneReset || (() => {});
     this.tool = 'select';
     this.selected = null;
     this.dragging = null;
@@ -328,6 +329,7 @@ export class UI {
   }
 
   syncControls() {
+    const ids = ['emitter-count', 'wl-min', 'wl-max', 'rays-per', 'spread', 'aperture', 'sensor-count'];
     document.getElementById('emitter-count').value = this.scene.emitter.count;
     document.getElementById('wl-min').value = this.scene.emitter.wlMin;
     document.getElementById('wl-max').value = this.scene.emitter.wlMax;
@@ -336,6 +338,9 @@ export class UI {
     document.getElementById('aperture').value = Math.round((this.scene.emitter.apertureFactor ?? 0.01) * 100);
     document.getElementById('sensor-count').value = this.scene.sensorCount;
     this.refreshEmitterLabels();
+    for (const id of ids) {
+      document.getElementById(id).dispatchEvent(new Event('change'));
+    }
   }
   refreshEmitterLabels() {
     document.getElementById('emitter-count-val').textContent = this.scene.emitter.count;
@@ -887,6 +892,7 @@ export class UI {
         this.select(null);
         this.rebuildSensorReadout();
         this.endEdit();
+        this.onSceneReset();
         this.onChange();
       } catch (err) {
         alert('Load failed: ' + err.message);
@@ -896,10 +902,18 @@ export class UI {
 
     document.getElementById('clear').addEventListener('click', () => {
       this.beginEdit();
-      this.scene.elements = [];
+      const fresh = createScene();
+      Object.assign(this.scene, fresh);
+      this.scene.emitter.disabled = new Set();
+      this.scene.emitter.micLevels = null;
+      this.scene.emitter.wlPerSource = null;
       this.select(null);
+      this.syncControls();
+      this.rebuildSensorReadout();
       this.endEdit();
+      this.onSceneReset();
       this.onChange();
+      try { localStorage.removeItem('chromavox-scene'); } catch {}
     });
 
     this.bindPresets();
@@ -940,6 +954,7 @@ export class UI {
         this.select(null);
         this.rebuildSensorReadout();
         this.endEdit();
+        this.onSceneReset();
         this.onChange();
       } catch (err) {
         alert('Preset load failed: ' + err.message);
