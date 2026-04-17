@@ -43,6 +43,7 @@ html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: 
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  overflow-y: hidden;
   white-space: nowrap;
   flex-shrink: 0;
   height: 54px;
@@ -56,8 +57,7 @@ html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: 
 #toolbar .tb-sep { width: 1px; height: 26px; background: var(--border); margin: 0 6px; flex: 0 0 auto; }
 #toolbar .tb-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 #toolbar .tb-check input { margin: 0; }
-#toolbar .tb-preset { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
-#toolbar .tb-preset select { font: inherit; padding: 4px 6px; background: #1d222a; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; }
+#preset-select { font: inherit; padding: 6px 8px; background: #1d222a; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
 
 /* Left-panel tool grid style only applies when the class is there (kept for
    legacy — the toolbar uses flex, not grid). */
@@ -202,3 +202,35 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
   #app.show-right #right-panel { transform: translateX(0); box-shadow: 0 0 30px rgba(0,0,0,0.5); }
   .panel-toggle { display: block; }
 }
+
+/* Floating draggable window (stats, etc.) */
+.floating-window {
+  position: fixed;
+  z-index: 40;
+  min-width: 200px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  font-size: 12px;
+  color: var(--ink);
+  user-select: none;
+}
+.fw-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: #1a1e25;
+  border-radius: 6px 6px 0 0;
+  cursor: grab;
+}
+.fw-titlebar:active { cursor: grabbing; }
+.fw-title { font-weight: 600; font-size: 12px; }
+.fw-close {
+  background: none; border: none; color: var(--muted); font-size: 16px;
+  cursor: pointer; padding: 0 4px; line-height: 1;
+}
+.fw-close:hover { color: var(--ink); }
+.fw-body { padding: 8px 10px; }
+#stats-content { white-space: pre; font-family: monospace; font-size: 11px; line-height: 1.5; }

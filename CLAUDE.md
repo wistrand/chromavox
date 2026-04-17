@@ -83,8 +83,9 @@ Detailed notes are split into topic files under `agent_docs/`:
   has a `LOOK` entry in `renderer.js` controlling tint, distortion
   magnitude, falloff, edge glow, and opacity. Sharp vs soft edges come
   from `edgeWidth`; refractive distortion comes from `magnitude` and
-  `falloff`. Distortion itself is opt-in via the Distort toggle
-  (defaults off); rim glint and tint stay on regardless.
+  `falloff`. Distortion itself is opt-in via the Distort checkbox in
+  the left panel (below Selected, above Stats; defaults off); rim glint
+  and tint stay on regardless.
 - HDR rendering: ray FBO is `RGBA16F` (via `EXT_color_buffer_float`)
   so additive ray sums accumulate past 1.0 in linear space. Both blit
   and element fragment shaders apply Reinhard tone-map

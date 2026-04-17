@@ -438,6 +438,76 @@ window.addEventListener('resize', () => {
   markDirty();
 });
 
+// --- Floating stats window ---
+{
+  const statsWin = document.getElementById('stats-window');
+  const statsToggle = document.getElementById('stats-toggle');
+  const statsClose = statsWin.querySelector('.fw-close');
+  const statsContent = document.getElementById('stats-content');
+  const titlebar = statsWin.querySelector('.fw-titlebar');
+
+  // Position near top-right on first show.
+  let positioned = false;
+  function showStats() {
+    if (!positioned) {
+      statsWin.style.top = '64px';
+      statsWin.style.right = '12px';
+      statsWin.style.left = 'auto';
+      positioned = true;
+    }
+    statsWin.hidden = false;
+    statsToggle.checked = true;
+  }
+  function hideStats() {
+    statsWin.hidden = true;
+    statsToggle.checked = false;
+  }
+  statsToggle.addEventListener('change', () => {
+    if (statsToggle.checked) showStats(); else hideStats();
+  });
+  statsClose.addEventListener('click', hideStats);
+
+  // Dragging.
+  let dragOff = null;
+  titlebar.addEventListener('pointerdown', e => {
+    if (e.target.closest('.fw-close')) return;
+    e.preventDefault();
+    titlebar.setPointerCapture(e.pointerId);
+    const r = statsWin.getBoundingClientRect();
+    dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+    statsWin.style.right = 'auto';
+  });
+  titlebar.addEventListener('pointermove', e => {
+    if (!dragOff) return;
+    statsWin.style.left = (e.clientX - dragOff.x) + 'px';
+    statsWin.style.top  = (e.clientY - dragOff.y) + 'px';
+  });
+  titlebar.addEventListener('pointerup', () => { dragOff = null; });
+  titlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
+
+  // Update stats text each frame (only when visible).
+  window._updateStats = function() {
+    if (statsWin.hidden) return;
+    const segs = tracer.segmentCount;
+    const parts = tracer.activeParticleCount();
+    const pools = tracer._pools.size;
+    const els = scene.elements.length;
+    const sensors = scene.sensorCount;
+    const sources = scene.emitter.count;
+    const rays = scene.emitter.raysPerSource;
+    const spinning = scene.elements.filter(e => e.spin).length;
+    statsContent.textContent =
+      `Elements:   ${els}\n` +
+      `Sources:    ${sources}\n` +
+      `Sensors:    ${sensors}\n` +
+      `Rays/src:   ${rays}\n` +
+      `Segments:   ${segs}\n` +
+      `Particles:  ${parts}\n` +
+      `Pools:      ${pools}\n` +
+      `Spinning:   ${spinning}`;
+  };
+}
+
 function frame() {
   if (mic.active) {
     const s = mic.sample();
@@ -497,6 +567,7 @@ function frame() {
     synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount);
   }
 
+  window._updateStats();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

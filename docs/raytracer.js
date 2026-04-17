@@ -192,11 +192,19 @@ export class Tracer {
     }
 
     // Drop pools + local-polygon cache entries for deleted elements.
+    // Also flush persistence caches so stale exit segments and sensor
+    // deposits from the deleted element don't linger.
+    let poolDropped = false;
     for (const elId of [...this._pools.keys()]) {
       if (!elementMap.has(elId)) {
         this._pools.delete(elId);
         this._localPolys.delete(elId);
+        poolDropped = true;
       }
+    }
+    if (poolDropped) {
+      this._exitSegCount = 0;
+      if (this._sensorPersist) this._sensorPersist.fill(0);
     }
 
     // Bench walls: update reused structs instead of re-allocating each frame.
