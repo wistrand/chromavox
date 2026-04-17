@@ -77,10 +77,19 @@ pipeline. Every advance step also pushes one short trail segment into
 the shared ray buffer so the interior of the glass is drawn by the
 same shader as the ribbons outside.
 
+A `DELAY_MIN` threshold (0.0003) prevents near-zero delay values
+from triggering the particle path — below this, the element is
+treated as a normal dielectric.
+
+Exit segments from secondary rays and sensor deposits from secondary
+rays are smoothed via persistence caches (`PERSIST_DECAY = 0.80`)
+and a persistent sensor accumulator (`_sensorPersist`), both decayed
+each frame.
+
 `tracer.activeParticleCount()` is the idle gate. The render loop
 re-traces whenever the scene is `dirty` **or** any pool holds
 particles, and otherwise lets RAF idle. Non-delay scenes never
-populate a pool, so their cost is exactly the same as pre-Phase-2
+populate a pool, so their cost is exactly the same as before Phase 3
 aside from one property check in the ray hot loop.
 
 ## Run

@@ -60,6 +60,14 @@
 - `simRate` scales the advance `dt` but does **not** scale mic input
   sampling or the primary ray pass. It only affects time *inside* a
   delay material.
+- `DELAY_MIN` threshold (0.0003): elements with `delayK` below this
+  are treated as normal dielectrics — no particle capture. This
+  prevents near-zero delay values from triggering the particle path
+  unnecessarily.
+- Exit segment persistence cache and persistent sensor accumulator
+  (`PERSIST_DECAY = 0.80`) smooth secondary-ray output. If you see
+  "ghosting" of exit segments or sensor energy after input stops, this
+  is the decay tail, not a bug.
 
 ## Audio
 

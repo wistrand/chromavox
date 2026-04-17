@@ -92,9 +92,13 @@ the element's *local* frame.
 
 ## Delay / particle specifics
 
-- Each `ParticlePool` stores records as a flat `Float32Array`, 8
-  floats per particle: `[lx, ly, ldx, ldy, I, wl, lastLx, lastLy]`.
-  Compact-on-remove via swap-with-last.
+- `DELAY_MIN` threshold (0.0003): any element with `delayK` below
+  this is treated as a normal dielectric — no particle capture.
+- Each `ParticlePool` stores records as a flat `Float32Array`, 11
+  floats per particle: `[lx, ly, ldx, ldy, I, wl, lastLx, lastLy, r, g, b]`.
+  RGB is pre-computed at capture via `wavelengthToRGB` to avoid
+  calling it in the hot advance loop. Compact-on-remove via
+  swap-with-last.
 - At entry capture, the tracer refracts the primary ray through the
   boundary once to get the inward world direction, then transforms
   entry point and direction into element-local coordinates using
@@ -112,8 +116,25 @@ the element's *local* frame.
   particle in the pool with a reflected local direction.
 - Trail segments: one per particle per advance step, drawn in world
   coordinates from the previous `(lastLx, lastLy)` to the new
-  `(lx, ly)`, colored `wavelengthToRGB(wl) × I`. Same shader as
-  primary ribbons — no new draw pass.
+  `(lx, ly)`, colored using the pre-computed `(r, g, b) × I`. Same
+  shader as primary ribbons — no new draw pass.
+- Secondary emissions are stored in a flat `Float32Array`, 10 floats
+  per entry (world position, direction, intensity, wavelength, RGB,
+  source element id). Not an object array — avoids per-emission
+  allocation in the hot loop.
+- **Exit segment persistence cache** (`PERSIST_DECAY = 0.80`): exit
+  segments from secondary rays are cached and decayed each frame.
+  New entries are scaled by `(1 - DECAY) = 0.20` so steady-state
+  converges to 1x brightness. The cache is emitted into the segment
+  buffer after the secondary ray pass, smoothing the visual output
+  of delay exits across frames.
+- **Persistent sensor accumulator** (`_sensorPersist`): secondary-ray
+  sensor deposits use the same decay logic as exit segments. During
+  secondary ray tracing, an `_isSecondary` flag routes sensor deposits
+  to the persistent accumulator instead of the main `sensorBins`.
+  Merged into `sensorBins` at the end of `trace()`.
+- Local polygon arrays are reused across frames (written in-place,
+  not `.map()` allocated) to avoid per-frame allocation.
 - The tracer caches a local-polygon copy per element id keyed on
   `_localPolys`. Because particles are in local coords, moving or
   rotating the element doesn't invalidate held particles — only the

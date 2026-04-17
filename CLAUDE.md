@@ -28,6 +28,7 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [Elements](agent_docs/architecture-elements.md)
 - [Audio in / out](agent_docs/architecture-audio.md)
 - [UI & state](agent_docs/architecture-ui.md)
+- [Delay materials](agent_docs/architecture-delay.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
 
 ## Key invariants to remember
@@ -50,7 +51,8 @@ Detailed notes are split into topic files under `agent_docs/`:
   `bumpIdCeiling` keeps the running counter ahead of any restored max.
 - Rays render via instanced SDF quads, not GL line primitives — width
   and soft falloff are controlled by `renderer.rayWidth` and the
-  fragment shader.
+  fragment shader. Segments are 12 floats; no chase-related timing
+  fields.
 - Element rendering is a three-pass pipeline: rays → HDR FBO →
   tonemapped blit to screen → per-element SDF distortion pass sampling
   the same HDR FBO (also tonemapped) → overlay lines. Each material
@@ -136,3 +138,18 @@ Detailed notes are split into topic files under `agent_docs/`:
 - `endEdit` short-circuits while `this.dragging` is set so unrelated
   events (Shift keyup, slider change) can't prematurely seal the drag's
   pending history snapshot.
+- Delay materials (Phase 3 stateful slow-glass): each delay element
+  owns a `ParticlePool` in the tracer. Primary rays entering a delay
+  element are captured (not refracted through); particles advance each
+  frame, emit trail segments into the shared ray buffer, and exit as
+  secondary rays. `DELAY_MIN` threshold (0.0003): below this, delay
+  element is treated as a normal dielectric. Particle record is 11
+  floats: `[lx, ly, ldx, ldy, I, wl, lastLx, lastLy, r, g, b]` with
+  RGB pre-computed at capture. Secondary emissions stored in flat
+  Float32Array (10 floats per entry). Exit segment persistence cache
+  (`PERSIST_DECAY=0.80`) and persistent sensor accumulator
+  (`_sensorPersist`) smooth secondary-ray deposits across frames.
+  `tracer.activeParticleCount()` gates the RAF loop; `tracer.simRate`
+  (log-scaled 0.05x..4x) multiplies particle advance `dt`. No chase
+  clock, no onset detector, no `DelayNode`, no `delayFingerprint`.
+  `History.commit` returns void; UI constructor takes 3 args.

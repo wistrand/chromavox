@@ -42,6 +42,8 @@ extensionless paths resolve to the matching `.html`.
   keyboard claviature (ZXCVBNM/SDGHJ, `,`/`.` shift octaves). Mode selects
   log-spaced vs chromatic bucketing; Span widens chromatic buckets for
   broader range. Bucket color paints each source with its ladder colour.
+- **Sim rate** slider (in Audio in dropdown): log-scaled multiplier on
+  particle advance speed inside delay materials (0.05x..4x, default 1x).
 - **Audio out** (or press `Q`) enables an additive synth where each sensor
   is a voice whose pitch matches the input ladder and whose timbre comes
   from the wavelengths reaching that sensor.
@@ -60,7 +62,8 @@ extensionless paths resolve to the matching `.html`.
 - `docs/mic.js` — audio input (mic or synthetic) + FFT bucket extraction.
 - `docs/synth.js` — additive sensor synth.
 - `docs/main.js` — wiring, render loop, device pickers.
-- `docs/presets/` — preset scenes + `index.json` list.
+- `docs/presets/` — preset scenes + `index.json` list. Includes
+  `slow-glass.json` (6 sources, 256 rays, slow-glass block + 2 mirrors).
 - `serve.js` — zero-dep static server rooted at `docs/`.
 
 ## Materials
@@ -68,7 +71,10 @@ extensionless paths resolve to the matching `.html`.
 Dielectrics (with Beer-Lambert absorption band):
 - `crown` (N-BK7, clear), `flint` (N-SF11, rose-tinted), `fused` (clear),
   `water` (cyan-tinted), `diamond` (real n≈2.4; TIRs in 60° prisms),
-  `hyper` (synthetic ~4× flint dispersion, magenta-tinted).
+  `hyper` (synthetic ~4× flint dispersion, magenta-tinted),
+  `slowGlass` (crown-glass-shaped, `delayK = 0.002` — stateful delay
+  material; light is captured as particles inside the glass and
+  propagated in real time).
 
 Mirrors (wavelength-dependent reflectance):
 - `mirror` (neutral silver), `mirror-red`, `mirror-green`, `mirror-blue`
