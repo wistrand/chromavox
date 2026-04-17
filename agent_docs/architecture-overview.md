@@ -65,32 +65,23 @@ unconditionally — it's pure JS and expensive at high ray counts. When
 audio in is active the loop marks dirty each frame so buckets animate;
 when audio out is active the synth update also runs every frame.
 
-In addition to the dirty flag, the loop runs a **chase clock** (Phase 2,
-delay-materials feature). Two clocks share an epoch (`chaseStart`):
-`uTphysical` is real-time elapsed since the last re-arm and gates the
-synth-facing `sensorBins`; `uTvisual` is a phase-accumulator
-(`Σ dt·visualRate`) so mid-chase slider tweaks apply going forward
-instead of rewinding. Re-arm triggers are: a **delay-relevant** UI
-commit (via `UI.onRearm`; see the fingerprint note below), a scene load
-that changes the delay fingerprint, and a peak-hold mic onset detector.
-While `uTvisual < tracer.maxT` the render path runs every frame even
-with no dirty flag, so the chase animates; once the wavefront has fully
-drawn in, RAF idles back to dirty-driven redraws.
+Delay materials (Phase 3) add a stateful simulation layer on top. Each
+delay element owns a `ParticlePool` in the tracer; primary rays that
+cross a delay-material boundary are captured (stored as photon records
+in element-local coordinates) instead of refracting through. Each
+frame the tracer advances every pool by real wall-clock `dt`
+(optionally scaled by the **Sim rate** slider), decays intensity,
+finds any particle that crossed a local polygon edge, refracts it at
+exit, and re-emits it as a secondary ray into the same `castRay`
+pipeline. Every advance step also pushes one short trail segment into
+the shared ray buffer so the interior of the glass is drawn by the
+same shader as the ribbons outside.
 
-When `tracer.maxT === 0` (no delay element in the scene) the loop sets
-`renderer.uT = 1e6` instead of `uTvisual`, so the fragment shader's
-soft leading-edge fade never activates and rays render at full opacity
-from the first frame — pre-Phase-2 behaviour is preserved exactly for
-non-delay scenes.
-
-The UI's re-arm fires selectively. `History.commit` returns a
-`delayChanged` flag based on a `delayFingerprint(scene)` that hashes
-only the delay-material elements' id / material / effective `delayK` /
-position / rotation / size / color. Editing a non-delay element, or
-any edit at all in a no-delay scene, leaves the fingerprint unchanged
-and therefore doesn't drain the current ray image. Adding, removing,
-moving, reshaping, or re-tuning a delay element flips the fingerprint
-and re-arms the chase.
+`tracer.activeParticleCount()` is the idle gate. The render loop
+re-traces whenever the scene is `dirty` **or** any pool holds
+particles, and otherwise lets RAF idle. Non-delay scenes never
+populate a pool, so their cost is exactly the same as pre-Phase-2
+aside from one property check in the ray hot loop.
 
 ## Run
 

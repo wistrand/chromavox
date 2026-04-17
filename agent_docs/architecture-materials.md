@@ -49,26 +49,34 @@ absorption (glass) or reflectance (mirrors).
 
 ## Delay materials
 
-Any dielectric can carry an optional `delayK` field — seconds per bench
-unit of internal path. The tracer maintains two parallel time
-accumulators inside the ray hot loop (see
-`architecture-raytracer.md`):
+Any dielectric can carry an optional `delayK` field — seconds per
+bench unit of local path. Under Phase 3 this is the parameter that
+governs a genuine time-stepped simulation, not an animation rate:
 
-- `rayTimeAudio` — advances **only while inside** a `delayK`
-  material. Clamped to `MAX_DELAY = 2 s` to match the
-  `DelayNode.maxDelayTime` ceiling on the synth side. The synth reads
-  the amplitude-weighted per-sensor mean as `tracer.sensorDelay[s]`
-  and drives a per-voice `DelayNode`.
-- `rayTimeVisual` — advances across every segment at `propK = max(
-  delayK, VACUUM_PROP_K )`. With the default `VACUUM_PROP_K = 0`,
-  vacuum is lightspeed: segments outside delay glass emit with
-  `tStart == tEnd == 0` and render instantly; only segments inside a
-  `delayK` material crawl. Per-segment `tStart`/`tEnd` drive the
-  fragment shader's chase animation.
+- **Primary rays that enter a `delayK` element are captured**, not
+  refracted through. `castRay` records a photon particle in the
+  element's local-coordinate `ParticlePool` (position + inward
+  direction + current intensity + wavelength) and terminates that
+  primary path. The interior of the glass is never drawn by the
+  primary tracer.
+- **Each frame the tracer advances every pool** by
+  `step = (1 / delayK) * dt * simRate`, emits one short trail
+  segment in world coords (drawn by the normal ray shader), and
+  decays intensity by Beer-Lambert over `step`.
+- **Particles exit** when an advance step crosses a local polygon
+  edge. The tracer clips to the crossing, refracts out through the
+  boundary (Snell against the outside medium at the exit world
+  point), and queues the secondary ray for the same frame's
+  `castRay` pipeline. Sensor deposits happen when the secondary ray
+  reaches the sensor wall — so a photon that spent 0.4 s inside the
+  glass deposits on the sensor 0.4 s of wall-clock time after it
+  entered.
 
-The shipped material `slowGlass` is a crown-glass-shaped dielectric
-with `delayK = 0.002` (2 ms per bench unit). Composes naturally with
-refraction + absorption; nothing else in the tracer or renderer needs
-to know it's "special". A per-element `el.delayK` slider in the
-property panel lets any dielectric carry its own delay override — the
-fingerprint logic in `ui.js` picks up that field too.
+Nothing else in the tracer or renderer needs to know a material is
+"delay". The shipped material `slowGlass` is a crown-glass-shaped
+dielectric with `delayK = 0.002` (2 ms per bench unit); a per-element
+`el.delayK` slider in the property panel lets any dielectric carry a
+delay override. TIR at entry (sharp grazing angle hitting a
+high-index delay material) keeps the primary ray in the normal
+reflection path — the particle is only created after a successful
+refractive crossing.

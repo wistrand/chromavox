@@ -1,7 +1,13 @@
 # Plan: Delay Materials
 
-Status: **Both phases shipped.** Phase 1 (audio-only delay) and Phase 2
-(visual chase + dual-clock gating) live in `main` as of 2026-04-15.
+Status: **Superseded by `plan-stateful-slow-glass.md` (Phase 3).**
+Phase 1 (audio-only `DelayNode` echo) and Phase 2 (one-shot visual
+chase + dual-clock gating) shipped to main, then were replaced
+wholesale in 2026-04-16 by the stateful particle simulation — the
+`DelayNode`, chase clock, onset detector, and delay-fingerprint
+re-arm machinery are all gone. This file remains for context; for
+current behaviour see `plan-stateful-slow-glass.md` and the
+architecture docs.
 
 A new optical material kind that adds **temporal delay** to light passing
 through it — both as an audio echo on the synth side and as a visible

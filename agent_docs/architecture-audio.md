@@ -77,34 +77,24 @@ drives one voice with multiple sine partials (count is a constant in
 - Master gain slider drives `this.master.gain`.
 - Output device picker uses `AudioContext.setSinkId()` where
   supported. Older browsers silently fall back to the system default.
-- **Per-voice delay**: each voice has a `voiceMix → dryGain → master`
-  path plus a parallel `voiceMix → wetGain → DelayNode → master` tap.
-  `delayNode.delayTime` tracks `tracer.sensorDelay[s]` (the
-  amplitude-weighted mean ray-arrival time at sensor `s`) via
-  `setTargetAtTime`. Echoes the resynth voice, not the live mic input
-  — fits the existing vocoder-style design.
-- The shipped delay material (`slowGlass`, with `delayK = 0.002 s`
-  per bench unit) is a regular dielectric; place one in front of a
-  sensor to hear an echo whose tail length scales with the path
-  through it. `MAX_DELAY = 2 s` matches the `DelayNode.maxDelayTime`
-  ceiling and the tracer's `rayTimeAudio` clamp.
-- **Chase gating** (Phase 2): `tracer.sensorBins` /
-  `tracer.sensorDelay` are filled from the per-frame event log via
-  `rebuildSensorsGated(uTphysical)` — events whose `rayTimeVisual`
-  exceeds the real-time chase clock are skipped, so on a re-arm the
-  synth-facing spectrum drains and refills as the wavefront sweeps
-  back across the bench. The visual rate slider only stretches
-  `uTvisual`, not `uTphysical`, so audio echo timing remains a function
-  of `delayK` × geometry regardless of slider position. In a scene with
-  no delay material every event carries `rayTimeVisual == 0` and
-  `rayTimeAudio == 0`, so the gate is a no-op, the synth reads a fully
-  populated spectrum, and `DelayNode.delayTime` stays at 0s — identical
-  to pre-Phase-2 behaviour.
-- **Selective re-arm**: the visual/audio chase only re-arms when the
-  scene's *delay fingerprint* changes (see `delayFingerprint` in
-  `ui.js`). Moving a crown-glass prism, tweaking a mirror's hue, or
-  any edit at all in a no-delay scene leaves audio untouched — no
-  drain, no echo tail glitch.
+- **Optical delay** (Phase 3): each delay element holds a
+  `ParticlePool` in the tracer; photons that enter a slow-glass are
+  captured and propagated one advance-step per frame at
+  `1 / delayK` bench units per second. When they exit, they refract
+  out and contribute to the sensor on the frame they arrive. The
+  synth doesn't need a `DelayNode` — audio delay is the *physical*
+  result of photons arriving late. Voices go
+  `voiceMix → master` directly.
+- The shipped delay material (`slowGlass`, `delayK = 0.002 s` per
+  bench unit) is a regular dielectric; place one in front of a
+  sensor to hear the note arrive late, with its attack stretched
+  over the transit time.  Hold a keyboard note and release it — the
+  synth keeps playing until the last held photon drains out of the
+  glass, because the tracer is still depositing on the sensor every
+  frame during that drain.
+- **Sim rate** slider (Audio in dropdown): log-scaled multiplier
+  on the particle advance `dt`. `4×` makes slow-glass drain 4× faster;
+  `0.25×` makes it 4× more viscous. Default 1× (real time).
 
 ## Input/output symmetry
 

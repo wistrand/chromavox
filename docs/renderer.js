@@ -19,14 +19,12 @@ in vec2 aCorner;
 in vec4 aSeg;
 in vec4 aCol1;
 in vec4 aCol2;
-in vec2 aTime;
 uniform vec2 uBench;
 uniform float uWidth;
 out float vAlong;
 out float vSide;
 out vec4 vCol1;
 out vec4 vCol2;
-out vec2 vTime;
 void main() {
   vec2 p1 = aSeg.xy;
   vec2 p2 = aSeg.zw;
@@ -43,7 +41,6 @@ void main() {
   vSide = aCorner.y;
   vCol1 = aCol1;
   vCol2 = aCol2;
-  vTime = aTime;
 }`;
 
 const RAY_FS = `#version 300 es
@@ -52,22 +49,12 @@ in float vAlong;
 in float vSide;
 in vec4 vCol1;
 in vec4 vCol2;
-in vec2 vTime;
-uniform float uT;
-uniform float uHeadWidth;
 out vec4 outColor;
 void main() {
   float d = abs(vSide);
   float amp = 1.0 - smoothstep(0.0, 1.0, d);
   vec4 c = mix(vCol1, vCol2, vAlong);
-  // Phase 2 chase: each fragment's arrival time is a linear interpolation
-  // of the segment's tStart..tEnd. Discard pixels not yet reached, soft-fade
-  // the leading edge so the wavefront doesn't read as a hard sweep line.
-  float tAt = mix(vTime.x, vTime.y, vAlong);
-  if (tAt > uT) discard;
-  float head = 1.0 - smoothstep(uT - uHeadWidth, uT, tAt);
-  float a = amp * head;
-  outColor = vec4(c.rgb * a, c.a * a);
+  outColor = vec4(c.rgb * amp, c.a * amp);
 }`;
 
 const BLIT_VS = `#version 300 es
@@ -262,15 +249,12 @@ export class Renderer {
     // --- Programs ---
     this.rayProgram = buildProgram(gl, RAY_VS, RAY_FS);
     this.ray = {
-      aCorner:    gl.getAttribLocation(this.rayProgram, 'aCorner'),
-      aSeg:       gl.getAttribLocation(this.rayProgram, 'aSeg'),
-      aCol1:      gl.getAttribLocation(this.rayProgram, 'aCol1'),
-      aCol2:      gl.getAttribLocation(this.rayProgram, 'aCol2'),
-      aTime:      gl.getAttribLocation(this.rayProgram, 'aTime'),
-      uBench:     gl.getUniformLocation(this.rayProgram, 'uBench'),
-      uWidth:     gl.getUniformLocation(this.rayProgram, 'uWidth'),
-      uT:         gl.getUniformLocation(this.rayProgram, 'uT'),
-      uHeadWidth: gl.getUniformLocation(this.rayProgram, 'uHeadWidth'),
+      aCorner: gl.getAttribLocation(this.rayProgram, 'aCorner'),
+      aSeg:    gl.getAttribLocation(this.rayProgram, 'aSeg'),
+      aCol1:   gl.getAttribLocation(this.rayProgram, 'aCol1'),
+      aCol2:   gl.getAttribLocation(this.rayProgram, 'aCol2'),
+      uBench:  gl.getUniformLocation(this.rayProgram, 'uBench'),
+      uWidth:  gl.getUniformLocation(this.rayProgram, 'uWidth'),
     };
 
     this.blitProgram = buildProgram(gl, BLIT_VS, BLIT_FS);
@@ -340,12 +324,6 @@ export class Renderer {
     // Width of rays in bench units. 2–3 is a nice range for a 900-tall bench.
     this.rayWidth = 2.5;
 
-    // Phase 2 chase clock (seconds). Defaults large so rays render fully.
-    // main.js writes this each frame from the visual clock; the leading
-    // edge has a soft fade `headWidth` seconds wide.
-    this.uT = 1e9;
-    this.headWidth = 0.04;
-
     // Refractive distortion through glass is optional; the rim glint and
     // tint stay on regardless.
     this.distortEnabled = false;
@@ -396,12 +374,10 @@ export class Renderer {
     gl.useProgram(this.rayProgram);
     gl.uniform2f(this.ray.uBench, scene.bench.w, scene.bench.h);
     gl.uniform1f(this.ray.uWidth, this.rayWidth);
-    gl.uniform1f(this.ray.uT, this.uT);
-    gl.uniform1f(this.ray.uHeadWidth, this.headWidth);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.segBuf);
     gl.bufferData(gl.ARRAY_BUFFER,
-      tracer.segmentData.subarray(0, tracer.segmentCount * 14), gl.DYNAMIC_DRAW);
-    const segStride = 14 * 4;
+      tracer.segmentData.subarray(0, tracer.segmentCount * 12), gl.DYNAMIC_DRAW);
+    const segStride = 12 * 4;
     gl.enableVertexAttribArray(this.ray.aSeg);
     gl.vertexAttribPointer(this.ray.aSeg, 4, gl.FLOAT, false, segStride, 0);
     gl.vertexAttribDivisor(this.ray.aSeg, 1);
@@ -411,9 +387,6 @@ export class Renderer {
     gl.enableVertexAttribArray(this.ray.aCol2);
     gl.vertexAttribPointer(this.ray.aCol2, 4, gl.FLOAT, false, segStride, 8 * 4);
     gl.vertexAttribDivisor(this.ray.aCol2, 1);
-    gl.enableVertexAttribArray(this.ray.aTime);
-    gl.vertexAttribPointer(this.ray.aTime, 2, gl.FLOAT, false, segStride, 12 * 4);
-    gl.vertexAttribDivisor(this.ray.aTime, 1);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.rayCornerBuf);
     gl.enableVertexAttribArray(this.ray.aCorner);
     gl.vertexAttribPointer(this.ray.aCorner, 2, gl.FLOAT, false, 0, 0);
@@ -424,7 +397,6 @@ export class Renderer {
     gl.vertexAttribDivisor(this.ray.aSeg, 0);
     gl.vertexAttribDivisor(this.ray.aCol1, 0);
     gl.vertexAttribDivisor(this.ray.aCol2, 0);
-    gl.vertexAttribDivisor(this.ray.aTime, 0);
 
     // --- Pass 2a: blit FBO → screen ---
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);

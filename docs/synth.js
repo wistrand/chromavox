@@ -3,20 +3,20 @@
 // spectrum. The wavelength bins are grouped into K harmonic partials — low
 // wavelengths feed the fundamental, high wavelengths feed upper harmonics —
 // so the sound's brightness tracks the color mix reaching each sensor.
+//
+// Phase 3: optical delay comes from the tracer's particle pools — sensor
+// deposits arrive late because the photons physically arrived late, not
+// because a post-synth `DelayNode` stretched them.  Voices connect
+// voiceMix → master directly with no wet/dry split.
 
 import { scaleFreq } from './spectrum.js';
-
-// Per-voice DelayNode max time. Matches the tracer's MAX_DELAY hard cap.
-// Fixed at construction (Web Audio constraint), so this is the absolute
-// ceiling for echo length — anything longer is clamped.
-const MAX_DELAY = 2.0;
 
 export class SensorSynth {
   constructor() {
     this.active = false;
     this.ctx = null;
     this.master = null;
-    this.voices = []; // { osc, gain }
+    this.voices = []; // { freq, harmonics, voiceMix }
     this.count = 0;
     this.volume = 0.25;
     this.mode = 'log';
@@ -26,9 +26,6 @@ export class SensorSynth {
     // Slow-decaying peak hold for amplitude normalization. Avoids zippering
     // when a ray sweeps across sensors and the instantaneous max jumps.
     this.peak = 1e-6;
-    // Wet/dry mix for the per-voice delay tap. dry stays at 1; wet > 0
-    // produces an audible echo proportional to that voice's mean delay.
-    this.wet = 0.5;
   }
 
   setStep(stepSemi) {
@@ -98,18 +95,9 @@ export class SensorSynth {
         const t = sensorCount > 1 ? i / (sensorCount - 1) : 0;
         freq = loHz * Math.pow(hiHz / loHz, t);
       }
-      // Per-voice mixer + dry/wet split + DelayNode. Each harmonic feeds
-      // the mixer; mixer splits to dry → master and wet → delay → master.
       const voiceMix = this.ctx.createGain();
       voiceMix.gain.value = 1;
-      const dryGain = this.ctx.createGain();
-      dryGain.gain.value = 1;
-      const wetGain = this.ctx.createGain();
-      wetGain.gain.value = this.wet;
-      const delayNode = this.ctx.createDelay(MAX_DELAY);
-      delayNode.delayTime.value = 0;
-      voiceMix.connect(dryGain).connect(this.master);
-      voiceMix.connect(wetGain).connect(delayNode).connect(this.master);
+      voiceMix.connect(this.master);
       const harmonics = [];
       for (let k = 1; k <= K; k++) {
         const f = freq * k;
@@ -123,7 +111,7 @@ export class SensorSynth {
         osc.start();
         harmonics.push({ osc, gain });
       }
-      this.voices.push({ freq, harmonics, voiceMix, dryGain, wetGain, delayNode });
+      this.voices.push({ freq, harmonics, voiceMix });
     }
     this.count = sensorCount;
   }
@@ -135,13 +123,10 @@ export class SensorSynth {
         h.gain.disconnect();
       }
       v.voiceMix?.disconnect();
-      v.dryGain?.disconnect();
-      v.wetGain?.disconnect();
-      v.delayNode?.disconnect();
     }
   }
 
-  update(sensorBins, binCount, sensorCount, sensorDelay) {
+  update(sensorBins, binCount, sensorCount) {
     if (!this.active) return;
     if (sensorCount !== this.count) this.rebuild(sensorCount);
     let maxPartial = 1e-6;
@@ -171,12 +156,6 @@ export class SensorSynth {
         // Slightly longer time constant smooths transient spikes from rays
         // sweeping across sensor strips.
         h.gain.gain.setTargetAtTime(v, now, 0.06);
-      }
-      // Drive this voice's delay tap from the per-sensor mean arrival time.
-      // Smoothing keeps voice → DelayNode parameter changes click-free.
-      if (sensorDelay) {
-        const d = Math.min(MAX_DELAY, Math.max(0, sensorDelay[s] || 0));
-        voice.delayNode.delayTime.setTargetAtTime(d, now, 0.05);
       }
     }
   }

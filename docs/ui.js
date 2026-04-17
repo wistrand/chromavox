@@ -62,36 +62,12 @@ function hslToHex(h, s, l) {
   return '#' + to2(0) + to2(8) + to2(4);
 }
 
-// Fingerprint of delay-relevant scene state. The chase only re-arms when
-// a delay element is added/removed, moved, reshaped, or its delayK is
-// tweaked — editing a non-delay element (or any element in a scene with
-// no delay material at all) leaves this fingerprint unchanged and
-// therefore doesn't drain the current ray image.
-function delayFingerprint(scene) {
-  const parts = [];
-  for (const el of scene.elements) {
-    const mat = MATERIALS[el.material];
-    const matDelay = mat && mat.delayK ? mat.delayK : 0;
-    const elDelay = typeof el.delayK === 'number' ? el.delayK : 0;
-    const effective = elDelay > 0 ? elDelay : matDelay;
-    if (effective <= 0) continue;
-    parts.push(
-      el.id, el.material, effective.toFixed(6),
-      el.x | 0, el.y | 0, (el.rot || 0).toFixed(3),
-      el.w | 0, el.h | 0, el.size | 0, el.color || ''
-    );
-  }
-  return parts.join('|');
-}
-
 class History {
   constructor(limit = 50) {
     this.past = [];
     this.future = [];
     this.limit = limit;
     this.pending = null;
-    // Remembered fingerprint at `beginEdit` time — set alongside `pending`.
-    this.pendingDelayFp = '';
   }
   _snap(scene) {
     return JSON.stringify({
@@ -123,26 +99,16 @@ class History {
   begin(scene) {
     if (this.pending !== null) return;
     this.pending = this._snap(scene);
-    this.pendingDelayFp = delayFingerprint(scene);
   }
-  // Returns { changed, delayChanged }. `changed` reflects any scene diff
-  // (drives undo/redo). `delayChanged` is a narrower flag used by main.js
-  // to decide whether to re-arm the visual chase animation.
   commit(scene) {
-    if (this.pending === null) return { changed: false, delayChanged: false };
+    if (this.pending === null) return;
     const cur = this._snap(scene);
-    const curDelayFp = delayFingerprint(scene);
-    let changed = false;
     if (cur !== this.pending) {
       this.past.push(this.pending);
       if (this.past.length > this.limit) this.past.shift();
       this.future.length = 0;
-      changed = true;
     }
-    const delayChanged = curDelayFp !== this.pendingDelayFp;
     this.pending = null;
-    this.pendingDelayFp = '';
-    return { changed, delayChanged };
   }
   undo(scene) {
     if (!this.past.length) return false;
@@ -161,14 +127,10 @@ class History {
 }
 
 export class UI {
-  constructor(scene, canvas, onChange, onRearm) {
+  constructor(scene, canvas, onChange) {
     this.scene = scene;
     this.canvas = canvas;
     this.onChange = onChange;
-    // Optional: fired when a commit actually changes the scene, or when a
-    // scene is loaded via preset/file. Phase 2 uses this to restart the
-    // visual chase animation.
-    this.onRearm = onRearm || (() => {});
     this.tool = 'select';
     this.selected = null;
     this.dragging = null;
@@ -185,11 +147,7 @@ export class UI {
   // Don't commit history while a drag is in flight — otherwise an
   // unrelated event (Shift keyup, slider change) can prematurely seal the
   // pending snapshot and the rest of the drag won't be recorded.
-  endEdit()   {
-    if (this.dragging) return;
-    const { delayChanged } = this.history.commit(this.scene);
-    if (delayChanged) this.onRearm();
-  }
+  endEdit()   { if (this.dragging) return; this.history.commit(this.scene); }
 
   bindShortcuts() {
     const STEP = 5;

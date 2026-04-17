@@ -84,28 +84,19 @@ hijacking the gesture.
 emitter settings, sensor count, bench, disabled source set).
 
 - `beginEdit` is lazy — captures pre-state on first mutation in a
-  burst. Also snapshots a `delayFingerprint(scene)` for the Phase 2
-  chase re-arm hook.
-- `endEdit` commits if the snapshot actually changed, and returns
-  `{changed, delayChanged}`. `delayChanged` is true only when the
-  delay-fingerprint diff is non-empty (see below).
-- `UI.onRearm` (constructor arg #4, called by `endEdit` when
-  `delayChanged`) fires the Phase 2 chase re-arm in `main.js`. Plain
-  edits — moving a prism, tweaking a mirror's hue, any edit at all in
-  a scene with no delay material — never re-arm and therefore never
-  drain the current ray image.
-- A continuous drag, slider scrub, or held arrow key becomes a single
-  undo entry.
+  burst.
+- `endEdit` commits if the snapshot actually changed.
+- A continuous drag, slider scrub, or held arrow key becomes a
+  single undo entry.
 - History restore calls `bumpIdCeiling()` so new placements don't
   collide with restored IDs.
 - The history depth limit is in the `History` constructor default.
 
-The **delay fingerprint** hashes only the delay-material elements:
-their id, material, effective `delayK` (per-element override or
-material default), x/y/rot, size/w/h, and color. Non-delay elements
-don't contribute. So a scene with no slow-glass produces an empty
-fingerprint and no edit ever re-arms; a scene with one slow-glass
-re-arms whenever that one element changes.
+Phase 3 does **not** couple the undo system to the delay simulation.
+Dragging or reshaping a delay element triggers normal re-traces, so
+its held particles continue advancing in the new local frame. Undo
+snaps geometry back but does not rewind the photon field — in-flight
+particles continue along their current local paths.
 
 Mutation entry points that bracket `beginEdit` / `endEdit`:
 

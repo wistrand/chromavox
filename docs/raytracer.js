@@ -1,5 +1,29 @@
-// CPU ray tracer. Emits per-frame segment records for the WebGL2 renderer
-// and updates per-sensor spectrum bins.
+// CPU ray tracer. Produces per-frame segment records for the WebGL2
+// renderer and updates per-sensor spectrum bins.
+//
+// Two-stage pipeline:
+//
+//   1. Stateless primary pass.  Rays are emitted from wall sources (left
+//      wall) and traced through lenses / prisms / mirrors / colored
+//      glass exactly once per frame.  When a primary ray crosses the
+//      boundary of a delay-material element (a dielectric with
+//      `delayK > 0`), it is *captured* — a particle record is appended
+//      to that element's local-coordinate pool, and the primary trace
+//      for that ray terminates.
+//
+//   2. Stateful particle pass.  Each delay element owns a buffer of
+//      photon particles in the element's local frame.  Each frame the
+//      buffer is advanced by `dt * simRate` (wall-clock time); particles
+//      that cross a local polygon edge are re-emitted as secondary rays
+//      into the normal `castRay` pipeline.  Every advance step also
+//      pushes one short trail-segment into the shared segment buffer so
+//      the interior of the glass is visibly filled with crawling light.
+//
+// Particles are stored in *element-local* coordinates so rotating,
+// translating, or scaling the element carries the in-flight wavefront
+// with it.  A particle is attached to exactly one element for its
+// lifetime: the element it first entered.  When that element is deleted
+// the pool is dropped entirely.
 
 import { wavelengthToRGB, materialN, elementAbsorption, elementReflectance, elementDelay } from './spectrum.js';
 import { worldEdges, pointInPolygon, materialOptics } from './scene.js';
@@ -8,45 +32,77 @@ const EPS = 1e-4;
 const MAX_BOUNCES = 18;
 const GLASS_LOSS = 0.985;       // per-surface attenuation
 const BASE_INTENSITY = 1.6;
-// Hard cap on per-ray accumulated audio delay; matches the synth-side
-// `DelayNode.maxDelayTime`. Pathological paths through deep delay glass
-// stop accumulating beyond this.
-const MAX_DELAY = 2.0;
-// Visual-only propagation rate in vacuum (seconds per bench unit).
-// Zero = lightspeed: rays outside delay materials draw in instantly and
-// only segments inside a `delayK` material crawl. Keeps the "slow glass"
-// effect localised to the glass; scenes without a delay element have
-// `tracer.maxT = 0` so RAF goes straight back to idle.
-const VACUUM_PROP_K = 0;
+// Particles below this intensity are culled on the advance pass.
+const PARTICLE_EPS = 0.002;
+// Floats per segment record in the vertex buffer:
+//   [p1x, p1y, p2x, p2y, c1r*I1, c1g*I1, c1b*I1, I1,
+//    c2r*I2, c2g*I2, c2b*I2, I2]
+const SEG_FLOATS = 12;
+// Floats per particle record in a ParticlePool:
+//   [lx, ly, ldx, ldy, I, wl, lastLx, lastLy]
+const PART_FLOATS = 8;
 
-// Per-frame output buffers, reused across frames.
-// segmentData is laid out as 12 floats per ray segment:
-//   [p1x, p1y, p2x, p2y, c1r*I1, c1g*I1, c1b*I1, I1, c2r*I2, c2g*I2, c2b*I2, I2]
-// The renderer expands each segment into an instanced SDF quad.
+// Per-delay-element particle store.  Flat `Float32Array` kept in the
+// element's local coordinate frame; `count` is the live record count.
+class ParticlePool {
+  constructor() {
+    this.count = 0;
+    this.data = new Float32Array(0);
+  }
+  ensureCapacity(n) {
+    const needed = n * PART_FLOATS;
+    if (this.data.length < needed) {
+      const next = new Float32Array(Math.max(needed, this.data.length * 2 || 256));
+      next.set(this.data);
+      this.data = next;
+    }
+  }
+  // Append a new particle at the local entry point with the local
+  // (already-refracted-inward) direction and current intensity/wavelength.
+  add(lx, ly, ldx, ldy, I, wl) {
+    this.ensureCapacity(this.count + 1);
+    const i = this.count * PART_FLOATS;
+    const d = this.data;
+    d[i    ] = lx;  d[i + 1] = ly;
+    d[i + 2] = ldx; d[i + 3] = ldy;
+    d[i + 4] = I;   d[i + 5] = wl;
+    d[i + 6] = lx;  d[i + 7] = ly;  // lastLx / lastLy seeded to entry
+    this.count++;
+  }
+  // Compact: move record at `src` into slot `dst`.  Used when removing
+  // a particle by swap-with-last.
+  _moveRecord(dst, src) {
+    if (dst === src) return;
+    const d = this.data;
+    const a = dst * PART_FLOATS, b = src * PART_FLOATS;
+    for (let k = 0; k < PART_FLOATS; k++) d[a + k] = d[b + k];
+  }
+  removeAt(i) {
+    this._moveRecord(i, this.count - 1);
+    this.count--;
+  }
+}
+
+// Per-frame output buffers, reused across frames.  Pools live on the
+// Tracer; they persist across `trace()` calls so held light survives
+// between frames.  That persistence is the whole Phase 3 feature.
 export class Tracer {
   constructor() {
     this.segmentData = new Float32Array(0);
     this.segmentCount = 0;
-    this.sensorBins = null;                    // Float32Array [sensor][bin] flat — gated snapshot
-    this.sensorDelay = null;                   // Float32Array [sensor] mean arrival time (s) — gated
-    this.sensorWeight = null;                  // Float32Array [sensor] Σ(I) — gated, for normalisation
+    this.sensorBins = null;                    // Float32Array [sensor][bin] flat
     this.sensorCount = 0;
     this.binCount = 64;
-    // Phase 2: per-sensor-hit event log. The gated sensor* arrays above are
-    // recomputed each frame from this log via rebuildSensorsGated(uT) so the
-    // synth-facing histogram and visual readouts can be ramped in over the
-    // chase animation.
-    // Each event = 5 floats: [sIdx, binIdx, I, rayTimeVisual, rayTimeAudio].
-    this.sensorEvents = new Float32Array(0);
-    this.sensorEventCount = 0;
-    // Maximum visual-clock arrival time across all rays for this trace —
-    // main.js uses it to know when the chase has fully drawn in.
-    this.maxT = 0;
-    // Total sensor-deposit energy this trace (sum of event I), unaffected
-    // by the chase gate. Used by the mic onset detector so a re-arm doesn't
-    // chase its own tail by reading half-filled gated bins.
-    this.totalEnergy = 0;
-    // Reusable scratch — avoid allocating inside the ray hot loop.
+    // Stateful per-delay-element particle pools keyed by element id.
+    this._pools = new Map();
+    // Absolute wall-clock timestamp of the previous `trace()` call —
+    // used to compute the advance `dt` for the particle pass.
+    this._lastTraceTime = 0;
+    // Global simulation-rate multiplier (Sim rate slider).  Scales dt
+    // in the advance pass; 1 = real time, 4 = particles advance 4× as
+    // fast through delay glass.
+    this.simRate = 1;
+    // Reusable scratch — avoid allocations inside hot loops.
     this._stack = [];
     this._walls = [
       { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 }, kind: 'abs' },
@@ -55,37 +111,64 @@ export class Tracer {
       { p1: { x: 0, y: 0 }, p2: { x: 0, y: 0 }, kind: 'abs' },
     ];
     this._elementInfos = [];
+    // Secondary-ray emission queue populated by the particle pass.
+    // Consumed as additional `castRay` origins after the wall-emitter
+    // loop.  Entries:
+    //   { ox, oy, dx, dy, wl, rgb, I, skipElId }
+    // `skipElId` tells castRay to pretend the exiting element doesn't
+    // exist for the first hit (the ray starts from just outside its
+    // boundary).
+    this._secondary = [];
+    // Local-polygon cache keyed by element id so the advance pass
+    // doesn't keep re-allocating polygon arrays.
+    this._localPolys = new Map();
   }
 
+  // Any element in the current scene that carries a non-zero delayK?
+  // Cached per-trace so the hot loop in `castRay` can short-circuit
+  // with one boolean test rather than re-computing per ray.
+  _hasDelay = false;
+
   ensureSegmentCapacity(n) {
-    const needed = n * 14;
+    const needed = n * SEG_FLOATS;
     if (this.segmentData.length < needed) {
       this.segmentData = new Float32Array(Math.max(needed, this.segmentData.length * 2 || 4096));
     }
   }
-  ensureSensorEventCapacity(n) {
-    const needed = n * 5;
-    if (this.sensorEvents.length < needed) {
-      this.sensorEvents = new Float32Array(Math.max(needed, this.sensorEvents.length * 2 || 1024));
-    }
-  }
 
-  // Main trace call. Produces line segments and sensor deposits.
+  // Main trace call.  Advances particle pools, then runs the primary
+  // ray pass, consuming secondary-ray emissions produced by the
+  // particle exits.
   trace(scene) {
     this.segmentCount = 0;
     const { bench, emitter, sensorCount, elements } = scene;
 
-    // Build edges for all elements.
+    // Build world edges for all elements and the element-info array the
+    // ray hot loop iterates.
     const edges = [];
     const elementMap = new Map();
     const elementInfos = this._elementInfos;
     elementInfos.length = 0;
+    this._hasDelay = false;
     for (const el of elements) {
       const { edges: eEdges, polygon } = worldEdges(el);
-      const info = { el, polygon };
+      const mat = materialOptics(el.material);
+      const dK = elementDelay(el, mat);
+      const info = { el, polygon, mat, delayK: dK };
       elementMap.set(el.id, info);
       elementInfos.push(info);
       for (const e of eEdges) edges.push(e);
+      if (dK > 0) this._hasDelay = true;
+    }
+
+    // Drop pools whose element is gone; clear the local-polygon cache
+    // so the advance pass always works against the current geometry
+    // (element resize / rotation changes the local polygon).
+    this._localPolys.clear();
+    for (const elId of [...this._pools.keys()]) {
+      if (!elementMap.has(elId)) {
+        this._pools.delete(elId);
+      }
     }
 
     // Bench walls: update reused structs instead of re-allocating each frame.
@@ -95,20 +178,36 @@ export class Tracer {
     W[2].p1.x = bench.w; W[2].p1.y = bench.h; W[2].p2.x = 0;       W[2].p2.y = bench.h;
     W[3].p1.x = 0;       W[3].p1.y = bench.h; W[3].p2.x = 0;       W[3].p2.y = 0;
 
-    // Sensor setup: sensors tile the right wall. Each sensor covers a strip.
+    // Sensor setup: sensors tile the right wall; each sensor covers a strip.
     if (this.sensorCount !== sensorCount || !this.sensorBins) {
       this.sensorCount = sensorCount;
       this.sensorBins = new Float32Array(sensorCount * this.binCount);
-      this.sensorDelay = new Float32Array(sensorCount);
-      this.sensorWeight = new Float32Array(sensorCount);
+    } else {
+      this.sensorBins.fill(0);
     }
-    // Gated arrays are owned by rebuildSensorsGated; trace() just clears the
-    // event log + per-trace scalars and lets castRay populate events.
-    this.sensorEventCount = 0;
-    this.maxT = 0;
-    this.totalEnergy = 0;
     const sensorX = bench.w - 4;
     const sensorStripH = bench.h / sensorCount;
+
+    // --- 1) Particle advance.  Happens first so this frame's exits can
+    // join the primary emission list.  Skipped entirely when no delay
+    // element exists anywhere in the scene.
+    this._secondary.length = 0;
+    const now = performance.now() / 1000;
+    let dt = this._lastTraceTime > 0 ? (now - this._lastTraceTime) : 0;
+    this._lastTraceTime = now;
+    // Clamp dt to prevent huge jumps on tab-switch resumes or first
+    // frame after a long idle.
+    if (dt > 0.25) dt = 0.25;
+    if (this._hasDelay && dt > 0) {
+      this._advanceParticles(elementInfos, dt * this.simRate);
+    }
+
+    // Estimate max primary segments (same heuristic as before).
+    const totalRays = emitter.count * emitter.raysPerSource;
+    // Headroom for trail segments already emitted by the advance pass
+    // plus secondary rays yet to trace.
+    const trailHeadroom = this.segmentCount;
+    this.ensureSegmentCapacity(trailHeadroom + totalRays * (MAX_BOUNCES + 1) + this._secondary.length * MAX_BOUNCES);
 
     // Emitter setup: sources evenly spaced along left wall.
     const emX = 4;
@@ -117,20 +216,13 @@ export class Tracer {
     const spreadRad = emitter.spreadDeg * Math.PI / 180;
     const srcStripH = bench.h / nSrc;
 
-    // Estimate max segments to avoid re-alloc per ray.
-    const totalRays = nSrc * raysPer;
-    this.ensureSegmentCapacity(totalRays * (MAX_BOUNCES + 1));
-    // One sensor event per ray that hits the sensor wall (≤ totalRays).
-    this.ensureSensorEventCapacity(totalRays);
-
     const wlMin = emitter.wlMin, wlMax = emitter.wlMax;
     const wlRange = Math.max(1, wlMax - wlMin);
     const wlPer = emitter.wlPerSource;
 
-    // Source is modelled as an extended aperture across its y-strip. Rays
-    // are emitted from random-looking positions along the aperture with
-    // decorrelated wavelengths and small angular jitter, so each beam looks
-    // like a wide continuous ribbon of light rather than a visible fan.
+    // Source modelled as an extended aperture; rays emitted from
+    // random-looking positions with decorrelated wavelengths and small
+    // angular jitter.
     const PHI = 0.6180339887498949;
     const PSI = 0.7548776662466927;
     const disabled = emitter.disabled;
@@ -144,8 +236,6 @@ export class Tracer {
       for (let k = 0; k < raysPer; k++) {
         const wl = wlMinS + wlRangeS * ((k + 0.5) / raysPer);
         const rgb = wavelengthToRGB(wl);
-        // Decorrelate y-offset and angle from wavelength with irrational
-        // step sequences (no visible banding).
         const yT = ((k + 1) * PHI) % 1;
         const aT = ((k + 1) * PSI) % 1;
         const ey = ey0 + (srcStripH - apertureH) * 0.5 + yT * apertureH;
@@ -154,80 +244,248 @@ export class Tracer {
         const micGain = emitter.micLevels ? emitter.micLevels[s] : 1;
         const intensity = (BASE_INTENSITY / Math.sqrt(raysPer)) * micGain;
         this.castRay(emX, ey, dirX, dirY, wl, rgb, intensity,
-                     edges, elementMap, elementInfos, W, sensorStripH);
+                     edges, elementMap, elementInfos, W, sensorStripH, -1);
       }
     }
 
-    // Aggregate energy across this trace — used by the mic onset detector
-    // and unaffected by chase gating.
-    let total = 0;
-    const evts = this.sensorEvents;
-    for (let i = 0; i < this.sensorEventCount; i++) {
-      total += evts[i * 5 + 2];
-    }
-    this.totalEnergy = total;
-  }
-
-  // Reconstruct sensorBins / sensorDelay / sensorWeight from the event log,
-  // including only events that have arrived by `uT` (rayTimeVisual ≤ uT).
-  // Pass Infinity to materialise the full state.
-  rebuildSensorsGated(uT) {
-    if (!this.sensorBins) return;
-    this.sensorBins.fill(0);
-    this.sensorDelay.fill(0);
-    this.sensorWeight.fill(0);
-    const n = this.sensorEventCount;
-    const ev = this.sensorEvents;
-    const binCount = this.binCount;
-    for (let i = 0; i < n; i++) {
-      const e = i * 5;
-      if (ev[e + 3] > uT) continue;
-      const sIdx = ev[e] | 0;
-      const binIdx = ev[e + 1] | 0;
-      const I = ev[e + 2];
-      const rtAudio = ev[e + 4];
-      this.sensorBins[sIdx * binCount + binIdx] += I;
-      this.sensorDelay[sIdx] += rtAudio * I;
-      this.sensorWeight[sIdx] += I;
-    }
-    for (let s = 0; s < this.sensorCount; s++) {
-      const w = this.sensorWeight[s];
-      if (w > 0) this.sensorDelay[s] /= w;
+    // --- 2) Secondary rays from particle exits this frame.
+    for (let i = 0; i < this._secondary.length; i++) {
+      const r = this._secondary[i];
+      this.castRay(r.ox, r.oy, r.dx, r.dy, r.wl, r.rgb, r.I,
+                   edges, elementMap, elementInfos, W, sensorStripH, r.skipElId);
     }
   }
 
-  castRay(ox, oy, dx, dy, wl, rgb, intensity, edges, elementMap, elementInfos, walls, sensorStripH) {
+  // Advance every delay element's particle pool by `dtEff` seconds of
+  // effective wall-clock time (Sim-rate has already been folded in).
+  _advanceParticles(elementInfos, dtEff) {
+    for (let k = 0; k < elementInfos.length; k++) {
+      const info = elementInfos[k];
+      if (info.delayK <= 0) continue;
+      const pool = this._pools.get(info.el.id);
+      if (!pool || pool.count === 0) continue;
+      this._advancePool(pool, info, dtEff);
+    }
+  }
+
+  _advancePool(pool, info, dtEff) {
+    const el = info.el;
+    const mat = info.mat;
+    // Local polygon for inside-test + edge clipping.
+    let localPoly = this._localPolys.get(el.id);
+    if (!localPoly) {
+      // Derive local polygon by inverting worldEdges's rotation.
+      // We reproduce the same CW/CCW check here by using the world
+      // polygon's winding — simpler to just unrotate world back.
+      const cos = Math.cos(el.rot), sin = Math.sin(el.rot);
+      localPoly = info.polygon.map(p => ({
+        x: cos * (p.x - el.x) + sin * (p.y - el.y),
+        y: -sin * (p.x - el.x) + cos * (p.y - el.y),
+      }));
+      this._localPolys.set(el.id, localPoly);
+    }
+    const cos = Math.cos(el.rot), sin = Math.sin(el.rot);
+    const speedBase = 1 / info.delayK;   // bench units per second at 1×
+    const d = pool.data;
+
+    for (let i = 0; i < pool.count; ) {
+      const off = i * PART_FLOATS;
+      let lx = d[off    ], ly = d[off + 1];
+      const ldx = d[off + 2], ldy = d[off + 3];
+      let I = d[off + 4];
+      const wl = d[off + 5];
+
+      const step = speedBase * dtEff;
+      const nlx = lx + ldx * step;
+      const nly = ly + ldy * step;
+
+      // Beer-Lambert decay for this step, using the material's base
+      // absorption (per-element color override only applies in the
+      // primary tracer).
+      const alpha = elementAbsorption(el, mat, wl);
+      if (alpha > 0) I *= Math.exp(-alpha * step);
+
+      // Cull below intensity floor.
+      if (I < PARTICLE_EPS) { pool.removeAt(i); continue; }
+
+      // Containment test on the new point.  If still inside, commit the
+      // step, emit a trail segment, and move on.
+      if (pointInPolygon(localPoly, nlx, nly)) {
+        d[off    ] = nlx; d[off + 1] = nly;
+        d[off + 4] = I;
+        // Trail segment in world space, from lastLx/lastLy to the new
+        // position.  `lastLx/Ly` is the previous frame's position; we
+        // rewrite it to the current one here.
+        const lastLx = d[off + 6], lastLy = d[off + 7];
+        const wx1 = el.x + cos * lastLx - sin * lastLy;
+        const wy1 = el.y + sin * lastLx + cos * lastLy;
+        const wx2 = el.x + cos * nlx - sin * nly;
+        const wy2 = el.y + sin * nlx + cos * nly;
+        const rgb = wavelengthToRGB(wl);
+        this.emitSeg(wx1, wy1, wx2, wy2, rgb, I);
+        d[off + 6] = nlx; d[off + 7] = nly;
+        i++;
+        continue;
+      }
+
+      // Stepped outside the polygon this frame.  Find the edge the
+      // step segment crossed (nearest intersection along the step).
+      let tBest = Infinity, crossEdge = null;
+      for (let j = 0; j < localPoly.length; j++) {
+        const a = localPoly[j], b = localPoly[(j + 1) % localPoly.length];
+        const t = segSegT(lx, ly, nlx, nly, a.x, a.y, b.x, b.y);
+        if (t !== null && t < tBest) { tBest = t; crossEdge = { a, b }; }
+      }
+      if (!crossEdge) {
+        // Degenerate: point flipped to outside without a detected
+        // crossing (numerical edge case).  Drop the particle.
+        pool.removeAt(i);
+        continue;
+      }
+      const exitLx = lx + (nlx - lx) * tBest;
+      const exitLy = ly + (nly - ly) * tBest;
+
+      // Emit trail up to the exit point.
+      {
+        const lastLx = d[off + 6], lastLy = d[off + 7];
+        const wx1 = el.x + cos * lastLx - sin * lastLy;
+        const wy1 = el.y + sin * lastLx + cos * lastLy;
+        const wx2 = el.x + cos * exitLx - sin * exitLy;
+        const wy2 = el.y + sin * exitLx + cos * exitLy;
+        const rgb = wavelengthToRGB(wl);
+        this.emitSeg(wx1, wy1, wx2, wy2, rgb, I);
+      }
+
+      // Snell refraction from `mat` into the external medium at the
+      // world exit point.  Outer normal in local frame: derive from
+      // the crossing edge; same formula as `worldEdges` uses.
+      const ex = crossEdge.b.x - crossEdge.a.x;
+      const ey = crossEdge.b.y - crossEdge.a.y;
+      const elen = Math.hypot(ex, ey) || 1e-9;
+      // Determine local-polygon winding once per element (cached on
+      // the local poly array via .cw — computed lazily).
+      if (localPoly._cw === undefined) {
+        let twiceArea = 0;
+        for (let j = 0; j < localPoly.length; j++) {
+          const a = localPoly[j], b = localPoly[(j + 1) % localPoly.length];
+          twiceArea += a.x * b.y - b.x * a.y;
+        }
+        localPoly._cw = twiceArea > 0;
+      }
+      // Outward local normal of the crossed edge.
+      const oxL = localPoly._cw ? ey / elen : -ey / elen;
+      const oyL = localPoly._cw ? -ex / elen : ex / elen;
+      // Snell expects the normal to point INTO the incident medium
+      // (the glass we're leaving from), which is the opposite of
+      // the outward normal.  The primary tracer does the same
+      // negation in its exit branch (`snx = -nx`).
+      const nxL = -oxL, nyL = -oyL;
+
+      // Outside medium at the exit *world* point: iterate other
+      // dielectric elements to see if any polygon contains it.
+      const wxE = el.x + cos * exitLx - sin * exitLy;
+      const wyE = el.y + sin * exitLx + cos * exitLy;
+      let outsideEl = null;
+      for (let j = 0; j < this._elementInfos.length; j++) {
+        const oi = this._elementInfos[j];
+        if (oi.el === el) continue;
+        const om = oi.mat;
+        if (!om || om.type !== 'dielectric') continue;
+        if (pointInPolygon(oi.polygon, wxE, wyE)) { outsideEl = oi; }
+      }
+      const n1 = materialN(mat, wl);
+      const n2 = outsideEl ? materialN(outsideEl.mat, wl) : 1.0;
+      const eta = n1 / n2;
+      // Transform normal + direction into world for the Snell math.
+      const nxW = cos * nxL - sin * nyL;
+      const nyW = sin * nxL + cos * nyL;
+      const vxW = cos * ldx - sin * ldy;
+      const vyW = sin * ldx + cos * ldy;
+      const cosI = -(vxW * nxW + vyW * nyW);
+      const sin2T = eta * eta * (1 - cosI * cosI);
+      if (sin2T > 1) {
+        // TIR: reflect in local space, keep the particle in the pool.
+        // Reflection `v - 2(v·n)n` is invariant under n → -n, so the
+        // same incident-side normal works.
+        const vd = ldx * nxL + ldy * nyL;
+        const rldx = ldx - 2 * vd * nxL;
+        const rldy = ldy - 2 * vd * nyL;
+        const len = Math.hypot(rldx, rldy) || 1;
+        const rnldx = rldx / len, rnldy = rldy / len;
+        // Nudge slightly along the reflected direction so the next
+        // advance step starts *inside* the polygon again.
+        d[off    ] = exitLx + rnldx * EPS * 10;
+        d[off + 1] = exitLy + rnldy * EPS * 10;
+        d[off + 2] = rnldx;
+        d[off + 3] = rnldy;
+        d[off + 4] = I * GLASS_LOSS;
+        d[off + 6] = exitLx;
+        d[off + 7] = exitLy;
+        i++;
+        continue;
+      }
+      const cosT = Math.sqrt(1 - sin2T);
+      const txW = eta * vxW + (eta * cosI - cosT) * nxW;
+      const tyW = eta * vyW + (eta * cosI - cosT) * nyW;
+      const tLen = Math.hypot(txW, tyW) || 1;
+      // Queue secondary ray just outside the exit along the refracted
+      // direction; `skipElId = el.id` lets castRay ignore this element
+      // on the first-hit search so the ray doesn't immediately re-enter.
+      this._secondary.push({
+        ox: wxE + (txW / tLen) * EPS * 10,
+        oy: wyE + (tyW / tLen) * EPS * 10,
+        dx: txW / tLen,
+        dy: tyW / tLen,
+        wl,
+        rgb: wavelengthToRGB(wl),
+        I: I * GLASS_LOSS,
+        skipElId: el.id,
+      });
+      pool.removeAt(i);
+    }
+  }
+
+  // Get-or-create the particle pool for an element.
+  _poolFor(elId) {
+    let p = this._pools.get(elId);
+    if (!p) { p = new ParticlePool(); this._pools.set(elId, p); }
+    return p;
+  }
+
+  castRay(ox, oy, dx, dy, wl, rgb, intensity, edges, elementMap, elementInfos, walls, sensorStripH, skipElId) {
     let x = ox, y = oy, vx = dx, vy = dy;
     let I = intensity;
-    // Phase 1: rayTimeAudio accumulates only inside delay materials —
-    // drives sensorDelay → DelayNode echo length.
-    // Phase 2: rayTimeVisual accumulates over every segment (vacuum +
-    // material) — drives the chase animation and sensor gating.
-    let rayTimeAudio = 0;
-    let rayTimeVisual = 0;
 
-    // Stack of dielectric elements the ray is currently inside, last-entered
-    // on top. Reused across rays — reset length instead of allocating.
+    // Stack of dielectric elements the ray is currently inside,
+    // last-entered on top.  Reused across rays — reset length rather
+    // than allocating.  Exclude delay elements: those would capture the
+    // ray before it got inside, so a primary ray can only be "inside"
+    // a non-delay dielectric.
     const stack = this._stack;
     stack.length = 0;
     for (let i = 0; i < elementInfos.length; i++) {
       const v = elementInfos[i];
-      const m = materialOptics(v.el.material);
-      if (m && m.type === 'dielectric' && pointInPolygon(v.polygon, x, y)) {
+      if (v.delayK > 0) continue;
+      if (v.mat && v.mat.type === 'dielectric' && pointInPolygon(v.polygon, x, y)) {
         stack.push(v.el);
       }
     }
 
     for (let bounce = 0; bounce < MAX_BOUNCES; bounce++) {
-      // Find nearest intersection among element edges and bench walls.
       let tBest = Infinity, hitEdge = null, hitWall = null;
 
       for (let i = 0; i < edges.length; i++) {
         const e = edges[i];
+        if (e.elementId === skipElId) continue;
         const t = raySeg(x, y, vx, vy, e.p1.x, e.p1.y, e.p2.x, e.p2.y);
         if (t !== null && t < tBest) { tBest = t; hitEdge = e; hitWall = null; }
       }
-      // Bench walls: reused from the Tracer; populated in trace().
+      // After the very first intersection test, skipElId has served
+      // its purpose — let the ray re-enter the element on subsequent
+      // hops (a refracted secondary ray may well cross the element's
+      // *other* boundary down the line).
+      skipElId = -1;
+
       for (let i = 0; i < walls.length; i++) {
         const w = walls[i];
         const t = raySeg(x, y, vx, vy, w.p1.x, w.p1.y, w.p2.x, w.p2.y);
@@ -235,39 +493,25 @@ export class Tracer {
       }
 
       if (tBest === Infinity) {
-        // Shouldn't happen within a closed bench.
         this.emitSeg(x, y, x + vx * 1000, y + vy * 1000, rgb, I);
         return;
       }
 
       const hx = x + vx * tBest, hy = y + vy * tBest;
 
-      // Beer-Lambert absorption + audio delay along the segment if it was
-      // inside a medium. Per-element color overrides the material's
-      // absorption band; audio delay only accumulates inside delay
-      // materials. Visual propagation always accumulates: vacuum at
-      // VACUUM_PROP_K, slower (= delayK) inside delay glass.
+      // Beer-Lambert absorption along the segment if it was inside a
+      // medium (primary rays never travel *inside* a delay element —
+      // they are captured at entry — so the stack here only holds
+      // non-delay dielectrics).
       let Iend = I;
       const d = Math.hypot(hx - x, hy - y);
-      let dK = 0;
       if (stack.length > 0) {
         const insideEl = stack[stack.length - 1];
         const inMat = materialOptics(insideEl.material);
         const alpha = elementAbsorption(insideEl, inMat, wl);
-        dK = elementDelay(insideEl, inMat);
         if (alpha > 0) Iend = I * Math.exp(-alpha * d);
-        if (dK > 0) {
-          rayTimeAudio += dK * d;
-          if (rayTimeAudio > MAX_DELAY) rayTimeAudio = MAX_DELAY;
-        }
       }
-      const propK = dK > VACUUM_PROP_K ? dK : VACUUM_PROP_K;
-      const tStart = rayTimeVisual;
-      rayTimeVisual += propK * d;
-      // With the default VACUUM_PROP_K = 0 this is a no-op outside delay
-      // glass — segments get tStart == tEnd and draw instantly.
-      if (rayTimeVisual > MAX_DELAY) rayTimeVisual = MAX_DELAY;
-      this.emitSeg(x, y, hx, hy, rgb, I, Iend, tStart, rayTimeVisual);
+      this.emitSeg(x, y, hx, hy, rgb, I, Iend);
       I = Iend;
 
       if (hitWall) {
@@ -275,41 +519,80 @@ export class Tracer {
           const sIdx = Math.min(this.sensorCount - 1, Math.max(0, Math.floor(hy / sensorStripH)));
           const binIdx = Math.min(this.binCount - 1, Math.max(0,
             Math.floor((wl - 380) / (780 - 380) * this.binCount)));
-          // Sensor histograms are reconstructed each frame from this event
-          // log via rebuildSensorsGated(uT). Direct writes from castRay
-          // would defeat the chase gate.
-          const e = this.sensorEventCount * 5;
-          this.sensorEvents[e    ] = sIdx;
-          this.sensorEvents[e + 1] = binIdx;
-          this.sensorEvents[e + 2] = I;
-          this.sensorEvents[e + 3] = rayTimeVisual;
-          this.sensorEvents[e + 4] = rayTimeAudio;
-          this.sensorEventCount++;
+          this.sensorBins[sIdx * this.binCount + binIdx] += I;
         }
         return;
       }
 
       const elInfo = elementMap.get(hitEdge.elementId);
-      const matObj = materialOptics(elInfo.el.material);
+      const matObj = elInfo.mat;
       if (!matObj) return;
 
+      // Phase 3 delay-element entry capture: the ray never refracts
+      // through the glass; it's stored in the element's local pool and
+      // re-emitted only after its transit time has elapsed (handled by
+      // the advance pass on subsequent frames).
+      if (matObj.type === 'dielectric' && elInfo.delayK > 0) {
+        const nx = hitEdge.nx, ny = hitEdge.ny;
+        const vdotn_out = vx * nx + vy * ny;
+        if (vdotn_out < 0) {
+          // Genuine entry: refract once to get the inward direction,
+          // then store local-frame state in the pool.
+          const nGlass = materialN(matObj, wl);
+          const n1 = stack.length > 0
+            ? materialN(materialOptics(stack[stack.length - 1].material), wl)
+            : 1.0;
+          const n2 = nGlass;
+          const eta = n1 / n2;
+          const cosI = -(vx * nx + vy * ny);
+          const sin2T = eta * eta * (1 - cosI * cosI);
+          if (sin2T > 1) {
+            // TIR at entry — reflect and keep primary-tracing.
+            const vd = vx * (-nx) + vy * (-ny);
+            vx = vx - 2 * vd * (-nx);
+            vy = vy - 2 * vd * (-ny);
+            const len = Math.hypot(vx, vy);
+            vx /= len; vy /= len;
+            I *= GLASS_LOSS * elementReflectance(elInfo.el, matObj, wl);
+            x = hx + vx * EPS * 10;
+            y = hy + vy * EPS * 10;
+            if (I < 0.002) return;
+            continue;
+          }
+          const cosT = Math.sqrt(1 - sin2T);
+          const txW = eta * vx + (eta * cosI - cosT) * nx;
+          const tyW = eta * vy + (eta * cosI - cosT) * ny;
+          const tLen = Math.hypot(txW, tyW) || 1;
+          const vxW = txW / tLen, vyW = tyW / tLen;
+          // World entry → element-local.
+          const cosR = Math.cos(elInfo.el.rot), sinR = Math.sin(elInfo.el.rot);
+          const lx = cosR * (hx - elInfo.el.x) + sinR * (hy - elInfo.el.y);
+          const ly = -sinR * (hx - elInfo.el.x) + cosR * (hy - elInfo.el.y);
+          const ldx = cosR * vxW + sinR * vyW;
+          const ldy = -sinR * vxW + cosR * vyW;
+          const pool = this._poolFor(elInfo.el.id);
+          pool.add(lx, ly, ldx, ldy, I * GLASS_LOSS, wl);
+          return;
+        }
+        // Exit-from-inside primary ray: can't happen, since primary
+        // rays are captured at entry and never enter the interior.
+        // Treat as pass-through with no effect.
+        return;
+      }
+
       if (matObj.type === 'mirror') {
-        // Wavelength-dependent reflectance; non-reflected fraction is absorbed.
         const nx = hitEdge.nx, ny = hitEdge.ny;
         const vdotn = vx * nx + vy * ny;
         vx = vx - 2 * vdotn * nx;
         vy = vy - 2 * vdotn * ny;
         I *= elementReflectance(elInfo.el, matObj, wl);
       } else {
-        // Dielectric: Snell with Sellmeier (or Cauchy) dispersion.
-        // vdotn_out decides enter/exit of *this* polygon; n1/n2 are resolved
-        // from the stack so nested/overlapping dielectrics refract correctly.
+        // Non-delay dielectric.  Normal Snell refraction with the
+        // inside-stack for nested / overlapping dielectrics.
         const nGlass = materialN(matObj, wl);
-
         let nx = hitEdge.nx, ny = hitEdge.ny;
         const vdotn_out = vx * nx + vy * ny;
         const entering = vdotn_out < 0;
-
         let n1, n2, snx, sny;
         let poppedIdx = -1;
         if (entering) {
@@ -319,8 +602,6 @@ export class Tracer {
           n2 = nGlass;
           snx = nx; sny = ny;
         } else {
-          // Temporarily remove this element from the stack so n2 is the
-          // medium surrounding it. Re-add on TIR.
           poppedIdx = stack.lastIndexOf(elInfo.el);
           if (poppedIdx >= 0) stack.splice(poppedIdx, 1);
           n1 = nGlass;
@@ -329,17 +610,14 @@ export class Tracer {
             : 1.0;
           snx = -nx; sny = -ny;
         }
-
         const eta = n1 / n2;
         const cosI = -(vx * snx + vy * sny);
         const sin2T = eta * eta * (1 - cosI * cosI);
         if (sin2T > 1) {
-          // Total internal reflection: bounce, stack unchanged.
           const vd = vx * (-snx) + vy * (-sny);
           vx = vx - 2 * vd * (-snx);
           vy = vy - 2 * vd * (-sny);
           if (!entering && poppedIdx >= 0) {
-            // Roll back the pop — we didn't actually cross.
             stack.splice(poppedIdx, 0, elInfo.el);
           }
         } else {
@@ -347,7 +625,6 @@ export class Tracer {
           vx = eta * vx + (eta * cosI - cosT) * snx;
           vy = eta * vy + (eta * cosI - cosT) * sny;
           if (entering) stack.push(elInfo.el);
-          // Exit case: pop already performed above, stays popped.
         }
         const len = Math.hypot(vx, vy);
         vx /= len; vy /= len;
@@ -360,21 +637,23 @@ export class Tracer {
     }
   }
 
-  emitSeg(x1, y1, x2, y2, rgb, I1, I2, tStart, tEnd) {
+  emitSeg(x1, y1, x2, y2, rgb, I1, I2) {
     if (I2 === undefined) I2 = I1;
-    if (tStart === undefined) tStart = 0;
-    if (tEnd === undefined) tEnd = tStart;
-    const i = this.segmentCount * 14;
+    this.ensureSegmentCapacity(this.segmentCount + 1);
+    const i = this.segmentCount * SEG_FLOATS;
     const d = this.segmentData;
     d[i    ] = x1; d[i + 1] = y1; d[i + 2] = x2; d[i + 3] = y2;
     d[i + 4] = rgb[0] * I1; d[i + 5] = rgb[1] * I1; d[i + 6] = rgb[2] * I1; d[i + 7] = I1;
     d[i + 8] = rgb[0] * I2; d[i + 9] = rgb[1] * I2; d[i + 10] = rgb[2] * I2; d[i + 11] = I2;
-    d[i + 12] = tStart; d[i + 13] = tEnd;
     this.segmentCount++;
-    // Track max segment end time across the whole trace, not just sensor
-    // hits — otherwise rays that get absorbed at non-sensor walls would
-    // be discarded by the renderer (their tEnd > 0 but maxT stuck at 0).
-    if (tEnd > this.maxT) this.maxT = tEnd;
+  }
+
+  // Count of in-flight particles across all pools — used by main.js to
+  // decide whether to keep RAF alive when nothing else is dirty.
+  activeParticleCount() {
+    let n = 0;
+    for (const p of this._pools.values()) n += p.count;
+    return n;
   }
 }
 
@@ -386,6 +665,22 @@ function raySeg(ox, oy, dx, dy, ax, ay, bx, by) {
   const t = (ex * sy - ey * sx) / denom;
   const u = (ex * dy - ey * dx) / denom;
   if (t <= EPS) return null;
+  if (u < 0 || u > 1) return null;
+  return t;
+}
+
+// Seg-seg intersection parameter (0..1) along the first segment, or
+// null if they don't cross inside that range.  Used by the particle
+// advance to find which polygon edge the step crossed.
+function segSegT(x1, y1, x2, y2, ax, ay, bx, by) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const sx = bx - ax, sy = by - ay;
+  const denom = dx * sy - dy * sx;
+  if (Math.abs(denom) < 1e-9) return null;
+  const ex = ax - x1, ey = ay - y1;
+  const t = (ex * sy - ey * sx) / denom;
+  const u = (ex * dy - ey * dx) / denom;
+  if (t < 0 || t > 1) return null;
   if (u < 0 || u > 1) return null;
   return t;
 }

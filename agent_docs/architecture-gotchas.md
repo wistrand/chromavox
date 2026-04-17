@@ -37,21 +37,29 @@
   overlaps, the picked medium depends on which element the ray
   entered first.
 
-## Phase 2 chase
+## Phase 3 particle simulation
 
-- `tracer.maxT` is updated in `emitSeg` from every segment's `tEnd`,
-  not only on sensor hits. Moving that back onto sensor hits breaks
-  rays that get absorbed at non-sensor walls — the renderer's
-  fragment-shader `discard` eats them because `uT > maxT = 0`.
-- When `tracer.maxT == 0` (no delay material in the scene), `main.js`
-  writes `renderer.uT = 1e6` instead of `uTvisual` so the leading-edge
-  fade doesn't partially dim rays at startup. Don't remove this guard
-  without also removing the `smoothstep` fade for the no-delay case.
-- Re-arm is gated by `delayFingerprint(scene)` — editing a non-delay
-  element doesn't drain the current ray image. If you add a new
-  material kind that contributes to delay, make sure
-  `delayFingerprint` picks it up or its edits will silently fail to
-  re-arm the chase.
+- A delay element's pool is keyed by `el.id`. Deleting the element
+  drops the pool entirely — in-flight photons vanish. If you want
+  them to survive deletion, change `trace()`'s pool-sync pass.
+- Particles are stored in element-local coordinates. Moving /
+  rotating / scaling the element carries held light with it by
+  construction. World-space transforms happen only at trail-emission
+  and exit refraction.
+- Single-attachment rule: a particle belongs to the element it
+  entered. Overlapping another delay element mid-flight does NOT
+  re-attach. Chained delay materials work *after* the first particle
+  exits and its secondary ray re-captures into the new element.
+- Exit edge detection uses `segSegT` on the advance step against
+  every local polygon edge. If the step somehow overshoots without a
+  detected crossing (numerical edge case, e.g. a tangent grazing),
+  the particle is dropped. At typical speeds this never triggers.
+- The main-loop idle gate is `tracer.activeParticleCount() > 0 ||
+  dirty`. If you add other stateful subsystems that need per-frame
+  stepping, fold them into the same gate or RAF will idle.
+- `simRate` scales the advance `dt` but does **not** scale mic input
+  sampling or the primary ray pass. It only affects time *inside* a
+  delay material.
 
 ## Audio
 
