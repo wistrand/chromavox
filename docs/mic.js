@@ -3,6 +3,8 @@
 // AnalyserNode so everything downstream (sample, micBands) is oblivious to
 // where the sound came from.
 
+import { scaleFreq, SCALES } from './spectrum.js';
+
 export class MicModulator {
   constructor() {
     this.active = false;
@@ -15,7 +17,12 @@ export class MicModulator {
     this.pitchHz = 0;
     this.nodes = [];
     this.source = 'mic';
-    this.keyboardOctave = 4;
+    this.keyboardOctave = 0;
+    // Keyboard scale params — kept in sync by main.js so keyboard
+    // voices match the currently selected input mode/base/span.
+    this.keyboardScale = 'chromatic';
+    this.keyboardBase = 261.63;
+    this.keyboardStep = 1;
     this.smoothing = 0.6;
   }
 
@@ -76,33 +83,37 @@ export class MicModulator {
       }
       srcNode = mix;
     } else if (source === 'keyboard') {
-      // ZXCVBNM bottom row + SDGHJ above = one-octave claviature. Comma/period
-      // shift octaves. Multiple simultaneous keys → polyphony. Triangle voices
-      // keep one key mostly in one chromatic bucket while still giving the
-      // sensor synth a little odd-harmonic timbre to chew on.
+      // ZXCVBNM bottom row + SDGHJ above = 12-key claviature. Keys map
+      // to sequential scale degrees (not chromatic semitones) so each
+      // key lights exactly one emitter bucket in any mode. Comma/period
+      // shift by one scale period (= one real octave). Sine voices for
+      // zero harmonic bleed into adjacent buckets.
       const mix = ctx.createGain();
       mix.gain.value = 0.35;
-      const KEY_TO_SEMI = {
+      const KEY_TO_DEG = {
         KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5,
         KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
       };
-      this.keyboardOctave = 4;
+      this.keyboardOctave = 0;
       const voices = new Map();
-      const midiToHz = m => 440 * Math.pow(2, (m - 69) / 12);
+      const freqFor = deg => {
+        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+        const offset = scale.length * this.keyboardOctave;
+        return scaleFreq(this.keyboardBase, this.keyboardScale, offset + deg, this.keyboardStep);
+      };
       const start = code => {
         if (voices.has(code)) return;
-        const semi = KEY_TO_SEMI[code];
-        if (semi === undefined) return;
-        const midi = 12 * (this.keyboardOctave + 1) + semi;
+        const deg = KEY_TO_DEG[code];
+        if (deg === undefined) return;
         const o = ctx.createOscillator();
-        o.type = 'triangle';
-        o.frequency.value = midiToHz(midi);
+        o.type = 'sine';
+        o.frequency.value = freqFor(deg);
         const g = ctx.createGain();
         g.gain.value = 0;
         g.gain.setTargetAtTime(1, ctx.currentTime, 0.01);
         o.connect(g).connect(mix);
         o.start();
-        voices.set(code, { o, g });
+        voices.set(code, { o, g, deg });
       };
       const stop = code => {
         const v = voices.get(code);
@@ -114,18 +125,22 @@ export class MicModulator {
       };
       const onDown = e => {
         if (e.repeat) return;
-        if (e.code === 'Comma')  { this.keyboardOctave = Math.max(0, this.keyboardOctave - 1); return; }
-        if (e.code === 'Period') { this.keyboardOctave = Math.min(8, this.keyboardOctave + 1); return; }
-        if (KEY_TO_SEMI[e.code] !== undefined) { e.preventDefault(); start(e.code); }
+        if (e.code === 'Comma')  { this.keyboardOctave--; this._retuneLiveVoices(voices, freqFor); return; }
+        if (e.code === 'Period') { this.keyboardOctave++; this._retuneLiveVoices(voices, freqFor); return; }
+        if (KEY_TO_DEG[e.code] !== undefined) { e.preventDefault(); start(e.code); }
       };
-      const onUp = e => { if (KEY_TO_SEMI[e.code] !== undefined) stop(e.code); };
+      const onUp = e => { if (KEY_TO_DEG[e.code] !== undefined) stop(e.code); };
       window.addEventListener('keydown', onDown);
       window.addEventListener('keyup', onUp);
+      this._kbdVoices = voices;
+      this._kbdFreqFor = freqFor;
       this._kbdCleanup = () => {
         window.removeEventListener('keydown', onDown);
         window.removeEventListener('keyup', onUp);
         for (const v of voices.values()) { try { v.o.stop(); } catch {} }
         voices.clear();
+        this._kbdVoices = null;
+        this._kbdFreqFor = null;
       };
       nodes.push(mix);
       srcNode = mix;
@@ -170,6 +185,38 @@ export class MicModulator {
     this.freqData = new Uint8Array(an.frequencyBinCount);
     this.timeData = new Float32Array(an.fftSize);
     this.active = true;
+  }
+
+  // Build micLevels directly from held keyboard voices, bypassing the
+  // FFT. Each held key sets its corresponding emitter index to 1.
+  // Returns null if not in keyboard mode or no voices held.
+  keyboardLevels(n) {
+    if (this.source !== 'keyboard' || !this._kbdVoices || this._kbdVoices.size === 0) return null;
+    const levels = new Float32Array(n);
+    const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+    const offset = scale.length * this.keyboardOctave;
+    for (const v of this._kbdVoices.values()) {
+      const idx = offset + v.deg;
+      if (idx >= 0 && idx < n) levels[idx] = 1;
+    }
+    return levels;
+  }
+
+  // Update keyboard scale params and retune any held voices. Called by
+  // main.js when mode / base / span changes.
+  setKeyboardScale(scaleName, baseHz, step) {
+    this.keyboardScale = scaleName;
+    this.keyboardBase = baseHz;
+    this.keyboardStep = step;
+    if (this._kbdVoices && this._kbdFreqFor) {
+      this._retuneLiveVoices(this._kbdVoices, this._kbdFreqFor);
+    }
+  }
+
+  _retuneLiveVoices(voices, freqFor) {
+    for (const v of voices.values()) {
+      v.o.frequency.setTargetAtTime(freqFor(v.deg), this.ctx.currentTime, 0.01);
+    }
   }
 
   disable() {
@@ -219,8 +266,6 @@ export function pitchToWavelength(hz) {
     (Math.log(Math.max(hz, 1)) - Math.log(lo)) / (Math.log(hi) - Math.log(lo))));
   return 600 - t * 100;
 }
-
-import { scaleFreq } from './spectrum.js';
 
 // Downsample FFT magnitudes to `n` buckets in [0,1].
 // mode: 'log' for 80–6000 Hz log-spaced; any other value is a scale name

@@ -210,7 +210,9 @@ Detailed notes are split into topic files under `agent_docs/`:
   `tracer.resetPersistence()`.
 - `tracer.resetPersistence()` zeros `_exitSegCount`, `_sensorPersist`,
   clears `_pools` and `_localPolys`. Prevents stale persistence data
-  from bleeding across scene transitions.
+  from bleeding across scene transitions. The `scene.generation`
+  counter also triggers the tracer to self-reset at the top of
+  `trace()` on mismatch, as a safety net.
 - Deleting a delay element drops its pool and flushes the persistence
   caches for that element: `_exitSegCount` is zeroed and
   `_sensorPersist` is filled with 0 so ghost exit segments and sensor

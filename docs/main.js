@@ -38,15 +38,20 @@ let lastFrameTime = performance.now() / 1000;
 const mic = new MicModulator();
 const synth = new SensorSynth();
 
-// Keyboard source tracks its own octave; the chromatic ladder's base note
-// follows that octave so new key presses map to the ladder's bucket 0.
 function currentBaseHz() {
-  if (mic.active && mic.source === 'keyboard') {
-    return 16.352 * Math.pow(2, mic.keyboardOctave);
-  }
   return parseFloat(document.getElementById('mic-base').value);
 }
 let lastBaseHz = null;
+
+// Push current mode / base / span to the keyboard source so its voices
+// match the input scale.  Called on mode/base/span change and on
+// keyboard source selection.
+function syncKeyboardScale() {
+  const mode = document.getElementById('mic-mode').value;
+  const base = currentBaseHz();
+  const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
+  mic.setKeyboardScale(mode === 'log' ? 'chromatic' : mode, base, step);
+}
 
 function syncBaseSelect(hz) {
   const sel = document.getElementById('mic-base');
@@ -110,6 +115,7 @@ function pushSynthScale() {
 document.getElementById('mic-mode').addEventListener('change', e => {
   if (!synthIndep()) synth.setMode(e.target.value);
   syncSpanVisibility();
+  syncKeyboardScale();
   rebuildEmitterLabels();
 });
 
@@ -117,6 +123,7 @@ document.getElementById('chromatic-span').addEventListener('input', e => {
   const v = parseInt(e.target.value, 10) || 1;
   document.getElementById('chromatic-span-val').textContent = v;
   if (!synthIndep()) synth.setStep(v);
+  syncKeyboardScale();
   rebuildEmitterLabels();
 });
 
@@ -373,9 +380,7 @@ document.getElementById('mic-source').addEventListener('change', async e => {
   const nextBase = baseBySource[e.target.value];
   if (nextBase) document.getElementById('mic-base').value = nextBase;
   if (e.target.value === 'keyboard') {
-    const modeSel = document.getElementById('mic-mode');
-    modeSel.value = 'chromatic';
-    if (!synthIndep()) synth.setMode('chromatic');
+    syncKeyboardScale();
   }
   if (!synthIndep()) synth.setBase(parseFloat(nextBase));
 
@@ -396,6 +401,7 @@ document.getElementById('mic-source').addEventListener('change', async e => {
 
 document.getElementById('mic-base').addEventListener('change', e => {
   if (!synthIndep()) synth.setBase(parseFloat(e.target.value));
+  syncKeyboardScale();
   rebuildEmitterLabels();
 });
 
@@ -517,10 +523,13 @@ function frame() {
       const micMode = document.getElementById('mic-mode').value;
       const baseHz = currentBaseHz();
       const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
-      scene.runtime.micLevels = micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
+      // Keyboard: bypass FFT and write emitter levels directly from held
+      // keys. FFT bin resolution is too coarse to separate adjacent scale
+      // degrees, causing spectral leakage into neighboring buckets.
+      scene.runtime.micLevels = mic.keyboardLevels(scene.emitter.count)
+        || micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
       if (baseHz !== lastBaseHz) {
         if (!synthIndep()) synth.setBase(baseHz);
-        if (mic.source === 'keyboard') syncBaseSelect(baseHz);
         rebuildEmitterLabels();
         lastBaseHz = baseHz;
       }
