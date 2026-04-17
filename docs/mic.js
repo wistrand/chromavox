@@ -187,19 +187,61 @@ export class MicModulator {
     this.active = true;
   }
 
-  // Build micLevels directly from held keyboard voices, bypassing the
-  // FFT. Each held key sets its corresponding emitter index to 1.
-  // Returns null if not in keyboard mode or no voices held.
-  keyboardLevels(n) {
-    if (this.source !== 'keyboard' || !this._kbdVoices || this._kbdVoices.size === 0) return null;
+  // Build micLevels directly from known source frequencies, bypassing
+  // the FFT. The FFT bin resolution (~23 Hz at 2048/48kHz) is coarser
+  // than the gap between adjacent scale degrees (~15 Hz at C4), so
+  // spectral leakage lights up neighboring emitters and causes audible
+  // detuning on the synth side. For sources with known exact
+  // frequencies (keyboard, sine, harmonics) we can set the correct
+  // bucket directly.
+  // Returns null for mic / noise sources (FFT is the right path there).
+  directLevels(n, mode, baseHz, step) {
+    const freqs = this._knownFrequencies();
+    if (!freqs) return null;
     const levels = new Float32Array(n);
-    const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
-    const offset = scale.length * this.keyboardOctave;
-    for (const v of this._kbdVoices.values()) {
-      const idx = offset + v.deg;
-      if (idx >= 0 && idx < n) levels[idx] = 1;
+    if (mode === 'log') {
+      const loHz = 80, hiHz = 6000;
+      const logLo = Math.log(loHz), logRange = Math.log(hiHz) - logLo;
+      for (const { hz, amp } of freqs) {
+        if (hz < loHz || hz > hiHz) continue;
+        const t = (Math.log(hz) - logLo) / logRange;
+        const idx = Math.round(t * (n - 1));
+        if (idx >= 0 && idx < n) levels[idx] = Math.max(levels[idx], amp);
+      }
+    } else {
+      for (const { hz, amp } of freqs) {
+        let best = -1, bestDist = Infinity;
+        for (let i = 0; i < n; i++) {
+          const fc = scaleFreq(baseHz, mode, i, step);
+          const d = Math.abs(Math.log(hz) - Math.log(fc));
+          if (d < bestDist) { bestDist = d; best = i; }
+        }
+        if (best >= 0 && bestDist < 0.5) levels[best] = Math.max(levels[best], amp);
+      }
     }
     return levels;
+  }
+
+  // Return known exact frequencies for deterministic sources.
+  _knownFrequencies() {
+    if (this.source === 'keyboard') {
+      if (!this._kbdVoices || this._kbdVoices.size === 0) return null;
+      const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+      const offset = scale.length * this.keyboardOctave;
+      const out = [];
+      for (const v of this._kbdVoices.values()) {
+        const hz = scaleFreq(this.keyboardBase, this.keyboardScale, offset + v.deg, this.keyboardStep);
+        out.push({ hz, amp: 1 });
+      }
+      return out;
+    }
+    if (this.source === 'sine') return [{ hz: 440, amp: 1 }];
+    if (this.source === 'harmonics') {
+      const out = [];
+      for (let k = 1; k <= 6; k++) out.push({ hz: 220 * k, amp: 1 / k });
+      return out;
+    }
+    return null;
   }
 
   // Update keyboard scale params and retune any held voices. Called by

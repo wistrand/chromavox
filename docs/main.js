@@ -523,10 +523,11 @@ function frame() {
       const micMode = document.getElementById('mic-mode').value;
       const baseHz = currentBaseHz();
       const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
-      // Keyboard: bypass FFT and write emitter levels directly from held
-      // keys. FFT bin resolution is too coarse to separate adjacent scale
-      // degrees, causing spectral leakage into neighboring buckets.
-      scene.runtime.micLevels = mic.keyboardLevels(scene.emitter.count)
+      // Deterministic sources (keyboard, sine, harmonics): bypass FFT and
+      // set emitter levels directly from known frequencies. FFT bin
+      // resolution is too coarse to separate adjacent scale degrees,
+      // causing spectral leakage into neighboring buckets.
+      scene.runtime.micLevels = mic.directLevels(scene.emitter.count, micMode, baseHz, stepSemi)
         || micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
       if (baseHz !== lastBaseHz) {
         if (!synthIndep()) synth.setBase(baseHz);
