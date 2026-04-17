@@ -47,8 +47,10 @@ const SEG_FLOATS = 12;
 // the boundary.
 const DELAY_MIN = 0.0003;
 // Floats per particle record in a ParticlePool:
-//   [lx, ly, ldx, ldy, I, wl, lastLx, lastLy]
-const PART_FLOATS = 8;
+//   [lx, ly, ldx, ldy, I, wl, lastLx, lastLy, r, g, b]
+// RGB is pre-computed at capture time so the advance hot loop never
+// calls wavelengthToRGB (which allocates a fresh array each call).
+const PART_FLOATS = 11;
 
 // Per-delay-element particle store.  Flat `Float32Array` kept in the
 // element's local coordinate frame; `count` is the live record count.
@@ -67,7 +69,7 @@ class ParticlePool {
   }
   // Append a new particle at the local entry point with the local
   // (already-refracted-inward) direction and current intensity/wavelength.
-  add(lx, ly, ldx, ldy, I, wl) {
+  add(lx, ly, ldx, ldy, I, wl, r, g, b) {
     this.ensureCapacity(this.count + 1);
     const i = this.count * PART_FLOATS;
     const d = this.data;
@@ -75,6 +77,7 @@ class ParticlePool {
     d[i + 2] = ldx; d[i + 3] = ldy;
     d[i + 4] = I;   d[i + 5] = wl;
     d[i + 6] = lx;  d[i + 7] = ly;  // lastLx / lastLy seeded to entry
+    d[i + 8] = r;   d[i + 9] = g;   d[i + 10] = b;
     this.count++;
   }
   // Compact: move record at `src` into slot `dst`.  Used when removing
@@ -120,13 +123,11 @@ export class Tracer {
     ];
     this._elementInfos = [];
     // Secondary-ray emission queue populated by the particle pass.
-    // Consumed as additional `castRay` origins after the wall-emitter
-    // loop.  Entries:
-    //   { ox, oy, dx, dy, wl, rgb, I, skipElId }
-    // `skipElId` tells castRay to pretend the exiting element doesn't
-    // exist for the first hit (the ray starts from just outside its
-    // boundary).
-    this._secondary = [];
+    // Flat Float32Array, 10 floats per entry:
+    //   [ox, oy, dx, dy, wl, r, g, b, I, skipElId]
+    // Avoids per-exit object allocation.
+    this._secondary = new Float32Array(0);
+    this._secondaryCount = 0;
     // Local-polygon cache keyed by element id so the advance pass
     // doesn't keep re-allocating polygon arrays.
     this._localPolys = new Map();
@@ -190,13 +191,11 @@ export class Tracer {
       if (dK >= DELAY_MIN) this._hasDelay = true;
     }
 
-    // Drop pools whose element is gone; clear the local-polygon cache
-    // so the advance pass always works against the current geometry
-    // (element resize / rotation changes the local polygon).
-    this._localPolys.clear();
+    // Drop pools + local-polygon cache entries for deleted elements.
     for (const elId of [...this._pools.keys()]) {
       if (!elementMap.has(elId)) {
         this._pools.delete(elId);
+        this._localPolys.delete(elId);
       }
     }
 
@@ -228,7 +227,7 @@ export class Tracer {
     // --- 1) Particle advance.  Happens first so this frame's exits can
     // join the primary emission list.  Skipped entirely when no delay
     // element exists anywhere in the scene.
-    this._secondary.length = 0;
+    this._secondaryCount = 0;
     const now = performance.now() / 1000;
     let dt = this._lastTraceTime > 0 ? (now - this._lastTraceTime) : 0;
     this._lastTraceTime = now;
@@ -244,7 +243,7 @@ export class Tracer {
     // Headroom for trail segments already emitted by the advance pass
     // plus secondary rays yet to trace.
     const trailHeadroom = this.segmentCount;
-    this.ensureSegmentCapacity(trailHeadroom + totalRays * (MAX_BOUNCES + 1) + this._secondary.length * MAX_BOUNCES);
+    this.ensureSegmentCapacity(trailHeadroom + totalRays * (MAX_BOUNCES + 1) + this._secondaryCount * MAX_BOUNCES);
 
     // Emitter setup: sources evenly spaced along left wall.
     const emX = 4;
@@ -292,10 +291,14 @@ export class Tracer {
     // `_isSecondary` so the spectrum readout and synth don't flicker.
     const secStart = this.segmentCount;
     this._isSecondary = true;
-    for (let i = 0; i < this._secondary.length; i++) {
-      const r = this._secondary[i];
-      this.castRay(r.ox, r.oy, r.dx, r.dy, r.wl, r.rgb, r.I,
-                   edges, elementMap, elementInfos, W, sensorStripH, r.skipElId);
+    const SEC_FLOATS = 10;
+    const _secRgb = [0, 0, 0];
+    for (let i = 0; i < this._secondaryCount; i++) {
+      const off = i * SEC_FLOATS;
+      const s = this._secondary;
+      _secRgb[0] = s[off + 5]; _secRgb[1] = s[off + 6]; _secRgb[2] = s[off + 7];
+      this.castRay(s[off], s[off+1], s[off+2], s[off+3], s[off+4], _secRgb, s[off+8],
+                   edges, elementMap, elementInfos, W, sensorStripH, s[off+9]);
     }
     this._isSecondary = false;
     // Cache the segments scaled by (1-D), then remove them from the
@@ -331,19 +334,27 @@ export class Tracer {
     // Local polygon for inside-test + edge clipping.
     let localPoly = this._localPolys.get(el.id);
     if (!localPoly) {
-      // Derive local polygon by inverting worldEdges's rotation.
-      // We reproduce the same CW/CCW check here by using the world
-      // polygon's winding — simpler to just unrotate world back.
-      const cos = Math.cos(el.rot), sin = Math.sin(el.rot);
-      localPoly = info.polygon.map(p => ({
-        x: cos * (p.x - el.x) + sin * (p.y - el.y),
-        y: -sin * (p.x - el.x) + cos * (p.y - el.y),
-      }));
+      localPoly = new Array(info.polygon.length);
+      for (let j = 0; j < localPoly.length; j++) localPoly[j] = { x: 0, y: 0 };
       this._localPolys.set(el.id, localPoly);
+    }
+    // Refresh coordinates from the current world polygon and rotation.
+    {
+      const c = Math.cos(el.rot), s = Math.sin(el.rot);
+      for (let j = 0; j < info.polygon.length; j++) {
+        const p = info.polygon[j];
+        localPoly[j].x = c * (p.x - el.x) + s * (p.y - el.y);
+        localPoly[j].y = -s * (p.x - el.x) + c * (p.y - el.y);
+      }
+      localPoly._cw = undefined;
     }
     const cos = Math.cos(el.rot), sin = Math.sin(el.rot);
     const speedBase = 1 / info.delayK;   // bench units per second at 1×
     const d = pool.data;
+
+    // Scratch RGB array reused across the loop to avoid per-particle
+    // allocations in emitSeg (which takes an array reference).
+    const _rgb = [0, 0, 0];
 
     for (let i = 0; i < pool.count; ) {
       const off = i * PART_FLOATS;
@@ -351,73 +362,60 @@ export class Tracer {
       const ldx = d[off + 2], ldy = d[off + 3];
       let I = d[off + 4];
       const wl = d[off + 5];
+      _rgb[0] = d[off + 8]; _rgb[1] = d[off + 9]; _rgb[2] = d[off + 10];
 
       const step = speedBase * dtEff;
       const nlx = lx + ldx * step;
       const nly = ly + ldy * step;
 
-      // Beer-Lambert decay for this step, using the material's base
-      // absorption (per-element color override only applies in the
-      // primary tracer).
       const alpha = elementAbsorption(el, mat, wl);
       if (alpha > 0) I *= Math.exp(-alpha * step);
 
-      // Cull below intensity floor.
       if (I < PARTICLE_EPS) { pool.removeAt(i); continue; }
 
-      // Containment test on the new point.  If still inside, commit the
-      // step, emit a trail segment, and move on.
       if (pointInPolygon(localPoly, nlx, nly)) {
         d[off    ] = nlx; d[off + 1] = nly;
         d[off + 4] = I;
-        // Trail segment in world space, from lastLx/lastLy to the new
-        // position.  `lastLx/Ly` is the previous frame's position; we
-        // rewrite it to the current one here.
         const lastLx = d[off + 6], lastLy = d[off + 7];
         const wx1 = el.x + cos * lastLx - sin * lastLy;
         const wy1 = el.y + sin * lastLx + cos * lastLy;
         const wx2 = el.x + cos * nlx - sin * nly;
         const wy2 = el.y + sin * nlx + cos * nly;
-        const rgb = wavelengthToRGB(wl);
-        this.emitSeg(wx1, wy1, wx2, wy2, rgb, I);
+        this.emitSeg(wx1, wy1, wx2, wy2, _rgb, I);
         d[off + 6] = nlx; d[off + 7] = nly;
         i++;
         continue;
       }
 
-      // Stepped outside the polygon this frame.  Find the edge the
-      // step segment crossed (nearest intersection along the step).
-      let tBest = Infinity, crossEdge = null;
+      // Stepped outside — find the crossed edge.
+      let tBest = Infinity, crossAx = 0, crossAy = 0, crossBx = 0, crossBy = 0;
       for (let j = 0; j < localPoly.length; j++) {
         const a = localPoly[j], b = localPoly[(j + 1) % localPoly.length];
         const t = segSegT(lx, ly, nlx, nly, a.x, a.y, b.x, b.y);
-        if (t !== null && t < tBest) { tBest = t; crossEdge = { a, b }; }
+        if (t !== null && t < tBest) {
+          tBest = t;
+          crossAx = a.x; crossAy = a.y; crossBx = b.x; crossBy = b.y;
+        }
       }
-      if (!crossEdge) {
-        // Degenerate: point flipped to outside without a detected
-        // crossing (numerical edge case).  Drop the particle.
-        pool.removeAt(i);
-        continue;
-      }
+      if (tBest === Infinity) { pool.removeAt(i); continue; }
       const exitLx = lx + (nlx - lx) * tBest;
       const exitLy = ly + (nly - ly) * tBest;
 
-      // Emit trail up to the exit point.
+      // Trail up to exit.
       {
         const lastLx = d[off + 6], lastLy = d[off + 7];
         const wx1 = el.x + cos * lastLx - sin * lastLy;
         const wy1 = el.y + sin * lastLx + cos * lastLy;
         const wx2 = el.x + cos * exitLx - sin * exitLy;
         const wy2 = el.y + sin * exitLx + cos * exitLy;
-        const rgb = wavelengthToRGB(wl);
-        this.emitSeg(wx1, wy1, wx2, wy2, rgb, I);
+        this.emitSeg(wx1, wy1, wx2, wy2, _rgb, I);
       }
 
       // Snell refraction from `mat` into the external medium at the
       // world exit point.  Outer normal in local frame: derive from
       // the crossing edge; same formula as `worldEdges` uses.
-      const ex = crossEdge.b.x - crossEdge.a.x;
-      const ey = crossEdge.b.y - crossEdge.a.y;
+      const ex = crossBx - crossAx;
+      const ey = crossBy - crossAy;
       const elen = Math.hypot(ex, ey) || 1e-9;
       // Determine local-polygon winding once per element (cached on
       // the local poly array via .cw — computed lazily).
@@ -488,18 +486,31 @@ export class Tracer {
       // Queue secondary ray just outside the exit along the refracted
       // direction; `skipElId = el.id` lets castRay ignore this element
       // on the first-hit search so the ray doesn't immediately re-enter.
-      this._secondary.push({
-        ox: wxE + (txW / tLen) * EPS * 10,
-        oy: wyE + (tyW / tLen) * EPS * 10,
-        dx: txW / tLen,
-        dy: tyW / tLen,
-        wl,
-        rgb: wavelengthToRGB(wl),
-        I: I * GLASS_LOSS,
-        skipElId: el.id,
-      });
+      this._pushSecondary(
+        wxE + (txW / tLen) * EPS * 10,
+        wyE + (tyW / tLen) * EPS * 10,
+        txW / tLen, tyW / tLen,
+        wl, _rgb[0], _rgb[1], _rgb[2],
+        I * GLASS_LOSS, el.id
+      );
       pool.removeAt(i);
     }
+  }
+
+  _pushSecondary(ox, oy, dx, dy, wl, r, g, b, I, skipElId) {
+    const SEC_FLOATS = 10;
+    const needed = (this._secondaryCount + 1) * SEC_FLOATS;
+    if (this._secondary.length < needed) {
+      const next = new Float32Array(Math.max(needed, this._secondary.length * 2 || 128));
+      next.set(this._secondary);
+      this._secondary = next;
+    }
+    const i = this._secondaryCount * SEC_FLOATS;
+    const s = this._secondary;
+    s[i] = ox; s[i+1] = oy; s[i+2] = dx; s[i+3] = dy;
+    s[i+4] = wl; s[i+5] = r; s[i+6] = g; s[i+7] = b;
+    s[i+8] = I; s[i+9] = skipElId;
+    this._secondaryCount++;
   }
 
   // Get-or-create the particle pool for an element.
@@ -696,7 +707,8 @@ export class Tracer {
           const ldx = cosR * vxW + sinR * vyW;
           const ldy = -sinR * vxW + cosR * vyW;
           const pool = this._poolFor(elInfo.el.id);
-          pool.add(lx, ly, ldx, ldy, I * GLASS_LOSS, wl);
+          const prgb = wavelengthToRGB(wl);
+          pool.add(lx, ly, ldx, ldy, I * GLASS_LOSS, wl, prgb[0], prgb[1], prgb[2]);
           return;
         }
         // Exit-from-inside primary ray: can't happen, since primary
