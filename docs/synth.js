@@ -1,30 +1,135 @@
-// Additive sensor synth. Each sensor is a voice at a log- or scale-spaced
-// pitch; the voice's timbre comes from the sensor's incoming wavelength
-// spectrum. The wavelength bins are grouped into K harmonic partials — low
-// wavelengths feed the fundamental, high wavelengths feed upper harmonics —
-// so the sound's brightness tracks the color mix reaching each sensor.
+// Additive sensor synth via AudioWorklet. Each sensor is a voice at a
+// log- or scale-spaced pitch; timbre comes from the sensor's wavelength
+// spectrum grouped into harmonic partials.
 //
-// Phase 3: optical delay comes from the tracer's particle pools — sensor
-// deposits arrive late because the photons physically arrived late, not
-// because a post-synth `DelayNode` stretched them.  Voices connect
-// voiceMix → master directly with no wet/dry split.
+// The worklet runs a single AudioWorkletProcessor that synthesises all
+// voices in one `process()` callback — no per-oscillator nodes, no
+// setTargetAtTime storms. The main thread posts sensorBins each frame
+// via MessagePort; the worklet reads the latest snapshot on each audio
+// block. Voices with zero energy are skipped (free voice stealing).
 
 import { scaleFreq } from './spectrum.js';
+
+const PARTIALS = 6;
+
+const WORKLET_SRC = `
+class ChromavoxSynth extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.voices = [];     // [{freq, phases[], gains[], targetGains[]}]
+    this.bins = null;     // latest sensorBins snapshot (Float32Array)
+    this.binCount = 64;
+    this.peak = 1e-6;
+    this.sensorCount = 0;
+    this.port.onmessage = e => {
+      const d = e.data;
+      if (d.type === 'bins') {
+        this.bins = d.bins;
+      } else if (d.type === 'rebuild') {
+        this._rebuild(d.freqs, d.binCount, d.sensorCount);
+      }
+    };
+  }
+  _rebuild(freqs, binCount, sensorCount) {
+    this.binCount = binCount;
+    this.sensorCount = sensorCount;
+    this.voices = [];
+    const nyq = sampleRate / 2;
+    for (let i = 0; i < sensorCount; i++) {
+      const f = freqs[i];
+      const phases = [];
+      const gains = [];
+      const targetGains = [];
+      for (let k = 1; k <= ${PARTIALS}; k++) {
+        if (f * k >= nyq) break;
+        phases.push(0);
+        gains.push(0);
+        targetGains.push(0);
+      }
+      this.voices.push({ freq: f, phases, gains, targetGains });
+    }
+    this.peak = 1e-6;
+  }
+  process(inputs, outputs) {
+    const out = outputs[0];
+    if (!out || !out[0] || this.voices.length === 0) return true;
+    const buf = out[0];
+    const len = buf.length;
+    const bins = this.bins;
+    const K = ${PARTIALS};
+    const bc = this.binCount;
+    const sc = this.sensorCount;
+    // Compute target gains from latest bins snapshot.
+    if (bins && bins.length >= sc * bc) {
+      let maxP = 1e-6;
+      for (let s = 0; s < sc; s++) {
+        const v = this.voices[s];
+        const nk = v.targetGains.length;
+        for (let k = 0; k < nk; k++) {
+          const b0 = (k * bc / K) | 0;
+          const b1 = ((k + 1) * bc / K) | 0;
+          let sum = 0;
+          for (let b = b0; b < b1; b++) sum += bins[s * bc + b];
+          const avg = sum / Math.max(1, b1 - b0);
+          if (avg > maxP) maxP = avg;
+          v.targetGains[k] = avg;
+        }
+      }
+      this.peak = Math.max(maxP, this.peak * 0.94);
+      const norm = 1 / (Math.sqrt(sc) * this.peak);
+      for (let s = 0; s < sc; s++) {
+        const v = this.voices[s];
+        for (let k = 0; k < v.targetGains.length; k++) {
+          v.targetGains[k] = Math.pow(Math.max(0, v.targetGains[k]) * norm, 1.3);
+        }
+      }
+    }
+    // Synthesise.
+    const twoPi = 2 * Math.PI;
+    const invSr = 1 / sampleRate;
+    // Gain smoothing per sample — roughly 60ms time constant at 48kHz.
+    const smooth = 1 - Math.exp(-1 / (0.06 * sampleRate));
+    for (let i = 0; i < len; i++) buf[i] = 0;
+    for (let s = 0; s < this.voices.length; s++) {
+      const v = this.voices[s];
+      // Skip silent voices.
+      let anyActive = false;
+      for (let k = 0; k < v.gains.length; k++) {
+        if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
+      }
+      if (!anyActive) continue;
+      for (let i = 0; i < len; i++) {
+        let sample = 0;
+        for (let k = 0; k < v.phases.length; k++) {
+          v.gains[k] += (v.targetGains[k] - v.gains[k]) * smooth;
+          if (v.gains[k] < 1e-6 && v.targetGains[k] < 1e-6) continue;
+          sample += Math.sin(v.phases[k]) * v.gains[k];
+          v.phases[k] += twoPi * v.freq * (k + 1) * invSr;
+          if (v.phases[k] > twoPi) v.phases[k] -= twoPi;
+        }
+        buf[i] += sample;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('chromavox-synth', ChromavoxSynth);
+`;
 
 export class SensorSynth {
   constructor() {
     this.active = false;
     this.ctx = null;
+    this.workletNode = null;
     this.master = null;
-    this.voices = []; // { freq, harmonics, voiceMix }
     this.count = 0;
     this.volume = 0.25;
     this.mode = 'log';
     this.baseHz = 130.81;
     this.sinkId = '';
     this.stepSemi = 1;
-    // Slow-decaying peak hold for amplitude normalization. Avoids zippering
-    // when a ray sweeps across sensors and the instantaneous max jumps.
+    // Slow-decaying peak hold for amplitude normalization (used by the
+    // spectrum readout; worklet has its own internal copy).
     this.peak = 1e-6;
   }
 
@@ -56,7 +161,7 @@ export class SensorSynth {
     }
   }
 
-  enable(sensorCount, mode = 'log') {
+  async enable(sensorCount, mode = 'log') {
     if (this.active) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC();
@@ -67,6 +172,14 @@ export class SensorSynth {
     if (this.sinkId && typeof this.ctx.setSinkId === 'function') {
       this.ctx.setSinkId(this.sinkId).catch(err => console.warn('setSinkId:', err));
     }
+    const blob = new Blob([WORKLET_SRC], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    await this.ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    this.workletNode = new AudioWorkletNode(this.ctx, 'chromavox-synth', {
+      outputChannelCount: [1],
+    });
+    this.workletNode.connect(this.master);
     this.rebuild(sensorCount);
     this.active = true;
   }
@@ -78,92 +191,43 @@ export class SensorSynth {
   }
 
   rebuild(sensorCount) {
-    if (!this.ctx) return;
-    this._teardownVoices();
-    this.voices = [];
-    const K = 6; // partials per voice
+    if (!this.ctx || !this.workletNode) return;
     const loHz = 110, hiHz = 1800;
     const baseHz = this.baseHz ?? 130.81;
     const stepDeg = this.stepSemi ?? 1;
     const scaleName = (this.mode && this.mode !== 'log') ? this.mode : 'chromatic';
-    const nyquist = this.ctx.sampleRate / 2;
+    const freqs = new Float32Array(sensorCount);
     for (let i = 0; i < sensorCount; i++) {
-      let freq;
       if (this.mode !== 'log') {
-        freq = scaleFreq(baseHz, scaleName, i, stepDeg);
+        freqs[i] = scaleFreq(baseHz, scaleName, i, stepDeg);
       } else {
         const t = sensorCount > 1 ? i / (sensorCount - 1) : 0;
-        freq = loHz * Math.pow(hiHz / loHz, t);
+        freqs[i] = loHz * Math.pow(hiHz / loHz, t);
       }
-      const voiceMix = this.ctx.createGain();
-      voiceMix.gain.value = 1;
-      voiceMix.connect(this.master);
-      const harmonics = [];
-      for (let k = 1; k <= K; k++) {
-        const f = freq * k;
-        if (f >= nyquist) break;
-        const osc = this.ctx.createOscillator();
-        osc.type = 'sine';
-        osc.frequency.value = f;
-        const gain = this.ctx.createGain();
-        gain.gain.value = 0;
-        osc.connect(gain).connect(voiceMix);
-        osc.start();
-        harmonics.push({ osc, gain });
-      }
-      this.voices.push({ freq, harmonics, voiceMix });
     }
+    this.workletNode.port.postMessage({
+      type: 'rebuild',
+      freqs,
+      binCount: 64,
+      sensorCount,
+    });
     this.count = sensorCount;
-  }
-
-  _teardownVoices() {
-    for (const v of this.voices) {
-      for (const h of v.harmonics) {
-        try { h.osc.stop(); } catch {}
-        h.gain.disconnect();
-      }
-      v.voiceMix?.disconnect();
-    }
   }
 
   update(sensorBins, binCount, sensorCount) {
     if (!this.active) return;
     if (sensorCount !== this.count) this.rebuild(sensorCount);
-    let maxPartial = 1e-6;
-    const now = this.ctx.currentTime;
-    const norm = 1 / Math.sqrt(sensorCount);
-    for (let s = 0; s < sensorCount; s++) {
-      const voice = this.voices[s];
-      const K = voice.harmonics.length;
-      for (let k = 0; k < K; k++) {
-        const b0 = Math.floor(k * binCount / K);
-        const b1 = Math.floor((k + 1) * binCount / K);
-        let sum = 0;
-        for (let b = b0; b < b1; b++) sum += sensorBins[s * binCount + b];
-        const avg = sum / Math.max(1, b1 - b0);
-        if (avg > maxPartial) maxPartial = avg;
-        voice.harmonics[k]._raw = avg;
-      }
-    }
-    // Peak-hold with slow decay so the normalization scale doesn't snap
-    // when a ray sweep momentarily quadruples the instantaneous max.
-    this.peak = Math.max(maxPartial, this.peak * 0.94);
-    const scale = norm / this.peak;
-    for (let s = 0; s < sensorCount; s++) {
-      const voice = this.voices[s];
-      for (const h of voice.harmonics) {
-        const v = Math.pow(Math.max(0, h._raw) * scale, 1.3);
-        // Slightly longer time constant smooths transient spikes from rays
-        // sweeping across sensor strips.
-        h.gain.gain.setTargetAtTime(v, now, 0.06);
-      }
-    }
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({
+      type: 'bins',
+      bins: sensorBins,
+    });
   }
 
   disable() {
     if (!this.active) return;
-    this._teardownVoices();
-    this.voices = [];
+    this.workletNode?.disconnect();
+    this.workletNode = null;
     this.master?.disconnect();
     this.ctx?.close();
     this.ctx = null;

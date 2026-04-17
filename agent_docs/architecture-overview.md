@@ -35,7 +35,10 @@ No dependencies.
 - `docs/ui.js` — pointer events (mouse + touch unified), property panel,
   save/load, preset dropdown, undo/redo, keyboard shortcuts.
 - `docs/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.
-- `docs/synth.js` — additive sensor synth (harmonic partials driven by bins).
+- `docs/synth.js` — additive sensor synth; single `AudioWorkletProcessor`
+  ("chromavox-synth") loaded from an inline Blob URL. Main thread posts
+  `sensorBins` via `MessagePort`; worklet renders 6 harmonic partials per
+  voice with per-sample gain smoothing.
 - `docs/main.js` — wiring + dirty-flag render loop + device pickers.
 - `docs/presets/*.json` — scene presets; `presets/index.json` lists them.
 - `serve.js` — zero-dep static server; ROOT resolves to `./docs/`. It

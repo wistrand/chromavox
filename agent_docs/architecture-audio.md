@@ -58,25 +58,39 @@ band linearly mapped across the visible range via
 
 ## Audio out (`docs/synth.js`)
 
-`Audio out` toggles the additive synth (or press `Q`). Each sensor
-drives one voice with multiple sine partials (count is a constant in
-`rebuild`).
+`Audio out` toggles the additive synth (or press `Q`). The entire
+synth runs as a single `AudioWorkletProcessor` ("chromavox-synth"),
+replacing the previous 313-node WebAudio graph (144 OscillatorNodes +
+144 GainNodes + 24 voice-mix GainNodes + 1 master).
+
+The worklet source is an inline template string loaded via Blob URL —
+no separate `.js` file, no build step. `synth.enable()` is async
+(awaits `audioWorklet.addModule`).
 
 - **Voice pitch** uses the same base and step as the mic side in
   chromatic mode, so input and output ladders line up. Log mode uses
   a separate configured range.
-- **Timbre**: harmonic gains come from grouping the sensor's
-  wavelength bins; per-voice timbre depends on which colors hit that
-  sensor.
-- **Slow-decaying peak hold** normalizes per-partial amplitude across
-  frames (`this.peak = max(currentMax, this.peak * decay)`) so a ray
-  briefly sweeping across a sensor doesn't snap the global scale and
-  zipper unrelated voices.
-- Voice-gain transitions use `setTargetAtTime` with a longer time
-  constant for the same reason — soft response to single-frame spikes.
-- Master gain slider drives `this.master.gain`.
+- **Timbre**: 6 harmonic partials per voice (constant `PARTIALS`),
+  computed with `Math.sin` directly (no wavetable yet; ~2 ms per
+  128-sample block at full polyphony). Harmonic gains come from
+  grouping the sensor's wavelength bins; per-voice timbre depends on
+  which colors hit that sensor.
+- **Data flow**: main thread posts `sensorBins` via `MessagePort` each
+  frame (~6 KB/frame: sensors × bins × 4 bytes). The worklet reads
+  the latest snapshot in `process()`. Rebuild sends a new frequency
+  array via `MessagePort` — no node teardown/recreation.
+- **Gain smoothing**: per-sample exponential smoothing (~60 ms time
+  constant) inside the worklet replaces the old `setTargetAtTime`
+  calls, preventing zipper noise from single-frame spikes.
+- **Peak-hold normalization** runs inside the worklet (slow-decaying
+  peak hold so a ray briefly sweeping across a sensor doesn't snap
+  the global scale).
+- **Voice stealing**: voices whose gains are all < 1e-5 are skipped
+  entirely in the render loop.
+- Master gain slider posts a gain value via `MessagePort`.
 - Output device picker uses `AudioContext.setSinkId()` where
   supported. Older browsers silently fall back to the system default.
+- No `SharedArrayBuffer`, no COOP/COEP headers needed.
 - **Optical delay** (Phase 3): each delay element holds a
   `ParticlePool` in the tracer; photons that enter a slow-glass are
   captured and propagated one advance-step per frame at

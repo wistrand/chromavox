@@ -123,9 +123,17 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Help dialog (`?` button or `H` / `?` key) summarises all shortcuts.
 - `navigator.mediaDevices` requires a secure context. `mic.enable('mic')`
   guards and throws a clear error on plain HTTP.
-- Synth sweep glitches mitigated with a slow-decaying peak-hold for the
-  per-frame normalization and a longer voice-gain time constant in
-  `synth.js`.
+- Synth runs as a single `AudioWorkletProcessor` ("chromavox-synth")
+  loaded from an inline Blob URL — no separate file, no build step.
+  Main thread posts `sensorBins` via `MessagePort` each frame; worklet
+  reads the latest snapshot in `process()`. Per-sample gain smoothing
+  (~60 ms time constant) inside the worklet replaces the old
+  `setTargetAtTime` calls. Peak-hold normalization also runs inside
+  the worklet. 6 harmonic partials per voice; `Math.sin` directly
+  (no wavetable yet). Voices with all gains < 1e-5 are skipped
+  (voice stealing). Rebuild sends frequency array via `MessagePort` —
+  no node teardown/recreation. `synth.enable()` is async (awaits
+  `audioWorklet.addModule`).
 - Keyboard claviature voices use `'triangle'` so a single key mostly
   occupies one chromatic bucket without turning into a full harmonic
   stack like sawtooth.

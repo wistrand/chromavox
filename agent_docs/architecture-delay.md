@@ -144,8 +144,10 @@ persistent accumulator) naturally reflects the delayed arrival.
 Releasing a keyboard note keeps the synth playing as long as
 particles are still draining from the glass.
 
-Voices connect `voiceMix → master` directly. No wet/dry split, no
-`sensorDelay` parameter.
+The synth is now a single `AudioWorkletProcessor` receiving
+`sensorBins` via `MessagePort` each frame. No `DelayNode`, no
+wet/dry split, no `sensorDelay` parameter, no per-voice WebAudio
+graph nodes.
 
 ## Sim rate
 

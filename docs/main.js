@@ -53,11 +53,11 @@ distortToggle.addEventListener('change', () => {
 });
 
 const synthBtn = document.getElementById('synth-toggle');
-synthBtn.addEventListener('click', () => {
+synthBtn.addEventListener('click', async () => {
   if (!synth.active) {
     synth.setBase(synthBase());
     synth.setStep(synthStep());
-    synth.enable(scene.sensorCount, synthMode());
+    await synth.enable(scene.sensorCount, synthMode());
     synthBtn.textContent = 'Audio out: on';
     synthBtn.classList.add('active');
   } else {
