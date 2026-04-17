@@ -911,7 +911,7 @@ export class UI {
       this.endEdit();
       this.onSceneReset();
       this.onChange();
-      try { localStorage.removeItem('chromavox-scene'); } catch {}
+      try { localStorage.removeItem('chromavox-scene'); localStorage.removeItem('chromavox-ui'); } catch {}
     });
 
     this.bindPresets();

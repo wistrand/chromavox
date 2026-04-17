@@ -151,7 +151,7 @@ export class SensorSynth {
   setBase(hz) {
     if (!hz || this.baseHz === hz) return;
     this.baseHz = hz;
-    if (this.active && this.mode === 'chromatic') this.rebuild(this.count);
+    if (this.active) this.rebuild(this.count);
   }
 
   setVolume(v) {

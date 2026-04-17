@@ -20,7 +20,7 @@ generator:
   chromatic and pins Base to the current octave's C (synced with the
   Base dropdown when octave changes).
 
-All sources feed a single `AnalyserNode` with `fftSize` and
+All sources feed a single `AnalyserNode` with `fftSize = 8192` and
 `smoothingTimeConstant` set in `mic.js` `enable()`, so downstream code
 doesn't know where the audio came from.
 
@@ -68,9 +68,11 @@ The worklet source is an inline template string loaded via Blob URL —
 no separate `.js` file, no build step. `synth.enable()` is async
 (awaits `audioWorklet.addModule`).
 
-- **Voice pitch** uses the same base and step as the mic side in
-  chromatic mode, so input and output ladders line up. Log mode uses
-  a separate configured range.
+- **Voice pitch** uses the same base and step as the mic side, so
+  input and output ladders line up. `synth.setBase(hz)` rebuilds
+  voice frequencies for all modes (not just chromatic), so changing
+  the Base dropdown takes effect immediately in any scale. Log mode
+  uses a separate configured range.
 - **Timbre**: 6 harmonic partials per voice (constant `PARTIALS`),
   computed with `Math.sin` directly (no wavetable yet; ~2 ms per
   128-sample block at full polyphony). Harmonic gains come from

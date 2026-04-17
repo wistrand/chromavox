@@ -72,6 +72,9 @@
 
 ## Audio
 
+- `synth.setBase()` rebuilds voices for all modes. Previously it
+  only rebuilt for chromatic, so changing Base in major/minor/etc
+  had no effect until a mode switch forced a rebuild.
 - Chromatic mode range equals `count × stepSemi` semitones — bump
   count or widen Span to see more of the input spectrum.
 - `AudioContext.setSinkId()` is not supported in older browsers; the

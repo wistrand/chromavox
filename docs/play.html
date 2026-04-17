@@ -33,8 +33,10 @@
       <button id="mic-toggle">Audio in: off</button>
       <button id="mic-options" type="button" class="opts-toggle" aria-label="Audio in options">▾</button>
       <div id="mic-menu" class="options-menu">
-        <div class="row"><label>Source <select id="mic-source"><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keyboard</option></select></label></div>
+        <div class="row"><label>Source <select id="mic-source"><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keyboard</option><option value="midi">MIDI in</option></select></label></div>
         <div class="row" id="mic-device-row"><label>Device <select id="mic-device"><option value="">default</option></select></label></div>
+        <div class="row" id="midi-device-row" style="display:none"><label>MIDI device <select id="midi-device"><option value="">first available</option></select></label></div>
+        <div class="row" id="midi-debug-row" style="display:none"><label>MIDI log<br><textarea id="midi-debug" rows="4" readonly style="width:100%;font:11px monospace;background:#0b0d10;color:#8a93a0;border:1px solid var(--border);resize:vertical;margin-top:4px"></textarea></label></div>
         <div class="row"><label>Mode <select id="mic-mode">
           <option value="log">log</option>
           <option value="chromatic" selected>chromatic</option>

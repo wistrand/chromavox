@@ -77,6 +77,7 @@ key bindings — they include:
 - Shift + Arrow Up/Down to resize the primary dimension.
 - Backspace / Delete to remove.
 - Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y for undo / redo.
+- A to toggle audio in.
 - Q to toggle audio out.
 - H or ? to toggle the help dialog.
 - Keyboard claviature (when Audio in source is `keyboard`): bottom-row

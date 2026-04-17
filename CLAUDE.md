@@ -35,6 +35,8 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [Audio in / out](agent_docs/architecture-audio.md)
 - [UI & state](agent_docs/architecture-ui.md)
 - [Delay materials](agent_docs/architecture-delay.md)
+- [MIDI input](agent_docs/architecture-midi.md)
+- [Ableton Push](agent_docs/architecture-push.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
 
 
@@ -141,6 +143,9 @@ Detailed notes are split into topic files under `agent_docs/`:
   shortcuts.
 - `navigator.mediaDevices` requires a secure context. `mic.enable('mic')`
   guards and throws a clear error on plain HTTP.
+- `synth.setBase(hz)` rebuilds voice frequencies for all modes (not
+  just chromatic). Changing the Base dropdown takes effect immediately
+  in any scale.
 - Synth runs as a single `AudioWorkletProcessor` ("chromavox-synth")
   loaded from an inline Blob URL — no separate file, no build step.
   Main thread posts `sensorBins` via `MessagePort` each frame; worklet

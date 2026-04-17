@@ -43,6 +43,12 @@ No dependencies.
   ("chromavox-synth") loaded from an inline Blob URL. Main thread posts
   `sensorBins` via `MessagePort`; worklet renders 6 harmonic partials per
   voice with per-sample gain smoothing.
+- `docs/push.js` — Ableton Push 2/3 integration: 8x8 RGB pixel map,
+  dynamic palette management, sensor-to-pad color mapping, encoder-to-
+  element dispatch, and in-key layout computation. The Push hardware
+  sends fixed notes 36-99; `push.js` computes scale-degree layout
+  (`row * rowOffset + col`) in software via `fourthOffset()`.
+  `push.setScale(scaleName)` updates row offset and scale length.
 - `docs/main.js` — wiring + dirty-flag render loop + device pickers +
   localStorage persistence (auto-save on `markDirty`, restore on load).
   Spectrum readout smoothing (`_displayBins`, `_peakMax`, `_blurBuf`)

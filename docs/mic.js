@@ -4,6 +4,7 @@
 // where the sound came from.
 
 import { scaleFreq, SCALES } from './spectrum.js';
+import { padNoteToEmitter } from './push.js';
 
 export class MicModulator {
   constructor() {
@@ -172,6 +173,74 @@ export class MicModulator {
       bn.start();
       nodes.push(bn);
       srcNode = bn;
+    } else if (source === 'midi') {
+      // MIDI input — no AudioContext needed. Note-on/off events write
+      // directly to _midiNotes; directLevels maps them to emitters.
+      // Push-specific output (LED palette, pad colors) lives in push.js.
+      this._midiNotes = new Map();
+      this._midiAccess = null;
+      this._midiInput = null;
+      const debugEl = typeof document !== 'undefined' ? document.getElementById('midi-debug') : null;
+      const MAX_LOG = 40;
+      const onMessage = e => {
+        const bytes = [...e.data];
+        const [status, note, vel] = bytes;
+        const cmd = status & 0xf0;
+        if (cmd === 0x90 && vel > 0) {
+          this._midiNotes.set(note, vel / 127);
+        } else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) {
+          this._midiNotes.delete(note);
+        }
+        if (cmd === 0xB0 && this.onCC) {
+          this.onCC(note, vel);
+        }
+        if (debugEl) {
+          const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
+          const ch = (status & 0x0f) + 1;
+          const names = { 0x80: 'off', 0x90: vel ? 'ON' : 'off', 0xa0: 'aft', 0xb0: 'CC', 0xc0: 'prg', 0xd0: 'chP', 0xe0: 'bend' };
+          const label = names[cmd] || '???';
+          const line = `${hex}  ch${ch} ${label} ${note ?? ''} ${vel ?? ''}`;
+          const lines = debugEl.value ? debugEl.value.split('\n') : [];
+          lines.push(line);
+          if (lines.length > MAX_LOG) lines.splice(0, lines.length - MAX_LOG);
+          debugEl.value = lines.join('\n');
+          debugEl.scrollTop = debugEl.scrollHeight;
+        }
+      };
+      try {
+        // Request SysEx for Push palette (push.js). Fall back to basic.
+        let access;
+        try { access = await navigator.requestMIDIAccess({ sysex: true }); }
+        catch { access = await navigator.requestMIDIAccess(); }
+        this._midiAccess = access;
+        // Prefer Push Live Port (User Port broken on Linux seq layer).
+        let input = null;
+        if (deviceId) input = access.inputs.get(deviceId);
+        if (!input) {
+          for (const inp of access.inputs.values()) {
+            if (/live\s*port/i.test(inp.name)) { input = inp; break; }
+          }
+        }
+        if (!input) {
+          for (const inp of access.inputs.values()) { input = inp; break; }
+        }
+        if (input) { input.onmidimessage = onMessage; this._midiInput = input; }
+        access.onstatechange = () => {
+          if (this._midiInput && this._midiInput.state === 'disconnected') {
+            this._midiInput = null;
+            for (const inp of access.inputs.values()) {
+              inp.onmidimessage = onMessage;
+              this._midiInput = inp;
+              break;
+            }
+          }
+        };
+      } catch (err) {
+        throw new Error('MIDI access denied: ' + err.message);
+      }
+      this.source = source;
+      this.active = true;
+      return;
     } else {
       throw new Error('unknown mic source: ' + source);
     }
@@ -196,6 +265,17 @@ export class MicModulator {
   // bucket directly.
   // Returns null for mic / noise sources (FFT is the right path there).
   directLevels(n, mode, baseHz, step) {
+    // MIDI: column-first pad mapping so a vertical column of Push pads
+    // = sequential emitters (matching the bench's vertical layout).
+    if (this.source === 'midi') {
+      if (!this._midiNotes) return new Float32Array(n);
+      const levels = new Float32Array(n);
+      for (const [note, vel] of this._midiNotes) {
+        const idx = padNoteToEmitter(note);
+        if (idx >= 0 && idx < n) levels[idx] = Math.max(levels[idx], vel);
+      }
+      return levels;
+    }
     const freqs = this._knownFrequencies();
     if (!freqs) return null;
     const levels = new Float32Array(n);
@@ -241,6 +321,11 @@ export class MicModulator {
       for (let k = 1; k <= 6; k++) out.push({ hz: 220 * k, amp: 1 / k });
       return out;
     }
+    if (this.source === 'midi') {
+      // Return empty (not null) so directLevels returns an all-zeros
+      // array and the FFT fallback never fires (MIDI has no AudioContext).
+      return [];
+    }
     return null;
   }
 
@@ -267,6 +352,9 @@ export class MicModulator {
     this.stream?.getTracks().forEach(t => t.stop());
     this._kbdCleanup?.();
     this._kbdCleanup = null;
+    if (this._midiInput) { this._midiInput.onmidimessage = null; this._midiInput = null; }
+    if (this._midiAccess) { this._midiAccess.onstatechange = null; this._midiAccess = null; }
+    this._midiNotes = null;
     for (const n of this.nodes) { try { n.stop?.(); } catch {} }
     this.nodes = [];
     this.ctx?.close();
@@ -277,6 +365,10 @@ export class MicModulator {
 
   sample() {
     if (!this.active) return null;
+    if (this.source === 'midi') {
+      this.volume = this._midiNotes && this._midiNotes.size > 0 ? 0.8 : 0;
+      return true;
+    }
     const an = this.analyser;
     an.getByteFrequencyData(this.freqData);
     an.getFloatTimeDomainData(this.timeData);
