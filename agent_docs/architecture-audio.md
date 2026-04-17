@@ -110,6 +110,21 @@ no separate `.js` file, no build step. `synth.enable()` is async
   on the particle advance `dt`. `4×` makes slow-glass drain 4× faster;
   `0.25×` makes it 4× more viscous. Default 1× (real time).
 
+## Spectrum readout smoothing
+
+`updateSensorReadout` (in `main.js`) applies three smoothing stages
+before writing to the right-panel bar display:
+
+- **(A) Gaussian blur** — a [0.25, 0.5, 0.25] kernel across bins.
+- **(C) Temporal IIR** — `_displayBins` lerps toward the new value at
+  factor 0.3 each frame.
+- **(D) Peak normalization** — `_peakMax` decays at 0.95 per frame,
+  giving a slow-decaying peak hold that prevents jumpy rescaling.
+
+`_displayBins` and `_peakMax` are zeroed by `resetDisplay` (called via
+the `onSceneReset` callback) on clear, file-load, or preset-load so
+stale smoothing state doesn't bleed across scenes.
+
 ## Input/output symmetry
 
 In any scale mode, input bucket `i` and output voice `i` cover the

@@ -101,9 +101,23 @@
   (`dielectric` / `mirror`); switching a mirror to a dielectric is
   not exposed in the UI — change via JSON edit if needed.
 - Bench is letterboxed at the canonical portrait golden-ratio aspect.
-  Resizing the window does not move any element; the stage just
-  shows more or less black bar. Preset loads with mismatched bench
-  dimensions get rescaled to canonical inside `deserializeScene`.
+  `renderer.resize()` computes the viewport size in JS — don't revert
+  this to pure CSS `aspect-ratio` + `max-width`; the CSS approach
+  breaks on narrow mobile portrait screens (height: 100% wins over
+  the aspect ratio when max-width clamps). Resizing the window does
+  not move any element; the stage just shows more or less black bar.
+  Preset loads with mismatched bench dimensions get rescaled to
+  canonical inside `deserializeScene`.
 - Toolbar has a fixed height with `box-sizing: border-box` and
   `overflow-x: auto`; on narrow viewports the horizontal scrollbar
   appears inside the bar rather than compressing it.
+- Scene auto-saves to `localStorage` on every `markDirty`. If
+  localStorage is unavailable (private browsing, quota exceeded) the
+  save silently fails; the app still works.
+- `tracer.resetPersistence()` must be called on scene transitions
+  (clear, load, preset) to avoid stale exit-segment and sensor
+  persistence data bleeding into the new scene. The `onSceneReset`
+  callback handles this.
+- Elements with `el.spin` keep the render loop active even when
+  nothing else is dirty. If spin is set to zero the element stops
+  marking dirty.

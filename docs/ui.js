@@ -275,10 +275,11 @@ export class UI {
       el.addEventListener('input', () => {
         this.beginEdit();
         this.scene.emitter[key] = cast(el.value, 10);
-        this.refreshEmitterLabels();
-        if (key === 'count' && document.getElementById('sensor-sync').checked) {
-          applySync();
+        if (key === 'count') {
+          this.scene.emitter.disabled.clear();
+          if (document.getElementById('sensor-sync').checked) applySync();
         }
+        this.refreshEmitterLabels();
         this.onChange();
       });
       el.addEventListener('change', () => this.endEdit());

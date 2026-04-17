@@ -39,7 +39,8 @@ No dependencies.
   ("chromavox-synth") loaded from an inline Blob URL. Main thread posts
   `sensorBins` via `MessagePort`; worklet renders 6 harmonic partials per
   voice with per-sample gain smoothing.
-- `docs/main.js` — wiring + dirty-flag render loop + device pickers.
+- `docs/main.js` — wiring + dirty-flag render loop + device pickers +
+  localStorage persistence (auto-save on `markDirty`, restore on load).
 - `docs/presets/*.json` — scene presets; `presets/index.json` lists them.
 - `serve.js` — zero-dep static server; ROOT resolves to `./docs/`. It
   emulates GitHub Pages' clean-URL fallback: a request for `/foo` falls
@@ -50,10 +51,11 @@ No dependencies.
 
 Scene coordinates are "bench pixels" in a logical space with `bench.w`,
 `bench.h`. The bench is **letterboxed** at the canonical portrait
-golden-ratio aspect (`CANONICAL_BENCH` in `scene.js`); CSS pins the
-canvas to that aspect inside the stage with black bars on whichever
-axis the viewport over-provides. `Renderer.benchSize` returns the
-constant. All UI input is converted via `UI.canvasToBench`.
+golden-ratio aspect (`CANONICAL_BENCH` in `scene.js`); `renderer.resize()`
+computes the largest 556:900 box that fits the stage in JS and sizes the
+`#bench-viewport` div explicitly (pure CSS `aspect-ratio` + `max-width`
+broke on narrow mobile portrait screens). `Renderer.benchSize` returns
+the constant. All UI input is converted via `UI.canvasToBench`.
 
 Y is **down** (screen convention). Polygon winding and outward-normal sign
 in `worldEdges` depend on this — see the shoelace / `cw` logic. If you
@@ -63,10 +65,17 @@ getting it wrong flips refraction direction and everything breaks subtly.
 ## Render loop
 
 `main.js` uses a dirty flag. `markDirty()` is passed to `UI` as `onChange`
-and called on every interaction. Don't run the tracer on every RAF
+and called on every interaction. `markDirty` also auto-saves the scene
+to `localStorage` (key `'chromavox-scene'`) via `serializeScene`. On
+page load, `main.js` restores from localStorage if present, otherwise
+calls `createScene()`. Don't run the tracer on every RAF
 unconditionally — it's pure JS and expensive at high ray counts. When
 audio in is active the loop marks dirty each frame so buckets animate;
 when audio out is active the synth update also runs every frame.
+
+Elements with `el.spin` (rad/s) get `el.rot += el.spin * dt` applied
+each frame, which also marks dirty so the loop stays active while any
+element is spinning.
 
 Delay materials (Phase 3) add a stateful simulation layer on top. Each
 delay element owns a `ParticlePool` in the tracer; primary rays that

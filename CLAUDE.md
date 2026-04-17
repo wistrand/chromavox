@@ -101,8 +101,10 @@ Detailed notes are split into topic files under `agent_docs/`:
   scroll on narrow widths).
 - Bench is **letterboxed** at the canonical portrait golden-ratio aspect
   (`CANONICAL_BENCH` in `scene.js`). `Renderer.benchSize` returns the
-  constant; CSS pins the canvas's display aspect with black bars on the
-  rest of the stage. Resize never rescales elements. `deserializeScene`
+  constant; `renderer.resize()` computes the largest 556:900 box that
+  fits the stage in JS (pure CSS `aspect-ratio` + `max-width` broke on
+  narrow mobile portrait screens). Resize never rescales elements.
+  `deserializeScene`
   rescales loaded preset coords + sizes to the canonical bench so older
   presets keep composing correctly.
 - Touch: single pointer drags/rotates (shift-drag rotates); two
@@ -156,9 +158,11 @@ Detailed notes are split into topic files under `agent_docs/`:
   is unchecked.
 - Mic smoothing is exposed as a slider (`AnalyserNode.smoothingTimeConstant`)
   for per-keyboard-style snappy response or smoother envelope tracking.
-- Toolbar's element placement is a div-based dropdown (`Add ▾`) so each
-  menu item has space for custom renderings (currently shows an SVG
-  thumbnail rendered from the element's own `localPolygon`).
+- Toolbar's element placement is a split button — left side places the
+  last-used element (shows SVG icon + label), right side (`▾`) opens
+  the full dropdown. Picking from the dropdown updates the default.
+  Fixed 140 px width to avoid layout shift. Each menu item shows an SVG
+  thumbnail rendered from the element's own `localPolygon`.
 - Audio in / Audio out are split-button dropdowns: the main button
   toggles the audio state on/off; the `▾` opens an options menu
   (`#mic-menu`, `#synth-menu`) containing all the related selects /
@@ -170,6 +174,32 @@ Detailed notes are split into topic files under `agent_docs/`:
 - `endEdit` short-circuits while `this.dragging` is set so unrelated
   events (Shift keyup, slider change) can't prematurely seal the drag's
   pending history snapshot.
+- Scene auto-saves to `localStorage` on every `markDirty` (key:
+  `'chromavox-scene'`). On page load, `main.js` restores from
+  localStorage if available, falls back to `createScene()`. Uses
+  `serializeScene` / `deserializeScene`.
+- Clear button `Object.assign`s a fresh `createScene()` over the scene
+  (not just `elements = []`), clears `micLevels` / `wlPerSource` /
+  `disabled`, calls `syncControls` + `rebuildSensorReadout`, and
+  removes the localStorage entry.
+- `syncControls` dispatches `'change'` events on all 7 sliders after
+  setting values programmatically so `main.js` label-rebuild listeners
+  fire.
+- UI constructor takes a 4th arg (`onSceneReset`), called from clear,
+  file-load, and preset-load handlers. `main.js` passes `resetDisplay`
+  which zeros `_displayBins`, `_peakMax`, and calls
+  `tracer.resetPersistence()`.
+- `tracer.resetPersistence()` zeros `_exitSegCount`, `_sensorPersist`,
+  clears `_pools` and `_localPolys`. Prevents stale persistence data
+  from bleeding across scene transitions.
+- Elements can have `el.spin` (rad/s). The frame loop applies
+  `el.rot += el.spin * dt`. Property panel has a Spin slider
+  (-180..180 deg/s) with `×` reset button. Ctrl+Left/Right adjusts
+  spin by 10 deg/s. Serializes and undoes automatically.
+- Spectrum readout smoothing: `updateSensorReadout` applies (A) Gaussian
+  blur [0.25, 0.5, 0.25] across bins, (C) temporal IIR (`_displayBins`
+  lerps at 0.3), (D) slow-decaying peak normalization (`_peakMax`
+  decays at 0.95).
 - Delay materials (Phase 3 stateful slow-glass): each delay element
   owns a `ParticlePool` in the tracer. Primary rays entering a delay
   element are captured (not refracted through); particles advance each
@@ -184,4 +214,5 @@ Detailed notes are split into topic files under `agent_docs/`:
   `tracer.activeParticleCount()` gates the RAF loop; `tracer.simRate`
   (log-scaled 0.05x..4x) multiplies particle advance `dt`. No chase
   clock, no onset detector, no `DelayNode`, no `delayFingerprint`.
-  `History.commit` returns void; UI constructor takes 3 args.
+  `History.commit` returns void; UI constructor takes 4 args
+  (scene, onChange, renderer, onSceneReset).

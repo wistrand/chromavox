@@ -9,9 +9,11 @@ Two-row, three-column grid defined in `docs/style.css`:
 "left   stage  right"    1fr
 ```
 
-The stage flex-centers a `#bench-viewport` div locked to the canonical
-bench aspect (`aspect-ratio: 556 / 900`). The canvas fills that viewport
-exactly, so the rest of the stage is the letterbox black bar. Emitter
+The stage flex-centers a `#bench-viewport` div sized by
+`renderer.resize()` to the largest 556:900 box that fits the stage
+(computed in JS; pure CSS `aspect-ratio` + `max-width` broke on narrow
+mobile portrait screens). The canvas fills that viewport exactly, so
+the rest of the stage is the letterbox black bar. Emitter
 labels live inside the viewport so they track the canvas, not the full
 stage.
 
@@ -38,9 +40,11 @@ absolute-positioned overlays starting below the header.
 
 ## Mouse / pointer interaction
 
-- **Tool palette**: clicking a placeable tool drops the element at the
-  centre of the bench and reverts to Select. Delete and Select are
-  modal.
+- **Tool palette**: the Add button is a split button — left side places
+  the last-used element type (shows SVG icon + label), right side (`▾`)
+  opens the full dropdown. Picking from the dropdown updates the
+  default. Fixed 140 px width to avoid layout shift. Delete and Select
+  are modal.
 - **Select tool**: click to pick, drag to move, Shift-drag (or
   right-button drag) rotates around the element's centre.
 - **Two-finger touch (pinch)**: while an element is selected, a second
@@ -64,6 +68,7 @@ key bindings — they include:
 
 - Arrow keys to move the selected element.
 - Shift + Arrow Left/Right to rotate.
+- Ctrl + Arrow Left/Right to adjust spin by 10 deg/s.
 - Shift + Arrow Up/Down to resize the primary dimension.
 - Backspace / Delete to remove.
 - Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y for undo / redo.
@@ -109,6 +114,14 @@ Mutation entry points that bracket `beginEdit` / `endEdit`:
 - Preset load, file load, clear, arrow-key nudges, left-wall source
   toggle — all bracket appropriately.
 
+## Continuous rotation (spin)
+
+Elements can carry `el.spin` (rad/s). The frame loop applies
+`el.rot += el.spin * dt`. The property panel shows a **Spin** slider
+(-180..180 deg/s) with a `×` reset button. Ctrl+Left/Right adjusts
+spin by 10 deg/s. The property serializes into scene JSON and
+participates in undo/redo automatically.
+
 ## Per-element color override
 
 Property panel shows a **Color** row with a native color picker, a `×`
@@ -130,6 +143,22 @@ JSON is `version: 1`. `_selected` is stripped on serialize.
 `emitter.disabled` converts between `Set` and array.
 `deserializeScene` regenerates element IDs so imported scenes never
 collide with running ones.
+
+Scene auto-saves to `localStorage` (key `'chromavox-scene'`) on every
+`markDirty`. On page load, `main.js` restores from localStorage if
+available, otherwise calls `createScene()`.
+
+Clear button `Object.assign`s a fresh `createScene()` over the scene
+(not just `elements = []`), clears `micLevels` / `wlPerSource` /
+`disabled`, calls `syncControls` + `rebuildSensorReadout`, and removes
+the localStorage entry. Clear, file-load, and preset-load all invoke
+the `onSceneReset` callback (4th UI constructor arg), which in
+`main.js` zeros `_displayBins`, `_peakMax`, and calls
+`tracer.resetPersistence()`.
+
+`syncControls` dispatches `'change'` events on all 7 sliders after
+setting values programmatically so label-rebuild listeners in `main.js`
+fire correctly.
 
 On load (preset or file) a synthetic `resize` event is dispatched so
 `scene.bench` snaps to the current canvas aspect — otherwise a preset

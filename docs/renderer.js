@@ -333,10 +333,25 @@ export class Renderer {
   }
 
   resize() {
+    // Size the bench-viewport to the largest 556:900 box that fits the
+    // stage, enforcing both width and height constraints.  Pure CSS
+    // aspect-ratio + max-* can't handle both axes simultaneously on
+    // narrow mobile screens (height: 100% wins, max-width clamps
+    // width, and the aspect ratio breaks).
+    const vp = this.canvas.parentElement;
+    const stage = vp.parentElement;
+    const stageW = stage.clientWidth;
+    const stageH = stage.clientHeight;
+    const ASPECT = 556 / 900;
+    let w = stageH * ASPECT;
+    let h = stageH;
+    if (w > stageW) { w = stageW; h = stageW / ASPECT; }
+    vp.style.width  = Math.floor(w) + 'px';
+    vp.style.height = Math.floor(h) + 'px';
+
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const rect = this.canvas.getBoundingClientRect();
-    this.canvas.width = Math.max(2, Math.floor(rect.width * dpr));
-    this.canvas.height = Math.max(2, Math.floor(rect.height * dpr));
+    this.canvas.width = Math.max(2, Math.floor(w * dpr));
+    this.canvas.height = Math.max(2, Math.floor(h * dpr));
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     // Reallocate the FBO color attachment as RGBA16F when supported so the
     // ray pass can accumulate beyond 1.0 in linear HDR space.
