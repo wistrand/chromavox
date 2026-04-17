@@ -18,6 +18,12 @@ node serve.js 9000 # override port
 ES modules require HTTP (not `file://`). Server ROOT is `docs/`, which is
 also the GitHub Pages folder.
 
+## Tests
+
+`npm test` runs `test/run.js` (Node, no browser, no dependencies).
+Do not run tests unless explicitly asked or when a change is likely to
+break core math/physics (spectrum, scene geometry, tracer capture/exit).
+
 ## Architecture docs
 
 Detailed notes are split into topic files under `agent_docs/`:
@@ -30,6 +36,24 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [UI & state](agent_docs/architecture-ui.md)
 - [Delay materials](agent_docs/architecture-delay.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
+
+
+## Conventions
+
+- **No build step.** No bundlers, transpilers, or runtime deps.
+  Browser loads `main.js` via `<script type="module">`.
+- **No shader loader.** All GLSL lives as template strings in javascript.
+- **ES modules only.** `package.json` sets `"type": "module"`.
+- **2-space indentation** in `.js`, `.html`, `<style>`.
+- **No AI-isms in user-facing text.** Keep prose direct and
+  concrete.
+- **Mind GC pressure and wasted work on hot paths.** 
+  Prefer pooled scratch objects
+  over per-call allocations, pass out-parameters instead of
+  returning fresh objects, skip work when there's nothing to do
+  (invisible hint, unchanged state, culled region), and guard
+  the biggest loops with tighter iteration bounds
+
 
 ## Key invariants to remember
 
