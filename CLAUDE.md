@@ -156,19 +156,26 @@ Detailed notes are split into topic files under `agent_docs/`:
   Main thread posts `sensorBins` via `MessagePort` each frame; worklet
   reads the latest snapshot in `process()`. Per-sample gain smoothing
   (~60 ms time constant) inside the worklet replaces the old
-  `setTargetAtTime` calls. Peak-hold normalization also runs inside
-  the worklet. Partials slider (1–8, default 6); `Math.sin` directly
-  (no wavetable yet). Carrier mode: `sine` (harmonic partials) or
-  `noise` (bandpass-filtered white noise per voice; 2-pole resonator
-  with frequency-dependent `r` 0.993–0.998 and amplitude normalization
-  by `1/sqrt(freq/200)` for even loudness). Partials slider hidden
-  in noise mode. Voices with all gains < 1e-5 are skipped (voice
+  `setTargetAtTime` calls. Fixed-range normalization: worklet receives
+  `fullScale` (`BASE_INTENSITY * sqrt(raysPer)`) via rebuild; each
+  partial's bin sum is divided by `fullScale/K` to recover 0–1
+  micGain, then floor 0.05, gamma 1.3, and `1/sc^0.25` voice scale.
+  No peak-hold — quiet voices stay quiet. Partials slider (1–8,
+  default 6); `Math.sin` directly (no wavetable yet). Carrier mode:
+  `sine` (harmonic partials) or `noise` (bandpass-filtered white
+  noise per voice; 2-pole resonator with frequency-dependent `r`
+  0.993–0.998 and linear amplitude ramp `0.15 * min(2, freq/400)`
+  for even loudness). Partials slider hidden in noise mode.
+  Voices with all gains < 1e-5 are skipped (voice
   stealing). Rebuild sends frequency array via `MessagePort` — no
   node teardown/recreation. `synth.enable()` is async (awaits
   `audioWorklet.addModule`).
 - Keyboard claviature voices use `'triangle'` so a single key mostly
   occupies one chromatic bucket without turning into a full harmonic
-  stack like sawtooth.
+  stack like sawtooth. On key release, `_knownFrequencies` returns
+  `[]` (not `null`) so `directLevels` returns an all-zeros array
+  instead of falling through to the FFT path, preventing spectral
+  leakage from the fading oscillator from lighting up many emitters.
 - UI shortcuts ignore key events while a drag is in progress
   (`if (this.dragging) return;`) so playing keyboard notes mid-drag
   doesn't hijack the gesture.
@@ -238,6 +245,14 @@ Detailed notes are split into topic files under `agent_docs/`:
   `el.rot += el.spin * dt`. Property panel has a Spin slider
   (-180..180 deg/s) with `×` reset button. Ctrl+Left/Right adjusts
   spin by 10 deg/s. Serializes and undoes automatically.
+- Mic spectrum window: floating draggable debug window toggled via
+  checkbox in the left panel. Shows raw FFT curve (grey) and micBands
+  bucket levels (colored bars) on a shared log-frequency axis.
+- Synth spectrum window: same structure, toggled separately. Shows
+  per-sensor energy on the mic-side frequency axis using absolute
+  scaling (`sensorBins / fullScale`). Bars placed by spatial position
+  on the emitter frequency ladder. Warm hues (orange→green) to
+  distinguish from mic spectrum (blue→purple).
 - Stats window: floating draggable window toggled via a checkbox in the
   left panel (below Distort). Shows elements, sources, sensors,
   rays/src, segments, particles, pools, and spinning count. Close button

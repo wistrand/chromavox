@@ -87,7 +87,8 @@ no separate `.js` file, no build step. `synth.enable()` is async
   resonator's `r` scales with frequency (0.993 at low, 0.998 at
   high) so low voices get wider bands (less resonant bass buildup)
   while high voices stay tonal. Amplitude normalized by
-  `1/sqrt(freq/200)` for even perceived loudness across the range.
+  `0.15 * min(2, freq/400)` — linear ramp that attenuates bass
+  and boosts higher frequencies for even perceived loudness.
 - **Partials**: adjustable 1–8 via the Partials slider (default 6).
   Each voice synthesises that many harmonic overtones with
   `Math.sin` directly (no wavetable). Harmonic gains come from
@@ -103,9 +104,13 @@ no separate `.js` file, no build step. `synth.enable()` is async
 - **Gain smoothing**: per-sample exponential smoothing (~60 ms time
   constant) inside the worklet replaces the old `setTargetAtTime`
   calls, preventing zipper noise from single-frame spikes.
-- **Peak-hold normalization** runs inside the worklet (slow-decaying
-  peak hold so a ray briefly sweeping across a sensor doesn't snap
-  the global scale).
+- **Fixed-range normalization**: the worklet receives `fullScale`
+  (`BASE_INTENSITY * sqrt(raysPer)`) via the rebuild message. Each
+  partial's sensor bin sum is divided by `fullScale / K` to recover
+  the 0–1 micGain scale. A floor of 0.05 and gamma of 1.3 shape
+  the gain, then `1 / sc^0.25` scales for multi-voice headroom.
+  No peak-hold — quiet voices stay quiet relative to loud ones,
+  matching the mic spectrum's absolute scaling.
 - **Voice stealing**: voices whose gains are all < 1e-5 are skipped
   entirely in the render loop.
 - Master gain slider posts a gain value via `MessagePort`.
@@ -147,6 +152,21 @@ before writing to the right-panel bar display:
 zeros them; called by `resetDisplay` (via the `onSceneReset` callback)
 on clear, file-load, or preset-load so stale smoothing state doesn't
 bleed across scenes.
+
+## Synth spectrum debug window
+
+Toggled via the **Synth spectrum** checkbox in the left panel (below
+Mic spectrum). Floating draggable window identical in structure to the
+mic spectrum window. Shows per-sensor energy on the same log-frequency
+axis as the mic spectrum, using absolute scaling: sensor bin totals
+divided by `fullScale` (`BASE_INTENSITY * sqrt(raysPer)`) to recover
+the 0–1 micGain scale. With no elements and matched counts, bars
+should be identical heights to the mic spectrum. Bars use warm hues
+(orange → green) to distinguish from the mic spectrum (blue → purple).
+Sensor bars are placed by spatial position on the emitter frequency
+ladder (sensor `i` at `i*(emitterCount-1)/(sensorCount-1)` scale
+degrees) so the axes align even when sensor count differs from emitter
+count.
 
 ## Input/output symmetry
 

@@ -423,7 +423,7 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
   const dbRange = maxDb - minDb;
   const dbNorm = db => Math.max(0, Math.min(1, (db - minDb) / dbRange));
 
-  const floor = 0.08;
+  const floor = 0.15;
   const shape = raw => {
     const v = Math.max(0, (raw - floor) / (1 - floor));
     return Math.pow(v, 1.5);

@@ -17,7 +17,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.voices = [];
     this.bins = null;
     this.binCount = 64;
-    this.peak = 1e-6;
+    this.fullScale = 1;
     this.sensorCount = 0;
     this.partials = 1;
     this.carrier = 'sine'; // 'sine' | 'noise'
@@ -26,7 +26,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       if (d.type === 'bins') {
         this.bins = d.bins;
       } else if (d.type === 'rebuild') {
-        this._rebuild(d.freqs, d.binCount, d.sensorCount);
+        this._rebuild(d.freqs, d.binCount, d.sensorCount, d.fullScale);
       } else if (d.type === 'partials') {
         this.partials = d.value;
         if (this.sensorCount > 0) this._rebuildPartials();
@@ -35,9 +35,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       }
     };
   }
-  _rebuild(freqs, binCount, sensorCount) {
+  _rebuild(freqs, binCount, sensorCount, fullScale) {
     this.binCount = binCount;
     this.sensorCount = sensorCount;
+    if (fullScale) this.fullScale = fullScale;
     this._freqs = freqs;
     this._rebuildPartials();
   }
@@ -61,7 +62,6 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       // Q chosen for moderate bandwidth; coefficients computed in process().
       this.voices.push({ freq: f, phases, gains, targetGains, bp1: 0, bp2: 0 });
     }
-    this.peak = 1e-6;
   }
   process(inputs, outputs) {
     const out = outputs[0];
@@ -73,8 +73,17 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const bc = this.binCount;
     const sc = this.sensorCount;
     // Compute target gains from latest bins snapshot.
+    // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
+    // the 0-1 micGain scale, then apply floor + gamma. This matches the
+    // mic spectrum's absolute scaling so quiet voices stay quiet.
     if (bins && bins.length >= sc * bc) {
-      let maxP = 1e-6;
+      const fs = this.fullScale;
+      // fullScale is total energy across all bins for a single voice at
+      // micGain=1. Each partial covers bc/K bins, so per-partial full
+      // scale is fs / K. Scale down by sqrt(sc) so many simultaneous
+      // voices don't clip; matches the old normalization level.
+      const partialFS = fs / K;
+      const voiceScale = 1 / Math.pow(sc, 0.25);
       for (let s = 0; s < sc; s++) {
         const v = this.voices[s];
         const nk = v.targetGains.length;
@@ -83,17 +92,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           const b1 = ((k + 1) * bc / K) | 0;
           let sum = 0;
           for (let b = b0; b < b1; b++) sum += bins[s * bc + b];
-          const avg = sum / Math.max(1, b1 - b0);
-          if (avg > maxP) maxP = avg;
-          v.targetGains[k] = avg;
-        }
-      }
-      this.peak = Math.max(maxP, this.peak * 0.94);
-      const norm = 1 / (Math.sqrt(sc) * this.peak);
-      for (let s = 0; s < sc; s++) {
-        const v = this.voices[s];
-        for (let k = 0; k < v.targetGains.length; k++) {
-          v.targetGains[k] = Math.pow(Math.max(0, v.targetGains[k]) * norm, 1.3);
+          // Normalize to 0-1 using the known full-scale deposit.
+          const g = Math.min(1, sum / partialFS);
+          v.targetGains[k] = g < 0.15 ? 0
+            : Math.pow((g - 0.15) / 0.85, 1.5) * voiceScale;
         }
       }
     }
@@ -123,7 +125,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         const r = Math.min(0.999, 0.993 + 0.005 * Math.min(1, v.freq / 2000));
         const c1 = 2 * r * Math.cos(w);
         const c2 = -(r * r);
-        const ampScale = 0.12 / Math.max(0.3, Math.sqrt(v.freq / 200));
+        const ampScale = 0.15 * Math.min(2, v.freq / 400);
         // Use first partial's gain for overall amplitude.
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
@@ -170,9 +172,7 @@ export class SensorSynth {
     this.baseHz = 130.81;
     this.sinkId = '';
     this.stepSemi = 1;
-    // Slow-decaying peak hold for amplitude normalization (used by the
-    // spectrum readout; worklet has its own internal copy).
-    this.peak = 1e-6;
+    this.raysPer = 512;
   }
 
   setPartials(n) {
@@ -231,7 +231,12 @@ export class SensorSynth {
     this.workletNode = new AudioWorkletNode(this.ctx, 'chromavox-synth', {
       outputChannelCount: [1],
     });
-    this.workletNode.connect(this.master);
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 8192;
+    this.analyser.smoothingTimeConstant = 0.6;
+    this.freqFloat = new Float32Array(this.analyser.frequencyBinCount);
+    this.workletNode.connect(this.analyser);
+    this.analyser.connect(this.master);
     this.rebuild(sensorCount);
     this.active = true;
   }
@@ -244,7 +249,7 @@ export class SensorSynth {
 
   rebuild(sensorCount) {
     if (!this.ctx || !this.workletNode) return;
-    const loHz = 110, hiHz = 1800;
+    const loHz = 80, hiHz = 6000;
     const baseHz = this.baseHz ?? 130.81;
     const stepDeg = this.stepSemi ?? 1;
     const scaleName = (this.mode && this.mode !== 'log') ? this.mode : 'chromatic';
@@ -253,7 +258,7 @@ export class SensorSynth {
       if (this.mode !== 'log') {
         freqs[i] = scaleFreq(baseHz, scaleName, i, stepDeg);
       } else {
-        const t = sensorCount > 1 ? i / (sensorCount - 1) : 0;
+        const t = (i + 0.5) / sensorCount;
         freqs[i] = loHz * Math.pow(hiHz / loHz, t);
       }
     }
@@ -262,6 +267,7 @@ export class SensorSynth {
       freqs,
       binCount: 64,
       sensorCount,
+      fullScale: 1.6 * Math.sqrt(this.raysPer),
     });
     this.count = sensorCount;
   }
@@ -280,6 +286,9 @@ export class SensorSynth {
     if (!this.active) return;
     this.workletNode?.disconnect();
     this.workletNode = null;
+    this.analyser?.disconnect();
+    this.analyser = null;
+    this.freqFloat = null;
     this.master?.disconnect();
     this.ctx?.close();
     this.ctx = null;

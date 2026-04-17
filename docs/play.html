@@ -162,6 +162,7 @@
     <div class="row"><label><input id="distort-toggle" type="checkbox"> Distort</label></div>
     <div class="row"><label><input id="stats-toggle" type="checkbox"> Stats</label></div>
     <div class="row"><label><input id="mic-spectrum-toggle" type="checkbox"> Mic spectrum</label></div>
+    <div class="row"><label><input id="synth-spectrum-toggle" type="checkbox"> Synth spectrum</label></div>
 
   </aside>
 
@@ -172,6 +173,16 @@
     </div>
     <div class="fw-body">
       <canvas id="mic-spectrum-canvas" width="400" height="120" style="display:block;background:#000;border-radius:3px"></canvas>
+    </div>
+  </div>
+
+  <div id="synth-spectrum-window" class="floating-window" hidden>
+    <div class="fw-titlebar">
+      <span class="fw-title">Synth Spectrum</span>
+      <button class="fw-close" aria-label="Close">×</button>
+    </div>
+    <div class="fw-body">
+      <canvas id="synth-spectrum-canvas" width="400" height="120" style="display:block;background:#000;border-radius:3px"></canvas>
     </div>
   </div>
 

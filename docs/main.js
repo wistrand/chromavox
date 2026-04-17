@@ -850,6 +850,102 @@ window.addEventListener('resize', () => {
   };
 }
 
+// --- Synth spectrum debug window ---
+{
+  const specWin = document.getElementById('synth-spectrum-window');
+  const specToggle = document.getElementById('synth-spectrum-toggle');
+  const specClose = specWin.querySelector('.fw-close');
+  const specCanvas = document.getElementById('synth-spectrum-canvas');
+  const specCtx = specCanvas.getContext('2d');
+  const titlebar = specWin.querySelector('.fw-titlebar');
+
+  let positioned = false;
+  function showSpec() {
+    if (!positioned) {
+      specWin.style.top = '270px';
+      specWin.style.right = '12px';
+      specWin.style.left = 'auto';
+      positioned = true;
+    }
+    specWin.hidden = false;
+    specToggle.checked = true;
+  }
+  function hideSpec() { specWin.hidden = true; specToggle.checked = false; }
+  specToggle.addEventListener('change', () => { specToggle.checked ? showSpec() : hideSpec(); });
+  specClose.addEventListener('click', hideSpec);
+
+  let dragOff = null;
+  titlebar.addEventListener('pointerdown', e => {
+    if (e.target.closest('.fw-close')) return;
+    e.preventDefault();
+    titlebar.setPointerCapture(e.pointerId);
+    const r = specWin.getBoundingClientRect();
+    dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+    specWin.style.right = 'auto';
+  });
+  titlebar.addEventListener('pointermove', e => {
+    if (!dragOff) return;
+    specWin.style.left = (e.clientX - dragOff.x) + 'px';
+    specWin.style.top  = (e.clientY - dragOff.y) + 'px';
+  });
+  titlebar.addEventListener('pointerup', () => { dragOff = null; });
+  titlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
+
+  // Render actual synth output FFT — same approach as the mic spectrum
+  // but reading from synth.analyser instead of mic.analyser.
+  window._updateSynthSpectrum = function() {
+    if (specWin.hidden || !synth.active || !synth.analyser) return;
+    const W = specCanvas.width, H = specCanvas.height;
+    specCtx.fillStyle = '#000';
+    specCtx.fillRect(0, 0, W, H);
+
+    const fd = synth.freqFloat;
+    if (!fd) return;
+    synth.analyser.getFloatFrequencyData(fd);
+
+    const nyquist = synth.ctx.sampleRate / 2;
+    const binCount = fd.length;
+
+    // Use the synth-side scale for the frequency axis.
+    const sMode = synthMode();
+    const sBase = synthBase();
+    const sStep = synthStep();
+
+    const loHz = 80, hiHz = 6000;
+    const logLo = Math.log(loHz), logHi = Math.log(hiHz);
+    const freqToX = hz => hz <= 0 ? -1 : (Math.log(hz) - logLo) / (logHi - logLo) * W;
+
+    // Raw FFT curve on log frequency axis.
+    const minDb = synth.analyser.minDecibels;
+    const maxDb = synth.analyser.maxDecibels;
+    const dbRange = maxDb - minDb;
+    specCtx.strokeStyle = '#555';
+    specCtx.lineWidth = 1;
+    specCtx.beginPath();
+    let started = false;
+    for (let i = 1; i < binCount; i++) {
+      const hz = (i / binCount) * nyquist;
+      if (hz < loHz * 0.5 || hz > hiHz * 1.5) continue;
+      const x = freqToX(hz);
+      const db = Math.max(minDb, fd[i]);
+      const y = H - ((db - minDb) / dbRange) * H;
+      if (!started) { specCtx.moveTo(x, y); started = true; }
+      else specCtx.lineTo(x, y);
+    }
+    specCtx.stroke();
+
+    // Axis labels.
+    specCtx.fillStyle = '#666';
+    specCtx.font = '9px monospace';
+    for (const hz of [100, 200, 500, 1000, 2000, 5000]) {
+      if (hz < loHz * 0.9 || hz > hiHz * 1.1) continue;
+      const x = freqToX(hz);
+      specCtx.fillText(hz >= 1000 ? `${hz/1000}k` : `${hz}`, x + 2, H - 2);
+      specCtx.fillRect(x, 0, 1, H);
+    }
+  };
+}
+
 function frame() {
   if (mic.active) {
     const s = mic.sample();
@@ -916,6 +1012,10 @@ function frame() {
   }
 
   if (synth.active) {
+    if (synth.raysPer !== scene.emitter.raysPerSource) {
+      synth.raysPer = scene.emitter.raysPerSource;
+      synth.rebuild(scene.sensorCount);
+    }
     synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount);
   }
 
@@ -926,6 +1026,7 @@ function frame() {
 
   window._updateStats();
   window._updateMicSpectrum();
+  window._updateSynthSpectrum();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
