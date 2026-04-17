@@ -38,6 +38,14 @@ const PARTICLE_EPS = 0.002;
 //   [p1x, p1y, p2x, p2y, c1r*I1, c1g*I1, c1b*I1, I1,
 //    c2r*I2, c2g*I2, c2b*I2, I2]
 const SEG_FLOATS = 12;
+// Minimum effective delayK for the capture path.  Below this threshold
+// the element is treated as a normal (non-delay) dielectric — rays
+// refract through instantly instead of being captured as particles.
+// At the threshold value, transit through a 100-unit glass takes ~3
+// frames — just enough for a visible ribbon.  Below that, the 1-frame
+// gap between capture and exit makes rays look like they reflect off
+// the boundary.
+const DELAY_MIN = 0.0003;
 // Floats per particle record in a ParticlePool:
 //   [lx, ly, ldx, ldy, I, wl, lastLx, lastLy]
 const PART_FLOATS = 8;
@@ -122,6 +130,23 @@ export class Tracer {
     // Local-polygon cache keyed by element id so the advance pass
     // doesn't keep re-allocating polygon arrays.
     this._localPolys = new Map();
+    // Exit segment persistence cache.  Secondary-ray segments are
+    // single-frame events (only produced the frame a particle exits);
+    // without persistence the post-glass ribbon flickers because
+    // different particles exit on different frames.  The cache holds
+    // recent exit segments and decays their intensity each frame so the
+    // ribbon smoothly fades rather than popping in and out.
+    this._exitSegs = new Float32Array(0);
+    this._exitSegCount = 0;
+    // Persistent sensor accumulator for secondary-ray deposits.  Same
+    // decay logic as the exit segment cache: secondary castRay hits
+    // write here at (1-DECAY) strength; the accumulator decays each
+    // frame; merged into sensorBins at the end of trace().
+    this._sensorPersist = null;
+    // Flag set while tracing secondary rays so castRay can route
+    // sensor deposits to the persistent accumulator instead of the
+    // per-frame sensorBins.
+    this._isSecondary = false;
   }
 
   // Any element in the current scene that carries a non-zero delayK?
@@ -141,6 +166,10 @@ export class Tracer {
   // particle exits.
   trace(scene) {
     this.segmentCount = 0;
+    // Decay exit segment cache; emission happens at the end of trace()
+    // after this frame's secondary exits have been added.
+    this._decayExitCache();
+
     const { bench, emitter, sensorCount, elements } = scene;
 
     // Build world edges for all elements and the element-info array the
@@ -158,7 +187,7 @@ export class Tracer {
       elementMap.set(el.id, info);
       elementInfos.push(info);
       for (const e of eEdges) edges.push(e);
-      if (dK > 0) this._hasDelay = true;
+      if (dK >= DELAY_MIN) this._hasDelay = true;
     }
 
     // Drop pools whose element is gone; clear the local-polygon cache
@@ -179,11 +208,19 @@ export class Tracer {
     W[3].p1.x = 0;       W[3].p1.y = bench.h; W[3].p2.x = 0;       W[3].p2.y = 0;
 
     // Sensor setup: sensors tile the right wall; each sensor covers a strip.
+    const binLen = sensorCount * this.binCount;
     if (this.sensorCount !== sensorCount || !this.sensorBins) {
       this.sensorCount = sensorCount;
-      this.sensorBins = new Float32Array(sensorCount * this.binCount);
+      this.sensorBins = new Float32Array(binLen);
+      this._sensorPersist = new Float32Array(binLen);
     } else {
       this.sensorBins.fill(0);
+      // Decay the persistent secondary accumulator; it will be merged
+      // back into sensorBins at the end of trace() after both primary
+      // and secondary castRay passes.
+      const D = Tracer.PERSIST_DECAY;
+      const sp = this._sensorPersist;
+      for (let i = 0; i < binLen; i++) sp[i] *= D;
     }
     const sensorX = bench.w - 4;
     const sensorStripH = bench.h / sensorCount;
@@ -248,12 +285,32 @@ export class Tracer {
       }
     }
 
-    // --- 2) Secondary rays from particle exits this frame.
+    // --- 2) Secondary rays from particle exits this frame.  Their
+    // segments go only into the persistence cache (not the main buffer)
+    // so brightness converges to 1× instead of accumulating 1/(1-D).
+    // Sensor deposits are routed to the persistent accumulator via
+    // `_isSecondary` so the spectrum readout and synth don't flicker.
+    const secStart = this.segmentCount;
+    this._isSecondary = true;
     for (let i = 0; i < this._secondary.length; i++) {
       const r = this._secondary[i];
       this.castRay(r.ox, r.oy, r.dx, r.dy, r.wl, r.rgb, r.I,
                    edges, elementMap, elementInfos, W, sensorStripH, r.skipElId);
     }
+    this._isSecondary = false;
+    // Cache the segments scaled by (1-D), then remove them from the
+    // main buffer — the cache is the sole source of post-glass segments.
+    this._cacheExitSegments(secStart, this.segmentCount);
+    this.segmentCount = secStart;
+    // Emit the full cache (previous frames decayed + this frame's fresh
+    // entries) into the main buffer.
+    this._emitExitCache();
+    // Merge persistent sensor accumulator into sensorBins so the synth
+    // and readout see both primary (per-frame) and secondary (persisted)
+    // deposits in one array.
+    const sp = this._sensorPersist;
+    const sb = this.sensorBins;
+    for (let i = 0; i < binLen; i++) sb[i] += sp[i];
   }
 
   // Advance every delay element's particle pool by `dtEff` seconds of
@@ -261,7 +318,7 @@ export class Tracer {
   _advanceParticles(elementInfos, dtEff) {
     for (let k = 0; k < elementInfos.length; k++) {
       const info = elementInfos[k];
-      if (info.delayK <= 0) continue;
+      if (info.delayK < DELAY_MIN) continue;
       const pool = this._pools.get(info.el.id);
       if (!pool || pool.count === 0) continue;
       this._advancePool(pool, info, dtEff);
@@ -452,6 +509,70 @@ export class Tracer {
     return p;
   }
 
+  // --- Exit persistence (segments + sensor bins) ---
+  // Shared decay rate.  Each frame old entries are multiplied by PERSIST_DECAY;
+  // new entries are stored at (1 - PERSIST_DECAY) so the steady-state sum of
+  // the geometric series converges to 1× the single-frame brightness.
+  static PERSIST_DECAY = 0.80;
+  static PERSIST_FLOOR = 0.002;
+
+  // Decay cached exit segments and compact dead entries.
+  _decayExitCache() {
+    const D = Tracer.PERSIST_DECAY, F = Tracer.PERSIST_FLOOR;
+    const d = this._exitSegs;
+    let w = 0;
+    for (let i = 0; i < this._exitSegCount; i++) {
+      const off = i * SEG_FLOATS;
+      d[off + 4] *= D; d[off + 5] *= D; d[off + 6] *= D; d[off + 7] *= D;
+      d[off + 8] *= D; d[off + 9] *= D; d[off + 10] *= D; d[off + 11] *= D;
+      if (d[off + 7] > F || d[off + 11] > F) {
+        if (w !== i) {
+          const a = w * SEG_FLOATS, b = off;
+          for (let k = 0; k < SEG_FLOATS; k++) d[a + k] = d[b + k];
+        }
+        w++;
+      }
+    }
+    this._exitSegCount = w;
+  }
+  // Copy cached exit segments into the main segment buffer.
+  _emitExitCache() {
+    if (this._exitSegCount === 0) return;
+    this.ensureSegmentCapacity(this.segmentCount + this._exitSegCount);
+    const src = this._exitSegs;
+    const dst = this.segmentData;
+    for (let i = 0; i < this._exitSegCount; i++) {
+      const sOff = i * SEG_FLOATS;
+      const dOff = this.segmentCount * SEG_FLOATS;
+      for (let k = 0; k < SEG_FLOATS; k++) dst[dOff + k] = src[sOff + k];
+      this.segmentCount++;
+    }
+  }
+  // Snapshot segments[start..end) from the main buffer into the cache,
+  // scaled by (1 - PERSIST_DECAY) so the additive steady-state = 1×.
+  _cacheExitSegments(start, end) {
+    const count = end - start;
+    if (count === 0) return;
+    const scale = 1 - Tracer.PERSIST_DECAY;
+    const needed = (this._exitSegCount + count) * SEG_FLOATS;
+    if (this._exitSegs.length < needed) {
+      const next = new Float32Array(Math.max(needed, this._exitSegs.length * 2 || 1024));
+      next.set(this._exitSegs.subarray(0, this._exitSegCount * SEG_FLOATS));
+      this._exitSegs = next;
+    }
+    const src = this.segmentData;
+    const dst = this._exitSegs;
+    for (let i = 0; i < count; i++) {
+      const sOff = (start + i) * SEG_FLOATS;
+      const dOff = (this._exitSegCount + i) * SEG_FLOATS;
+      // Position (4 floats) copied as-is; colour+intensity (8 floats) scaled.
+      dst[dOff] = src[sOff]; dst[dOff + 1] = src[sOff + 1];
+      dst[dOff + 2] = src[sOff + 2]; dst[dOff + 3] = src[sOff + 3];
+      for (let k = 4; k < SEG_FLOATS; k++) dst[dOff + k] = src[sOff + k] * scale;
+    }
+    this._exitSegCount += count;
+  }
+
   castRay(ox, oy, dx, dy, wl, rgb, intensity, edges, elementMap, elementInfos, walls, sensorStripH, skipElId) {
     let x = ox, y = oy, vx = dx, vy = dy;
     let I = intensity;
@@ -465,7 +586,7 @@ export class Tracer {
     stack.length = 0;
     for (let i = 0; i < elementInfos.length; i++) {
       const v = elementInfos[i];
-      if (v.delayK > 0) continue;
+      if (v.delayK >= DELAY_MIN) continue;
       if (v.mat && v.mat.type === 'dielectric' && pointInPolygon(v.polygon, x, y)) {
         stack.push(v.el);
       }
@@ -519,7 +640,11 @@ export class Tracer {
           const sIdx = Math.min(this.sensorCount - 1, Math.max(0, Math.floor(hy / sensorStripH)));
           const binIdx = Math.min(this.binCount - 1, Math.max(0,
             Math.floor((wl - 380) / (780 - 380) * this.binCount)));
-          this.sensorBins[sIdx * this.binCount + binIdx] += I;
+          if (this._isSecondary) {
+            this._sensorPersist[sIdx * this.binCount + binIdx] += I * (1 - Tracer.PERSIST_DECAY);
+          } else {
+            this.sensorBins[sIdx * this.binCount + binIdx] += I;
+          }
         }
         return;
       }
@@ -532,7 +657,7 @@ export class Tracer {
       // through the glass; it's stored in the element's local pool and
       // re-emitted only after its transit time has elapsed (handled by
       // the advance pass on subsequent frames).
-      if (matObj.type === 'dielectric' && elInfo.delayK > 0) {
+      if (matObj.type === 'dielectric' && elInfo.delayK >= DELAY_MIN) {
         const nx = hitEdge.nx, ny = hitEdge.ny;
         const vdotn_out = vx * nx + vy * ny;
         if (vdotn_out < 0) {

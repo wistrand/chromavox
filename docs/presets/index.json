@@ -7,5 +7,6 @@
   { "label": "Double prism",    "file": "double-prism.json" },
   { "label": "Mirror bounce",   "file": "mirror-bounce.json" },
   { "label": "Dichroic mirrors","file": "dichroic.json" },
-  { "label": "Tinted glass",    "file": "tinted-glass.json" }
+  { "label": "Tinted glass",    "file": "tinted-glass.json" },
+  { "label": "Slow glass",      "file": "slow-glass.json" }
 ]

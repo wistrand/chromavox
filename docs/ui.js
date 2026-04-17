@@ -755,7 +755,7 @@ export class UI {
     delayInput.value = Math.round((initialDelay / DELAY_MAX) * 100);
     const delayResetBtn = document.createElement('button');
     delayResetBtn.textContent = '×';
-    delayResetBtn.title = 'Reset to material default';
+    delayResetBtn.title = 'Zero delay';
     delayRow.appendChild(delayInput);
     delayRow.appendChild(delayResetBtn);
     addRow('Delay', delayRow);
@@ -768,9 +768,9 @@ export class UI {
     delayInput.addEventListener('change', () => this.endEdit());
     delayResetBtn.addEventListener('click', () => {
       this.beginEdit();
-      delete el.delayK;
+      el.delayK = 0;
       this.endEdit();
-      delayInput.value = Math.round((matDelay / DELAY_MAX) * 100);
+      delayInput.value = 0;
       this.onChange();
     });
 
