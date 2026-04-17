@@ -132,6 +132,26 @@ push.onCC = (cc, val) => {
 mic.onCC = (cc, val) => {
   // Play button (CC 85) toggles audio out. Only on press (val > 0).
   if (cc === 85 && val > 0) { synthBtn.click(); return; }
+  // Volume encoder (CC 79) adjusts synth master volume.
+  if (cc === 79) {
+    const dir = val >= 64 ? -1 : 1;
+    const volSlider = document.getElementById('synth-vol');
+    const nv = Math.max(0, Math.min(100, parseInt(volSlider.value, 10) + dir * 2));
+    volSlider.value = nv;
+    synth.setVolume(nv / 100);
+    document.getElementById('synth-vol-val').textContent = nv;
+    return;
+  }
+  // Large selection wheel (CC 70). Cycles through scene elements.
+  if (cc === 70 && scene.elements.length > 0) {
+    const dir = val >= 64 ? 1 : -1;
+    if (dir === 0) return;
+    const cur = ui.selected ? scene.elements.indexOf(ui.selected) : -1;
+    const n = scene.elements.length;
+    const next = ((cur + dir) % n + n) % n;
+    ui.select(scene.elements[next]);
+    return;
+  }
   push.handleCC(cc, val);
 };
 

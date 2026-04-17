@@ -255,3 +255,7 @@ Detailed notes are split into topic files under `agent_docs/`:
   clock, no onset detector, no `DelayNode`, no `delayFingerprint`.
   `History.commit` returns void; UI constructor takes 4 args
   (scene, onChange, renderer, onSceneReset).
+- Delay haze visual: elements with `delayK > 0` get increased
+  `tintStrength` (delayK * 80, capped at 0.5) in the renderer,
+  making them look foggy. Zero-delay elements unchanged. Per-element
+  `el.color` override still takes precedence.

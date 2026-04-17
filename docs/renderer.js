@@ -10,7 +10,7 @@
 //      outlines, selection handle). Alpha blend.
 
 import { worldEdges } from './scene.js';
-import { wavelengthToRGB } from './spectrum.js';
+import { wavelengthToRGB, MATERIALS } from './spectrum.js';
 
 const MAX_EDGES = 128;
 
@@ -506,6 +506,13 @@ export class Renderer {
       tint = rgb;
       edgeGlow = rgb;
       tintStrength = 0.45;
+    }
+    // Delay haze: elements with delayK get a stronger tint fill so
+    // they look visibly "foggy" even when no particles are in flight.
+    const matDelay = MATERIALS[el.material]?.delayK ?? 0;
+    const elDelay = typeof el.delayK === 'number' ? el.delayK : matDelay;
+    if (elDelay > 0) {
+      tintStrength = Math.min(0.5, tintStrength + elDelay * 80);
     }
     gl.uniform3fv(this.elem.uTint, tint);
     gl.uniform1f(this.elem.uTintStrength, tintStrength);

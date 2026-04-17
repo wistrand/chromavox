@@ -149,6 +149,13 @@ The synth is now a single `AudioWorkletProcessor` receiving
 wet/dry split, no `sensorDelay` parameter, no per-voice WebAudio
 graph nodes.
 
+## Visual: delay haze
+
+Elements with `delayK > 0` get increased `tintStrength` in the
+renderer (`delayK * 80`, capped at 0.5), giving them a foggy/hazy
+appearance. Zero-delay elements are unaffected. A per-element
+`el.color` override still takes precedence over the haze tint.
+
 ## Sim rate
 
 The **Sim rate** slider (`docs/play.html`, Audio in dropdown) is a
