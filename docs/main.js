@@ -31,7 +31,7 @@ const UI_STORAGE_KEY = 'chromavox-ui';
 const UI_CONTROL_IDS = [
   'mic-source', 'mic-device', 'midi-device', 'mic-mode', 'mic-base',
   'chromatic-span', 'mic-smoothing', 'bucket-color', 'synth-independent',
-  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-device',
+  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials', 'synth-device',
   'sim-rate', 'distort-toggle', 'sensor-sync',
 ];
 function saveUiState() {
@@ -211,6 +211,7 @@ synthBtn.addEventListener('click', async () => {
     synth.setBase(synthBase());
     synth.setStep(synthStep());
     await synth.enable(scene.sensorCount, synthMode());
+    _applyInitialPartials();
     synthBtn.textContent = 'Audio out: on';
     synthBtn.classList.add('active');
   } else {
@@ -599,6 +600,28 @@ volSlider.addEventListener('input', () => {
   volLabel.textContent = volSlider.value;
 });
 
+const partialsSlider = document.getElementById('synth-partials');
+const partialsLabel = document.getElementById('synth-partials-val');
+partialsSlider.addEventListener('input', () => {
+  const v = parseInt(partialsSlider.value, 10) || 1;
+  partialsLabel.textContent = v;
+  synth.setPartials(v);
+});
+
+const carrierSel = document.getElementById('synth-carrier');
+const partialsRow = partialsSlider.closest('.row');
+function syncPartialsVisibility() {
+  partialsRow.style.display = carrierSel.value === 'noise' ? 'none' : '';
+}
+carrierSel.addEventListener('change', () => { synth.setCarrier(carrierSel.value); syncPartialsVisibility(); });
+syncPartialsVisibility();
+
+const _applyInitialPartials = () => {
+  synth.setPartials(parseInt(partialsSlider.value, 10) || 1);
+  synth.setCarrier(carrierSel.value);
+  syncPartialsVisibility();
+};
+
 const micBtn = document.getElementById('mic-toggle');
 micBtn.addEventListener('click', async () => {
   if (!mic.active) {
@@ -703,6 +726,130 @@ window.addEventListener('resize', () => {
   };
 }
 
+// --- Mic spectrum debug window ---
+{
+  const specWin = document.getElementById('mic-spectrum-window');
+  const specToggle = document.getElementById('mic-spectrum-toggle');
+  const specClose = specWin.querySelector('.fw-close');
+  const specCanvas = document.getElementById('mic-spectrum-canvas');
+  const specCtx = specCanvas.getContext('2d');
+  const titlebar = specWin.querySelector('.fw-titlebar');
+
+  let positioned = false;
+  function showSpec() {
+    if (!positioned) {
+      specWin.style.top = '130px';
+      specWin.style.right = '12px';
+      specWin.style.left = 'auto';
+      positioned = true;
+    }
+    specWin.hidden = false;
+    specToggle.checked = true;
+  }
+  function hideSpec() { specWin.hidden = true; specToggle.checked = false; }
+  specToggle.addEventListener('change', () => { specToggle.checked ? showSpec() : hideSpec(); });
+  specClose.addEventListener('click', hideSpec);
+
+  let dragOff = null;
+  titlebar.addEventListener('pointerdown', e => {
+    if (e.target.closest('.fw-close')) return;
+    e.preventDefault();
+    titlebar.setPointerCapture(e.pointerId);
+    const r = specWin.getBoundingClientRect();
+    dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+    specWin.style.right = 'auto';
+  });
+  titlebar.addEventListener('pointermove', e => {
+    if (!dragOff) return;
+    specWin.style.left = (e.clientX - dragOff.x) + 'px';
+    specWin.style.top  = (e.clientY - dragOff.y) + 'px';
+  });
+  titlebar.addEventListener('pointerup', () => { dragOff = null; });
+  titlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
+
+  // Render raw FFT (grey) + micBands bucket levels (colored bars) on a
+  // shared log-frequency axis so both align visually.
+  window._updateMicSpectrum = function() {
+    if (specWin.hidden || !mic.active) return;
+    const W = specCanvas.width, H = specCanvas.height;
+    specCtx.fillStyle = '#000';
+    specCtx.fillRect(0, 0, W, H);
+
+    const fd = mic.freqData;
+    const n = scene.emitter.count;
+    const micMode = document.getElementById('mic-mode').value;
+    const baseHz = parseFloat(document.getElementById('mic-base').value) || 130.81;
+    const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
+
+    // Compute the frequency range from the bucket endpoints.
+    let loHz, hiHz;
+    if (micMode === 'log') {
+      loHz = 80; hiHz = 6000;
+    } else {
+      loHz = scaleFreq(baseHz, micMode, 0, step) * 0.8;
+      hiHz = scaleFreq(baseHz, micMode, n, step) * 1.2;
+    }
+    const logLo = Math.log(Math.max(20, loHz));
+    const logHi = Math.log(Math.max(loHz + 1, hiHz));
+    const freqToX = hz => hz <= 0 ? -1 : (Math.log(hz) - logLo) / (logHi - logLo) * W;
+
+    // Raw FFT on log frequency axis.
+    if (fd && fd.length > 0 && mic.ctx) {
+      const nyquist = mic.ctx.sampleRate / 2;
+      specCtx.strokeStyle = '#555';
+      specCtx.lineWidth = 1;
+      specCtx.beginPath();
+      let started = false;
+      for (let i = 1; i < fd.length; i++) {
+        const hz = (i / fd.length) * nyquist;
+        if (hz < loHz * 0.5 || hz > hiHz * 1.5) continue;
+        const x = freqToX(hz);
+        const y = H - (fd[i] / 255) * H;
+        if (!started) { specCtx.moveTo(x, y); started = true; }
+        else specCtx.lineTo(x, y);
+      }
+      specCtx.stroke();
+    }
+
+    // Bucket bars aligned to the same log axis.
+    const levels = scene.runtime.micLevels;
+    if (levels) {
+      for (let i = 0; i < n; i++) {
+        const v = levels[i];
+        if (v < 0.01) continue;
+        let f0, f1;
+        if (micMode === 'log') {
+          f0 = Math.exp(Math.log(80) + (i / n) * (Math.log(6000) - Math.log(80)));
+          f1 = Math.exp(Math.log(80) + ((i + 1) / n) * (Math.log(6000) - Math.log(80)));
+        } else {
+          const fc = scaleFreq(baseHz, micMode, i, step);
+          const fcN = scaleFreq(baseHz, micMode, i + 1, step);
+          const fcP = i > 0 ? scaleFreq(baseHz, micMode, i - 1, step) : fc * fc / fcN;
+          f0 = Math.sqrt(fcP * fc);
+          f1 = Math.sqrt(fc * fcN);
+        }
+        const x0 = Math.max(0, freqToX(f0));
+        const x1 = Math.min(W, freqToX(f1));
+        if (x1 <= x0) continue;
+        const t = n > 1 ? i / (n - 1) : 0.5;
+        const hue = 200 + t * 160;
+        specCtx.fillStyle = `hsla(${hue},80%,50%,${Math.min(1, v * 1.5)})`;
+        specCtx.fillRect(x0, H - v * H, x1 - x0, v * H);
+      }
+    }
+
+    // Axis labels.
+    specCtx.fillStyle = '#666';
+    specCtx.font = '9px monospace';
+    for (const hz of [100, 200, 500, 1000, 2000, 5000]) {
+      if (hz < loHz * 0.9 || hz > hiHz * 1.1) continue;
+      const x = freqToX(hz);
+      specCtx.fillText(hz >= 1000 ? `${hz/1000}k` : `${hz}`, x + 2, H - 2);
+      specCtx.fillRect(x, 0, 1, H);
+    }
+  };
+}
+
 function frame() {
   if (mic.active) {
     const s = mic.sample();
@@ -778,6 +925,7 @@ function frame() {
   }
 
   window._updateStats();
+  window._updateMicSpectrum();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

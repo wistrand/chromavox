@@ -48,10 +48,16 @@ via `mic.setSmoothing(v)`. Lower for snappier per-key response on the
 keyboard claviature; higher for smoother envelope tracking on vocals
 or sustained sources.
 
-Both modes apply a noise floor and gamma shaping (see the `floor` and
-`shape()` in `micBands`) so quiet buckets read zero. Result is written
-to `scene.runtime.micLevels`. The renderer draws an amber bar
-extending from each emitter tick proportional to its bucket.
+Both modes use `getFloatFrequencyData` (dB values) mapped to 0–1 via
+the analyser's fixed `minDecibels`/`maxDecibels` range (`dbNorm`).
+Peak per bucket (not mean) gives sharper vocoder-like channel
+separation. A noise floor (`floor = 0.08`) and gamma shaping
+(`pow(v, 1.5)`) zero out quiet buckets. A noise gate
+(`NOISE_GATE = 0.10` on the normalized frame peak) blanks the entire
+output when nothing is playing. No per-frame peak-hold normalization
+— the fixed dB range provides stable scaling. Result is written to
+`scene.runtime.micLevels`. The renderer draws an amber bar extending
+from each emitter tick proportional to its bucket.
 
 **Bucket color** additionally assigns each source a narrow wavelength
 band linearly mapped across the visible range via
@@ -74,11 +80,22 @@ no separate `.js` file, no build step. `synth.enable()` is async
   voice frequencies for all modes (not just chromatic), so changing
   the Base dropdown takes effect immediately in any scale. Log mode
   uses a separate configured range.
-- **Timbre**: 6 harmonic partials per voice (constant `PARTIALS`),
-  computed with `Math.sin` directly (no wavetable yet; ~2 ms per
-  128-sample block at full polyphony). Harmonic gains come from
+- **Carrier mode**: selectable via the Carrier dropdown in the Audio
+  out options menu. `sine` (default) uses harmonic partials;
+  `noise` uses bandpass-filtered white noise per voice via a 2-pole
+  resonator (`y[n] = x[n] + 2r·cos(w)·y[n-1] - r²·y[n-2]`). The
+  resonator's `r` scales with frequency (0.993 at low, 0.998 at
+  high) so low voices get wider bands (less resonant bass buildup)
+  while high voices stay tonal. Amplitude normalized by
+  `1/sqrt(freq/200)` for even perceived loudness across the range.
+- **Partials**: adjustable 1–8 via the Partials slider (default 6).
+  Each voice synthesises that many harmonic overtones with
+  `Math.sin` directly (no wavetable). Harmonic gains come from
   grouping the sensor's wavelength bins; per-voice timbre depends on
-  which colors hit that sensor.
+  which colors hit that sensor. Partials slider is hidden in noise
+  carrier mode (noise uses only the fundamental band).
+  `synth.setPartials(n)` and `synth.setCarrier(mode)` post to the
+  worklet via `MessagePort`.
 - **Data flow**: main thread posts `sensorBins` via `MessagePort` each
   frame (~6 KB/frame: sensors × bins × 4 bytes). The worklet reads
   the latest snapshot in `process()`. Rebuild sends a new frequency

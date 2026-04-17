@@ -254,6 +254,7 @@ export class MicModulator {
     this.nodes = nodes;
     this.source = source;
     this.freqData = new Uint8Array(an.frequencyBinCount);
+    this.freqFloat = new Float32Array(an.frequencyBinCount);
     this.timeData = new Float32Array(an.fftSize);
     this.active = true;
   }
@@ -307,7 +308,7 @@ export class MicModulator {
   // Return known exact frequencies for deterministic sources.
   _knownFrequencies() {
     if (this.source === 'keyboard') {
-      if (!this._kbdVoices || this._kbdVoices.size === 0) return null;
+      if (!this._kbdVoices || this._kbdVoices.size === 0) return [];
       const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
       const offset = scale.length * this.keyboardOctave;
       const out = [];
@@ -373,6 +374,7 @@ export class MicModulator {
     }
     const an = this.analyser;
     an.getByteFrequencyData(this.freqData);
+    an.getFloatFrequencyData(this.freqFloat);
     an.getFloatTimeDomainData(this.timeData);
     let sum = 0;
     for (let i = 0; i < this.timeData.length; i++) {
@@ -404,26 +406,37 @@ export function pitchToWavelength(hz) {
 }
 
 // Downsample FFT magnitudes to `n` buckets in [0,1].
-// mode: 'log' for 80–6000 Hz log-spaced; any other value is a scale name
-// (chromatic / major / minor / pentaMajor / pentaMinor / wholeTone / blues)
-// — buckets walk that scale from baseHz upward with `stepSemi` degrees per
-// bucket. Window is the geometric midpoint to neighboring buckets, so any
-// scale gives full coverage with no overlap.
+// Uses getFloatFrequencyData (dB) → linear magnitude → peak per bucket
+// → steep gamma for sharp vocoder-like channel separation.
+// mode: 'log' for 80–6000 Hz log-spaced; any other value is a scale name.
 export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
-  if (!mic.active || !mic.freqData) return null;
-  const fd = mic.freqData;
+  if (!mic.active || !mic.freqFloat) return null;
+  const fd = mic.freqFloat;
   const nyquist = mic.ctx.sampleRate / 2;
   const binCount = fd.length;
   const out = new Float32Array(n);
-  const floor = 0.08;
 
+  // Map dB to 0-1 using the analyser's fixed range. Same mapping the
+  // byte API uses internally, but from the float data for precision.
+  const minDb = mic.analyser.minDecibels;   // default -100
+  const maxDb = mic.analyser.maxDecibels;   // default -30
+  const dbRange = maxDb - minDb;
+  const dbNorm = db => Math.max(0, Math.min(1, (db - minDb) / dbRange));
+
+  const floor = 0.08;
   const shape = raw => {
     const v = Math.max(0, (raw - floor) / (1 - floor));
-    return Math.pow(v, 1.2);
+    return Math.pow(v, 1.5);
   };
+
+  // Noise gate on the normalized scale (~10% of dB range from the bottom).
+  const NOISE_GATE = 0.10;
+
+  let framePeak = 0;
 
   if (mode !== 'log') {
     const scaleName = mode;
+    // First pass: peak per bucket in linear magnitude.
     for (let i = 0; i < n; i++) {
       const fc = scaleFreq(baseHz, scaleName, i, stepSemi);
       const fcNext = scaleFreq(baseHz, scaleName, i + 1, stepSemi);
@@ -434,10 +447,16 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
       const f1 = Math.sqrt(fc * fcNext);
       const b0 = Math.max(1, Math.floor(f0 / nyquist * binCount));
       const b1 = Math.max(b0 + 1, Math.ceil(f1 / nyquist * binCount));
-      let sum = 0, cnt = 0;
-      for (let b = b0; b < b1 && b < binCount; b++) { sum += fd[b]; cnt++; }
-      out[i] = shape(cnt ? (sum / cnt) / 255 : 0);
+      let peak = 0;
+      for (let b = b0; b < b1 && b < binCount; b++) {
+        const v = dbNorm(fd[b]);
+        if (v > peak) peak = v;
+      }
+      out[i] = peak;
+      if (peak > framePeak) framePeak = peak;
     }
+    if (framePeak < NOISE_GATE) return out.fill(0), out;
+    for (let i = 0; i < n; i++) out[i] = shape(out[i]);
     return out;
   }
 
@@ -448,9 +467,15 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
     const f1 = Math.exp(logLo + ((i + 1) / n) * (logHi - logLo));
     const b0 = Math.max(1, Math.floor(f0 / nyquist * binCount));
     const b1 = Math.max(b0 + 1, Math.ceil(f1 / nyquist * binCount));
-    let sum = 0, cnt = 0;
-    for (let b = b0; b < b1 && b < binCount; b++) { sum += fd[b]; cnt++; }
-    out[i] = shape(cnt ? (sum / cnt) / 255 : 0);
+    let peak = 0;
+    for (let b = b0; b < b1 && b < binCount; b++) {
+      const v = dbNorm(fd[b]);
+      if (v > peak) peak = v;
+    }
+    out[i] = peak;
+    if (peak > framePeak) framePeak = peak;
   }
+  if (framePeak < NOISE_GATE) return out.fill(0), out;
+  for (let i = 0; i < n; i++) out[i] = shape(out[i]);
   return out;
 }

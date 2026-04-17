@@ -73,6 +73,8 @@
       <div id="synth-menu" class="options-menu">
         <div class="row"><label>Device <select id="synth-device"><option value="">default</option></select></label></div>
         <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="100" value="25"><span id="synth-vol-val">25</span></label></div>
+        <div class="row"><label>Carrier <select id="synth-carrier"><option value="sine" selected>sine</option><option value="noise">noise</option></select></label></div>
+        <div class="row"><label>Partials <input id="synth-partials" type="range" min="1" max="8" value="6" step="1"><span id="synth-partials-val">6</span></label></div>
         <div class="row"><label><input id="synth-independent" type="checkbox"> Independent scale</label></div>
         <div class="row" id="synth-mode-row"><label>Mode <select id="synth-mode">
           <option value="log">log</option>
@@ -159,8 +161,19 @@
 
     <div class="row"><label><input id="distort-toggle" type="checkbox"> Distort</label></div>
     <div class="row"><label><input id="stats-toggle" type="checkbox"> Stats</label></div>
+    <div class="row"><label><input id="mic-spectrum-toggle" type="checkbox"> Mic spectrum</label></div>
 
   </aside>
+
+  <div id="mic-spectrum-window" class="floating-window" hidden>
+    <div class="fw-titlebar">
+      <span class="fw-title">Mic Spectrum</span>
+      <button class="fw-close" aria-label="Close">×</button>
+    </div>
+    <div class="fw-body">
+      <canvas id="mic-spectrum-canvas" width="400" height="120" style="display:block;background:#000;border-radius:3px"></canvas>
+    </div>
+  </div>
 
   <div id="stats-window" class="floating-window" hidden>
     <div class="fw-titlebar">

@@ -157,10 +157,14 @@ Detailed notes are split into topic files under `agent_docs/`:
   reads the latest snapshot in `process()`. Per-sample gain smoothing
   (~60 ms time constant) inside the worklet replaces the old
   `setTargetAtTime` calls. Peak-hold normalization also runs inside
-  the worklet. 6 harmonic partials per voice; `Math.sin` directly
-  (no wavetable yet). Voices with all gains < 1e-5 are skipped
-  (voice stealing). Rebuild sends frequency array via `MessagePort` —
-  no node teardown/recreation. `synth.enable()` is async (awaits
+  the worklet. Partials slider (1–8, default 6); `Math.sin` directly
+  (no wavetable yet). Carrier mode: `sine` (harmonic partials) or
+  `noise` (bandpass-filtered white noise per voice; 2-pole resonator
+  with frequency-dependent `r` 0.993–0.998 and amplitude normalization
+  by `1/sqrt(freq/200)` for even loudness). Partials slider hidden
+  in noise mode. Voices with all gains < 1e-5 are skipped (voice
+  stealing). Rebuild sends frequency array via `MessagePort` — no
+  node teardown/recreation. `synth.enable()` is async (awaits
   `audioWorklet.addModule`).
 - Keyboard claviature voices use `'triangle'` so a single key mostly
   occupies one chromatic bucket without turning into a full harmonic
@@ -174,7 +178,10 @@ Detailed notes are split into topic files under `agent_docs/`:
   picks the broadband path; any other value names a scale walked by
   `scaleFreq` from `baseHz`. Window per bucket is the geometric
   midpoint between neighboring scale degrees, so any scale gets full
-  coverage with no overlap.
+  coverage with no overlap. `micBands` uses `getFloatFrequencyData`
+  (dB) mapped to 0–1 via the analyser's fixed dB range (`dbNorm`),
+  peak per bucket, floor 0.08, gamma 1.5, noise gate 0.10. No
+  per-frame peak-hold normalization.
 - Synth side can run **independent** of the mic side via the
   `Independent scale` checkbox — separate Mode/Base/Span controls
   appear (and stay visible but **disabled / dimmed** via the
