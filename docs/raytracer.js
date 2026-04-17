@@ -106,6 +106,11 @@ export class Tracer {
     this.binCount = 64;
     // Stateful per-delay-element particle pools keyed by element id.
     this._pools = new Map();
+    // Generation counter — compared against scene.generation each
+    // trace(). When the scene is replaced (clear / load / preset),
+    // the generation bumps and the tracer self-resets all persistence
+    // state in one shot, eliminating the "forgot to flush X" bug class.
+    this._generation = -1;
     // Absolute wall-clock timestamp of the previous `trace()` call —
     // used to compute the advance `dt` for the particle pass.
     this._lastTraceTime = 0;
@@ -167,11 +172,25 @@ export class Tracer {
   // particle exits.
   trace(scene) {
     this.segmentCount = 0;
+
+    // Generation check: if the scene was replaced (clear / load /
+    // preset) the generation will have bumped.  Self-reset all
+    // persistence so stale data never bleeds across scene transitions.
+    if (this._generation !== scene.generation) {
+      this._generation = scene.generation;
+      this._pools.clear();
+      this._localPolys.clear();
+      this._exitSegCount = 0;
+      this._secondaryCount = 0;
+      if (this._sensorPersist) this._sensorPersist.fill(0);
+      this._lastTraceTime = 0;
+    }
+
     // Decay exit segment cache; emission happens at the end of trace()
     // after this frame's secondary exits have been added.
     this._decayExitCache();
 
-    const { bench, emitter, sensorCount, elements } = scene;
+    const { bench, emitter, sensorCount, elements, runtime } = scene;
 
     // Build world edges for all elements and the element-info array the
     // ray hot loop iterates.
@@ -262,7 +281,7 @@ export class Tracer {
 
     const wlMin = emitter.wlMin, wlMax = emitter.wlMax;
     const wlRange = Math.max(1, wlMax - wlMin);
-    const wlPer = emitter.wlPerSource;
+    const wlPer = runtime.wlPerSource;
 
     // Source modelled as an extended aperture; rays emitted from
     // random-looking positions with decorrelated wavelengths and small
@@ -285,7 +304,7 @@ export class Tracer {
         const ey = ey0 + (srcStripH - apertureH) * 0.5 + yT * apertureH;
         const a = (aT - 0.5) * spreadRad;
         const dirX = Math.cos(a), dirY = Math.sin(a);
-        const micGain = emitter.micLevels ? emitter.micLevels[s] : 1;
+        const micGain = runtime.micLevels ? runtime.micLevels[s] : 1;
         const intensity = (BASE_INTENSITY / Math.sqrt(raysPer)) * micGain;
         this.castRay(emX, ey, dirX, dirY, wl, rgb, intensity,
                      edges, elementMap, elementInfos, W, sensorStripH, -1);

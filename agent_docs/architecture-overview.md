@@ -19,7 +19,11 @@ No dependencies.
   Beer-Lambert absorption, dichroic reflectance, `MATERIALS` table,
   `SCALES` table + `scaleFreq(base, scale, i, stepDeg)` for musical
   bucketing.
-- `docs/scene.js` — data model, local/world polygon geometry, JSON save/load.
+- `docs/scene.js` — data model, local/world polygon geometry, JSON
+  save/load. `createScene()` initialises `scene.runtime` (transient
+  per-frame state: `micLevels`, `wlPerSource`) and increments
+  `scene.generation` (used by the tracer to detect scene replacement
+  and auto-reset persistence).
 - `docs/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
 - `docs/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
   rendered into a **HDR `RGBA16F` FBO** via `EXT_color_buffer_float`
@@ -41,6 +45,10 @@ No dependencies.
   voice with per-sample gain smoothing.
 - `docs/main.js` — wiring + dirty-flag render loop + device pickers +
   localStorage persistence (auto-save on `markDirty`, restore on load).
+  Spectrum readout smoothing (`_displayBins`, `_peakMax`, `_blurBuf`)
+  lives on the `Renderer` instance, updated via
+  `renderer.updateReadout(scene, tracer)` and reset via
+  `renderer.resetReadout()`.
 - `docs/presets/*.json` — scene presets; `presets/index.json` lists them.
 - `serve.js` — zero-dep static server; ROOT resolves to `./docs/`. It
   emulates GitHub Pages' clean-URL fallback: a request for `/foo` falls

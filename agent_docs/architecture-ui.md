@@ -17,18 +17,21 @@ the rest of the stage is the letterbox black bar. Emitter
 labels live inside the viewport so they track the canvas, not the full
 stage.
 
-- **Header (`#toolbar`)** holds the tool palette (Add ▾ menu, Select,
-  Delete), Audio in / Audio out **split-button dropdowns** (toggle +
-  options ▾), the Distort checkbox, Save / Load / Clear, the Preset
-  dropdown, and Help. Fixed height, `z-index` above the drawers, and
+- **Header (`#toolbar`)** holds (left to right): Help (`?`), the Add
+  split-button, Select, Delete, Audio in / Audio out **split-button
+  dropdowns** (toggle + options `▾`), Save / Load / Clear, and the
+  Preset dropdown (styled via `#preset-select`, placeholder
+  `[preset]`). Fixed height, `z-index` above the drawers,
   `overflow-x: auto` with `white-space: nowrap` so it stays on screen
-  regardless of viewport width. Children have `flex-shrink: 0` so
-  nothing compresses below its natural width.
+  regardless of viewport width, and `overflow-y: hidden` to prevent a
+  vertical scrollbar. Children have `flex-shrink: 0` so nothing
+  compresses below its natural width.
 - **Left panel** carries the parameter sliders the toolbar dropdowns
   don't own: Emitters (count/wavelength range/rays/spread/aperture),
-  Sensors (count/sync/factor), and the Selected property panel.
-  Audio in/out controls live entirely in the toolbar `▾` dropdowns.
-  Scrolls internally.
+  Sensors (count/sync/factor), the Selected property panel, the
+  Distort checkbox, and the Stats checkbox (toggles a floating stats
+  window). Audio in/out controls live entirely in the toolbar `▾`
+  dropdowns. Scrolls internally.
 - **Stage** hosts the canvas.
 - **Right panel** is the sensor-readout stack. `min-height: 100%` on
   the readout and `min-height` per bar (see `.sensor-bar` CSS) mean
@@ -55,7 +58,9 @@ absolute-positioned overlays starting below the header.
   long-press solos. The long-press delay, drift cancel distance, and
   solo logic are in `UI.onDown` / `UI._applyEmitterToggle`. Long-press
   uses a deferred-apply timer with an identity guard so stale timers
-  from previous presses can't fire against later ones.
+  from previous presses can't fire against later ones. Changing the
+  emitter count clears `emitter.disabled` so stale toggle indices
+  don't persist across count changes.
 - **Sensor "Sync to source count"** auto-matches sensor count to
   `source × sensor-factor` whenever source count or the factor slider
   changes; manually moving the sensor slider turns sync off. Default
@@ -149,12 +154,14 @@ Scene auto-saves to `localStorage` (key `'chromavox-scene'`) on every
 available, otherwise calls `createScene()`.
 
 Clear button `Object.assign`s a fresh `createScene()` over the scene
-(not just `elements = []`), clears `micLevels` / `wlPerSource` /
-`disabled`, calls `syncControls` + `rebuildSensorReadout`, and removes
-the localStorage entry. Clear, file-load, and preset-load all invoke
-the `onSceneReset` callback (4th UI constructor arg), which in
-`main.js` zeros `_displayBins`, `_peakMax`, and calls
-`tracer.resetPersistence()`.
+(not just `elements = []`), calls `syncControls` +
+`rebuildSensorReadout`, and removes the localStorage entry. The fresh
+`createScene()` provides a clean `scene.runtime` (micLevels,
+wlPerSource) and resets `emitter.disabled`, so no manual nulling is
+needed. Clear, file-load, and preset-load all invoke the
+`onSceneReset` callback (4th UI constructor arg), which in `main.js`
+calls `renderer.resetReadout()` (zeros `_displayBins` and `_peakMax`
+on the Renderer) and `tracer.resetPersistence()`.
 
 `syncControls` dispatches `'change'` events on all 7 sliders after
 setting values programmatically so label-rebuild listeners in `main.js`
@@ -177,8 +184,9 @@ sizes onto the canonical bench.
 ## Presets
 
 `docs/presets/index.json` is an array of `{label, file}`. The UI
-fetches it on startup and populates the Preset dropdown. Preset files
-are identical in shape to saved scenes.
+fetches it on startup and populates the Preset dropdown (styled via
+`#preset-select`, placeholder `[preset]`). Preset files are identical
+in shape to saved scenes.
 
 ## Device pickers
 
@@ -209,9 +217,19 @@ mode they show bucket centre frequency in Hz / kHz.
 
 ## Help dialog
 
-Native `<dialog id="help-dialog">` opened via the `?` button in the
-toolbar or `H` / `?` keypress. Lists mouse, touch, and keyboard
-shortcuts plus the keyboard-claviature note layout. `Esc` closes it.
+Native `<dialog id="help-dialog">` opened via the `?` button at the
+far left of the toolbar (before the Add split-button) or `H` / `?`
+keypress. Lists mouse, touch, and keyboard shortcuts plus the
+keyboard-claviature note layout. `Esc` closes it.
+
+## Stats window
+
+Floating draggable window toggled via a checkbox in the left panel
+(below the Distort checkbox). Shows live counts: elements, sources,
+sensors, rays/src, segments, particles, pools, and spinning elements.
+Close button in titlebar; the pointerdown handler skips `.fw-close`
+targets to avoid starting a drag from the close button. Updates every
+frame when visible and skips DOM writes when hidden.
 
 ## Mobile / touch
 

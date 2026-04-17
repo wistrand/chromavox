@@ -6,6 +6,13 @@ entries (`[p1x, p1y, p2x, p2y, c1rgb*I1, I1, c2rgb*I2, I2]`) expanded
 by the renderer into instanced SDF quads with per-fragment soft
 falloff.
 
+At the top of `trace()`, the tracer checks `scene.generation` against
+`this._generation`. On mismatch (scene was replaced via clear, load, or
+preset), it self-resets all persistence state — pools, localPolys,
+exitSegs, sensorPersist, secondary queue, lastTraceTime — then updates
+`this._generation`. This eliminates the "forgot to flush cache X" bug
+class for tracer-side state.
+
 Two stages run per `trace()`:
 
 1. **Particle advance** — for each delay element (a dielectric with
@@ -43,12 +50,12 @@ the element's *local* frame.
   wavelengths, and angles use decorrelated golden-ratio sequences so
   the beam looks continuous.
 - Wavelength assignment: every source emits the same wavelength mix
-  across `emitter.wlMin..wlMax`. With `emitter.wlPerSource` set
+  across `emitter.wlMin..wlMax`. With `scene.runtime.wlPerSource` set
   (Bucket color), sources get their own narrow wavelength band.
 - Disabled sources: `emitter.disabled` is a `Set<number>` of source
   indices to skip entirely. Toggled by clicking the left-wall tick;
   shift-click or long-press solos.
-- Per-source mic gain: if `emitter.micLevels` is present, each
+- Per-source mic gain: if `scene.runtime.micLevels` is present, each
   primary-emission intensity is scaled by `micLevels[s]`.
 - No Fresnel amplitude split. Full transmission unless TIR.
 - Beer-Lambert absorption: while a primary ray is inside a non-delay

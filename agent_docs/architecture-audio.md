@@ -49,12 +49,13 @@ or sustained sources.
 
 Both modes apply a noise floor and gamma shaping (see the `floor` and
 `shape()` in `micBands`) so quiet buckets read zero. Result is written
-to `scene.emitter.micLevels`. The renderer draws an amber bar
+to `scene.runtime.micLevels`. The renderer draws an amber bar
 extending from each emitter tick proportional to its bucket.
 
 **Bucket color** additionally assigns each source a narrow wavelength
 band linearly mapped across the visible range via
-`emitter.wlPerSource`, so different notes show as different colors.
+`scene.runtime.wlPerSource`, so different notes show as different
+colors.
 
 ## Audio out (`docs/synth.js`)
 
@@ -112,7 +113,7 @@ no separate `.js` file, no build step. `synth.enable()` is async
 
 ## Spectrum readout smoothing
 
-`updateSensorReadout` (in `main.js`) applies three smoothing stages
+`renderer.updateReadout(scene, tracer)` applies three smoothing stages
 before writing to the right-panel bar display:
 
 - **(A) Gaussian blur** — a [0.25, 0.5, 0.25] kernel across bins.
@@ -121,9 +122,11 @@ before writing to the right-panel bar display:
 - **(D) Peak normalization** — `_peakMax` decays at 0.95 per frame,
   giving a slow-decaying peak hold that prevents jumpy rescaling.
 
-`_displayBins` and `_peakMax` are zeroed by `resetDisplay` (called via
-the `onSceneReset` callback) on clear, file-load, or preset-load so
-stale smoothing state doesn't bleed across scenes.
+`_displayBins`, `_peakMax`, and `_blurBuf` are Renderer instance fields
+(not module-scope variables in `main.js`). `renderer.resetReadout()`
+zeros them; called by `resetDisplay` (via the `onSceneReset` callback)
+on clear, file-load, or preset-load so stale smoothing state doesn't
+bleed across scenes.
 
 ## Input/output symmetry
 

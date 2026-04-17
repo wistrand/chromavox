@@ -905,9 +905,6 @@ export class UI {
       this.beginEdit();
       const fresh = createScene();
       Object.assign(this.scene, fresh);
-      this.scene.emitter.disabled = new Set();
-      this.scene.emitter.micLevels = null;
-      this.scene.emitter.wlPerSource = null;
       this.select(null);
       this.syncControls();
       this.rebuildSensorReadout();

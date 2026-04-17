@@ -12,6 +12,9 @@ export function bumpIdCeiling(n) { if (n >= nextId) nextId = n + 1; }
 // aspect, so element coordinates are stable across viewport sizes.
 export const CANONICAL_BENCH = { w: 556, h: 900 };
 
+let _generation = 0;
+export function bumpGeneration(scene) { scene.generation = ++_generation; }
+
 export function createScene() {
   return {
     bench: { ...CANONICAL_BENCH },
@@ -20,9 +23,14 @@ export function createScene() {
       raysPerSource: 512, spreadDeg: 0, apertureFactor: 0.01,
       disabled: new Set(),
     },
+    // Transient per-frame state that is never serialized. Replaced
+    // wholesale on scene transitions (clear / load / preset) so
+    // nothing needs to be manually nulled.
+    runtime: { micLevels: null, wlPerSource: null },
     sensorCount: 24,
     elements: [],
     version: 1,
+    generation: ++_generation,
   };
 }
 

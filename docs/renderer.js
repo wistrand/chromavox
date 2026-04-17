@@ -328,6 +328,12 @@ export class Renderer {
     // tint stay on regardless.
     this.distortEnabled = false;
 
+    // Sensor readout smoothing state. Lives on the renderer so
+    // resetReadout() can flush it without a separate callback chain.
+    this._displayBins = new Float32Array(0);
+    this._peakMax = 1e-6;
+    this._blurBuf = new Float32Array(0);
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -542,7 +548,7 @@ export class Renderer {
     const { bench } = scene;
     this.rect(0, 0, bench.w, bench.h, 0.35, 0.4, 0.5, 0.6);
 
-    const levels = scene.emitter.micLevels;
+    const levels = scene.runtime.micLevels;
     const disabled = scene.emitter.disabled;
     const srcStripH = bench.h / scene.emitter.count;
     for (let s = 0; s < scene.emitter.count; s++) {
@@ -629,6 +635,70 @@ export class Renderer {
     for (let i = 0; i < poly.length; i++) {
       const p = poly[i], q = poly[(i + 1) % poly.length];
       this.line(p.x, p.y, q.x, q.y, r, g, b, a);
+    }
+  }
+
+  // --- Sensor readout (right panel canvas bars) ---
+
+  resetReadout() {
+    this._displayBins = new Float32Array(0);
+    this._peakMax = 1e-6;
+  }
+
+  updateReadout(scene, tracer) {
+    const host = document.getElementById('sensor-readout');
+    const bars = host.children;
+    if (bars.length !== scene.sensorCount) return;
+    const binCount = tracer.binCount;
+    const totalBins = scene.sensorCount * binCount;
+
+    if (this._displayBins.length !== totalBins) {
+      this._displayBins = new Float32Array(totalBins);
+      this._peakMax = 1e-6;
+    }
+    if (this._blurBuf.length < binCount) this._blurBuf = new Float32Array(binCount);
+
+    // Temporal IIR: displayBins lerps toward sensorBins.
+    const IIR = 0.3;
+    for (let i = 0; i < totalBins; i++) {
+      this._displayBins[i] += (tracer.sensorBins[i] - this._displayBins[i]) * IIR;
+    }
+
+    // Slow-decaying peak normalization.
+    let curMax = 1e-6;
+    for (let i = 0; i < totalBins; i++) {
+      if (this._displayBins[i] > curMax) curMax = this._displayBins[i];
+    }
+    this._peakMax = Math.max(curMax, this._peakMax * 0.95);
+
+    for (let s = 0; s < scene.sensorCount; s++) {
+      const c = bars[s].querySelector('canvas');
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, c.width, c.height);
+
+      // Gaussian blur across bins: [0.25, 0.5, 0.25] kernel.
+      const base = s * binCount;
+      const blur = this._blurBuf;
+      for (let b = 0; b < binCount; b++) {
+        const prev = b > 0 ? this._displayBins[base + b - 1] : this._displayBins[base + b];
+        const cur  = this._displayBins[base + b];
+        const next = b < binCount - 1 ? this._displayBins[base + b + 1] : cur;
+        blur[b] = prev * 0.25 + cur * 0.5 + next * 0.25;
+      }
+
+      const wlMin = 380, wlMax = 780;
+      for (let b = 0; b < binCount; b++) {
+        const v = blur[b] / this._peakMax;
+        if (v <= 0) continue;
+        const wl = wlMin + (b + 0.5) / binCount * (wlMax - wlMin);
+        const rgb = wavelengthToRGB(wl);
+        const a = Math.min(1, v);
+        ctx.fillStyle = `rgba(${(rgb[0] * 255)|0},${(rgb[1] * 255)|0},${(rgb[2] * 255)|0},${a})`;
+        const x = (b / binCount) * c.width;
+        const w = c.width / binCount + 1;
+        ctx.fillRect(x, 0, w, c.height);
+      }
     }
   }
 }

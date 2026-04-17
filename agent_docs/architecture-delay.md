@@ -184,10 +184,14 @@ Cost is identical to pre-delay in every measurable dimension.
   retroactively.
 - Element rotation / scale during flight transforms held particles
   implicitly (local coords).
-- Element deletion drops the pool entirely.
+- Element deletion drops the pool entirely and flushes persistence
+  caches for the element (`_exitSegCount` zeroed, `_sensorPersist`
+  filled with 0) to prevent ghost exit segments and sensor deposits.
 - `tracer.resetPersistence()` zeros `_exitSegCount`, `_sensorPersist`,
   clears `_pools` and `_localPolys`. Called on clear / file-load /
-  preset-load via `onSceneReset`.
+  preset-load via `onSceneReset`. The tracer also self-resets all
+  persistence when it detects a `scene.generation` mismatch at the top
+  of `trace()`, as a safety net.
 - Near-TIR entry: captured particle has low `I` from `GLASS_LOSS`;
   may die on first absorption step.
 - Exit into another delay element: secondary ray's `castRay` captures

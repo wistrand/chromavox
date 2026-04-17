@@ -30,8 +30,7 @@ const markDirty = () => {
   try { localStorage.setItem(STORAGE_KEY, serializeScene(scene)); } catch {}
 };
 function resetDisplay() {
-  _displayBins = new Float32Array(0);
-  _peakMax = 1e-6;
+  renderer.resetReadout();
   tracer.resetPersistence();
 }
 let lastFrameTime = performance.now() / 1000;
@@ -335,8 +334,8 @@ document.getElementById('mic-device').addEventListener('change', async () => {
     alert('Microphone: ' + err.message);
     micBtn.textContent = 'Audio in: off';
     micBtn.classList.remove('active');
-    scene.emitter.micLevels = null;
-    scene.emitter.wlPerSource = null;
+    scene.runtime.micLevels = null;
+    scene.runtime.wlPerSource = null;
     markDirty();
   }
 });
@@ -389,8 +388,8 @@ document.getElementById('mic-source').addEventListener('change', async e => {
     alert('Audio input: ' + err.message);
     micBtn.textContent = 'Audio in: off';
     micBtn.classList.remove('active');
-    scene.emitter.micLevels = null;
-    scene.emitter.wlPerSource = null;
+    scene.runtime.micLevels = null;
+    scene.runtime.wlPerSource = null;
     markDirty();
   }
 });
@@ -424,8 +423,8 @@ micBtn.addEventListener('click', async () => {
     }
   } else {
     mic.disable();
-    scene.emitter.micLevels = null;
-    scene.emitter.wlPerSource = null;
+    scene.runtime.micLevels = null;
+    scene.runtime.wlPerSource = null;
     micBtn.textContent = 'Audio in: off';
     micBtn.classList.remove('active');
     markDirty();
@@ -518,7 +517,7 @@ function frame() {
       const micMode = document.getElementById('mic-mode').value;
       const baseHz = currentBaseHz();
       const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
-      scene.emitter.micLevels = micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
+      scene.runtime.micLevels = micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
       if (baseHz !== lastBaseHz) {
         if (!synthIndep()) synth.setBase(baseHz);
         if (mic.source === 'keyboard') syncBaseSelect(baseHz);
@@ -536,9 +535,9 @@ function frame() {
           min[i] = Math.max(380, wl - band);
           max[i] = Math.min(780, wl + band);
         }
-        scene.emitter.wlPerSource = { min, max };
+        scene.runtime.wlPerSource = { min, max };
       } else {
-        scene.emitter.wlPerSource = null;
+        scene.runtime.wlPerSource = null;
       }
       dirty = true;
     }
@@ -560,7 +559,7 @@ function frame() {
     dirty = false;
     tracer.trace(scene);
     renderer.draw(scene, tracer);
-    updateSensorReadout();
+    renderer.updateReadout(scene, tracer);
   }
 
   if (synth.active) {
@@ -572,68 +571,3 @@ function frame() {
 }
 requestAnimationFrame(frame);
 
-// (A) Gaussian-blur scratch for spatial smoothing of sensor spectrums.
-let _blurBuf = new Float32Array(0);
-// (C) Temporal IIR display buffer — lerps toward sensorBins each frame.
-let _displayBins = new Float32Array(0);
-// (D) Slow-decaying peak normalization — prevents the global scale from
-// snapping on single-frame spikes.
-let _peakMax = 1e-6;
-
-function updateSensorReadout() {
-  const host = document.getElementById('sensor-readout');
-  const bars = host.children;
-  if (bars.length !== scene.sensorCount) return;
-  const binCount = tracer.binCount;
-  const totalBins = scene.sensorCount * binCount;
-
-  // Resize IIR buffer if sensor layout changed.
-  if (_displayBins.length !== totalBins) {
-    _displayBins = new Float32Array(totalBins);
-    _peakMax = 1e-6;
-  }
-  if (_blurBuf.length < binCount) _blurBuf = new Float32Array(binCount);
-
-  // (C) Temporal IIR: displayBins lerps toward sensorBins.
-  const IIR = 0.3;
-  for (let i = 0; i < totalBins; i++) {
-    _displayBins[i] += (tracer.sensorBins[i] - _displayBins[i]) * IIR;
-  }
-
-  // (D) Slow-decaying peak normalization.
-  let curMax = 1e-6;
-  for (let i = 0; i < totalBins; i++) {
-    if (_displayBins[i] > curMax) curMax = _displayBins[i];
-  }
-  _peakMax = Math.max(curMax, _peakMax * 0.95);
-
-  for (let s = 0; s < scene.sensorCount; s++) {
-    const c = bars[s].querySelector('canvas');
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, c.width, c.height);
-
-    // (A) Gaussian blur across bins: [0.25, 0.5, 0.25] kernel.
-    const base = s * binCount;
-    const blur = _blurBuf;
-    for (let b = 0; b < binCount; b++) {
-      const prev = b > 0 ? _displayBins[base + b - 1] : _displayBins[base + b];
-      const cur  = _displayBins[base + b];
-      const next = b < binCount - 1 ? _displayBins[base + b + 1] : cur;
-      blur[b] = prev * 0.25 + cur * 0.5 + next * 0.25;
-    }
-
-    const wlMin = 380, wlMax = 780;
-    for (let b = 0; b < binCount; b++) {
-      const v = blur[b] / _peakMax;
-      if (v <= 0) continue;
-      const wl = wlMin + (b + 0.5) / binCount * (wlMax - wlMin);
-      const rgb = wavelengthToRGB(wl);
-      const a = Math.min(1, v);
-      ctx.fillStyle = `rgba(${(rgb[0] * 255)|0},${(rgb[1] * 255)|0},${(rgb[2] * 255)|0},${a})`;
-      const x = (b / binCount) * c.width;
-      const w = c.width / binCount + 1;
-      ctx.fillRect(x, 0, w, c.height);
-    }
-  }
-}

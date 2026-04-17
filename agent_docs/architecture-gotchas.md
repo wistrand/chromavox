@@ -40,8 +40,9 @@
 ## Phase 3 particle simulation
 
 - A delay element's pool is keyed by `el.id`. Deleting the element
-  drops the pool entirely — in-flight photons vanish. If you want
-  them to survive deletion, change `trace()`'s pool-sync pass.
+  drops the pool entirely — in-flight photons vanish — and flushes
+  persistence caches (`_exitSegCount` zeroed, `_sensorPersist` filled
+  with 0) so ghost segments and sensor deposits don't linger.
 - Particles are stored in element-local coordinates. Moving /
   rotating / scaling the element carries held light with it by
   construction. World-space transforms happen only at trail-emission
@@ -108,16 +109,27 @@
   not move any element; the stage just shows more or less black bar.
   Preset loads with mismatched bench dimensions get rescaled to
   canonical inside `deserializeScene`.
-- Toolbar has a fixed height with `box-sizing: border-box` and
-  `overflow-x: auto`; on narrow viewports the horizontal scrollbar
-  appears inside the bar rather than compressing it.
+- Toolbar has a fixed height with `box-sizing: border-box`,
+  `overflow-x: auto`, and `overflow-y: hidden`; on narrow viewports
+  the horizontal scrollbar appears inside the bar rather than
+  compressing it.
 - Scene auto-saves to `localStorage` on every `markDirty`. If
   localStorage is unavailable (private browsing, quota exceeded) the
   save silently fails; the app still works.
 - `tracer.resetPersistence()` must be called on scene transitions
   (clear, load, preset) to avoid stale exit-segment and sensor
   persistence data bleeding into the new scene. The `onSceneReset`
-  callback handles this.
+  callback handles this. Additionally, `scene.generation` (incremented
+  by `createScene()`) triggers the tracer to self-reset all persistence
+  at the top of `trace()` on generation mismatch, as a safety net
+  against missed manual resets.
+- Changing the emitter count clears `emitter.disabled` so stale
+  toggle indices from a previous count don't persist. On clear/load,
+  the fresh `createScene()` provides a clean `emitter.disabled`
+  automatically.
+- Deleting a delay element drops its pool and flushes the persistence
+  caches (`_exitSegCount` zeroed, `_sensorPersist` filled with 0) so
+  ghost exit segments and sensor deposits don't linger.
 - Elements with `el.spin` keep the render loop active even when
   nothing else is dirty. If spin is set to zero the element stops
   marking dirty.

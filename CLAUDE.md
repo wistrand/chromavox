@@ -73,6 +73,16 @@ Detailed notes are split into topic files under `agent_docs/`:
   collapse into one history entry.
 - Scene JSON is `version: 1`. IDs are regenerated on deserialize;
   `bumpIdCeiling` keeps the running counter ahead of any restored max.
+- Transient per-frame state lives on `scene.runtime` (created by
+  `createScene()`): `{ micLevels, wlPerSource }`. `serializeScene`
+  excludes runtime (explicit field list). `Object.assign(scene, fresh)`
+  on clear/load/preset automatically replaces runtime.
+- `scene.generation` is a counter incremented by `createScene()`. The
+  tracer checks `scene.generation` vs `this._generation` at the top of
+  `trace()`; on mismatch it self-resets all persistence (pools,
+  localPolys, exitSegs, sensorPersist, secondary queue, lastTraceTime).
+  This eliminates the "forgot to flush cache X" bug class for tracer
+  state.
 - Rays render via instanced SDF quads, not GL line primitives — width
   and soft falloff are controlled by `renderer.rayWidth` and the
   fragment shader. Segments are 12 floats; no chase-related timing
@@ -99,7 +109,8 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Layout is a two-row / three-column grid — fixed-height toolbar on top,
   left and right panels + stage below. Toolbar stays visible always
   (raised z-index over the drawer overlays, fixed height, horizontal
-  scroll on narrow widths).
+  scroll on narrow widths, `overflow-y: hidden` to prevent vertical
+  scrollbar).
 - Bench is **letterboxed** at the canonical portrait golden-ratio aspect
   (`CANONICAL_BENCH` in `scene.js`). `Renderer.benchSize` returns the
   constant; `renderer.resize()` computes the largest 556:900 box that
@@ -113,6 +124,8 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Emitter ticks: short tap toggles, long-press or shift-click solos.
   Long-press uses a pending object with identity-guarded timer so stale
   timers can't fire on subsequent presses. Timing in `UI.onDown`.
+- Emitter count change clears `emitter.disabled` so stale toggle
+  indices don't persist across count changes.
 - Inline mini-spectrum painted at each sensor tick on the canvas, drawn
   only when the right-side spectrum panel is off-screen (so it's
   always visible somewhere). Logic in `Renderer.buildOverlay`.
@@ -123,7 +136,9 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Sensor count can auto-track source count via the **Sync** checkbox
   with a multiplier slider (`sensor-factor`); manual sensor-slider use
   turns sync off.
-- Help dialog (`?` button or `H` / `?` key) summarises all shortcuts.
+- Help button (`?`) sits at the far left of the toolbar (before the
+  Add split-button). `H` / `?` key also toggles. Summarises all
+  shortcuts.
 - `navigator.mediaDevices` requires a secure context. `mic.enable('mic')`
   guards and throws a clear error on plain HTTP.
 - Synth runs as a single `AudioWorkletProcessor` ("chromavox-synth")
@@ -180,27 +195,42 @@ Detailed notes are split into topic files under `agent_docs/`:
   localStorage if available, falls back to `createScene()`. Uses
   `serializeScene` / `deserializeScene`.
 - Clear button `Object.assign`s a fresh `createScene()` over the scene
-  (not just `elements = []`), clears `micLevels` / `wlPerSource` /
-  `disabled`, calls `syncControls` + `rebuildSensorReadout`, and
-  removes the localStorage entry.
+  (not just `elements = []`), calls `syncControls` +
+  `rebuildSensorReadout`, and removes the localStorage entry. The fresh
+  `createScene()` provides a clean `scene.runtime` (micLevels,
+  wlPerSource) and resets `emitter.disabled`, so no manual nulling is
+  needed.
 - `syncControls` dispatches `'change'` events on all 7 sliders after
   setting values programmatically so `main.js` label-rebuild listeners
   fire.
 - UI constructor takes a 4th arg (`onSceneReset`), called from clear,
   file-load, and preset-load handlers. `main.js` passes `resetDisplay`
-  which zeros `_displayBins`, `_peakMax`, and calls
+  which calls `renderer.resetReadout()` (zeros `_displayBins` and
+  `_peakMax` on the Renderer instance) and
   `tracer.resetPersistence()`.
 - `tracer.resetPersistence()` zeros `_exitSegCount`, `_sensorPersist`,
   clears `_pools` and `_localPolys`. Prevents stale persistence data
   from bleeding across scene transitions.
+- Deleting a delay element drops its pool and flushes the persistence
+  caches for that element: `_exitSegCount` is zeroed and
+  `_sensorPersist` is filled with 0 so ghost exit segments and sensor
+  deposits don't linger.
 - Elements can have `el.spin` (rad/s). The frame loop applies
   `el.rot += el.spin * dt`. Property panel has a Spin slider
   (-180..180 deg/s) with `×` reset button. Ctrl+Left/Right adjusts
   spin by 10 deg/s. Serializes and undoes automatically.
-- Spectrum readout smoothing: `updateSensorReadout` applies (A) Gaussian
-  blur [0.25, 0.5, 0.25] across bins, (C) temporal IIR (`_displayBins`
-  lerps at 0.3), (D) slow-decaying peak normalization (`_peakMax`
-  decays at 0.95).
+- Stats window: floating draggable window toggled via a checkbox in the
+  left panel (below Distort). Shows elements, sources, sensors,
+  rays/src, segments, particles, pools, and spinning count. Close button
+  in titlebar (pointerdown handler skips `.fw-close` to avoid drag
+  capture). Updates every frame when visible, skips DOM writes when
+  hidden.
+- Spectrum readout smoothing: `renderer.updateReadout(scene, tracer)`
+  applies (A) Gaussian blur [0.25, 0.5, 0.25] across bins, (C) temporal
+  IIR (`_displayBins` lerps at 0.3), (D) slow-decaying peak
+  normalization (`_peakMax` decays at 0.95). `_displayBins`, `_peakMax`,
+  and `_blurBuf` live on the Renderer instance (not module scope in
+  main.js).
 - Delay materials (Phase 3 stateful slow-glass): each delay element
   owns a `ParticlePool` in the tracer. Primary rays entering a delay
   element are captured (not refracted through); particles advance each
