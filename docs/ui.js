@@ -198,6 +198,15 @@ export class UI {
           if (this.history.redo(this.scene)) { this.select(null); this.rebuildSensorReadout(); this.syncControls(); this.onChange(); }
           return;
         }
+        if (this.selected && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+          e.preventDefault();
+          const SPIN_STEP = 10 * Math.PI / 180;
+          this.beginEdit();
+          this.selected.spin = (this.selected.spin || 0) + (e.key === 'ArrowRight' ? SPIN_STEP : -SPIN_STEP);
+          this.renderPropPanel();
+          this.onChange();
+          return;
+        }
       }
 
       if (!this.selected) return;
@@ -232,7 +241,7 @@ export class UI {
     });
 
     window.addEventListener('keyup', e => {
-      if (e.key.startsWith('Arrow') || e.key === 'Shift') this.endEdit();
+      if (e.key.startsWith('Arrow') || e.key === 'Shift' || e.key === 'Control' || e.key === 'Meta') this.endEdit();
     });
   }
 
@@ -367,33 +376,45 @@ export class UI {
       }
     }));
 
-    // Add-element menu (div-based so future custom renderings fit).
+    // Add split-button: left = place last-used kind, right (▾) = dropdown.
+    const LABEL_BY_KIND = {
+      prism: 'Prism', block: 'Block', 'lens-convex': 'Convex Lens',
+      'lens-concave': 'Concave Lens', mirror: 'Mirror',
+      circle: 'Circle', rabbit: 'Rabbit',
+    };
+    const addBtn = document.getElementById('add-btn');
+    const addOptions = document.getElementById('add-options');
     const addMenu = document.getElementById('add-menu');
-    const addToggle = document.getElementById('add-toggle');
+    let lastAddKind = 'prism';
+    const setLastKind = kind => {
+      lastAddKind = kind;
+      addBtn.innerHTML = buildElementIcon(kind) + ' ' + (LABEL_BY_KIND[kind] || kind);
+    };
+    setLastKind('prism');
+    addBtn.addEventListener('click', () => { place(lastAddKind); });
     const closeMenu = () => addMenu.classList.remove('open');
-    addToggle.addEventListener('click', e => {
+    addOptions.addEventListener('click', e => {
       e.stopPropagation();
-      if (addMenu.classList.contains('open')) {
-        addMenu.classList.remove('open');
-        return;
-      }
-      const r = addToggle.getBoundingClientRect();
+      if (addMenu.classList.contains('open')) { closeMenu(); return; }
+      document.querySelectorAll('.tool-menu.open, .options-menu.open').forEach(m => m.classList.remove('open'));
+      const r = addOptions.getBoundingClientRect();
       addMenu.style.top = `${r.bottom + 4}px`;
-      addMenu.style.left = `${r.left}px`;
+      addMenu.style.left = `${Math.max(4, r.right - 180)}px`;
       addMenu.classList.add('open');
     });
     addMenu.querySelectorAll('.tool-menu-item').forEach(item => {
       const kind = item.dataset.tool;
-      // Render the element's actual polygon as the menu icon — re-uses the
-      // same geometry as `localPolygon` / `worldEdges`, no duplication.
       item.insertAdjacentHTML('afterbegin', buildElementIcon(kind));
       item.addEventListener('click', () => {
-        if (placeable.has(kind)) place(kind);
+        if (placeable.has(kind)) {
+          setLastKind(kind);
+          place(kind);
+        }
         closeMenu();
       });
     });
     document.addEventListener('click', e => {
-      if (addMenu.classList.contains('open') && !addMenu.contains(e.target) && e.target !== addToggle) {
+      if (addMenu.classList.contains('open') && !addMenu.contains(e.target) && e.target !== addOptions) {
         closeMenu();
       }
     });
@@ -661,6 +682,35 @@ export class UI {
     });
     rot.addEventListener('change', () => this.endEdit());
     addRow('Rotation', rot);
+
+    // Continuous rotation (degrees per second).
+    const spinRow = document.createElement('div');
+    spinRow.style.display = 'flex';
+    spinRow.style.gap = '4px';
+    const spinInput = document.createElement('input');
+    spinInput.type = 'range';
+    spinInput.min = -180; spinInput.max = 180; spinInput.step = 1;
+    spinInput.style.flex = '1';
+    spinInput.value = Math.round((el.spin || 0) * 180 / Math.PI);
+    const spinResetBtn = document.createElement('button');
+    spinResetBtn.textContent = '×';
+    spinResetBtn.title = 'Stop spinning';
+    spinRow.appendChild(spinInput);
+    spinRow.appendChild(spinResetBtn);
+    addRow('Spin', spinRow);
+    spinInput.addEventListener('input', () => {
+      this.beginEdit();
+      el.spin = parseFloat(spinInput.value) * Math.PI / 180;
+      this.onChange();
+    });
+    spinInput.addEventListener('change', () => this.endEdit());
+    spinResetBtn.addEventListener('click', () => {
+      this.beginEdit();
+      el.spin = 0;
+      this.endEdit();
+      spinInput.value = 0;
+      this.onChange();
+    });
 
     // Material: mirror elements pick among mirror variants; everything else
     // picks among dielectrics.

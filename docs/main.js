@@ -18,6 +18,7 @@ const tracer = new Tracer();
 
 let dirty = true;
 const markDirty = () => { dirty = true; };
+let lastFrameTime = performance.now() / 1000;
 
 const mic = new MicModulator();
 const synth = new SensorSynth();
@@ -454,6 +455,14 @@ function frame() {
       }
       dirty = true;
     }
+  }
+
+  // Continuous rotation: step each spinning element's rot by spin * dt.
+  const now = performance.now() / 1000;
+  const dt = Math.min(now - lastFrameTime, 0.25);
+  lastFrameTime = now;
+  for (const el of scene.elements) {
+    if (el.spin) { el.rot += el.spin * dt; dirty = true; }
   }
 
   // Phase 3 simulation: particles inside delay elements advance each

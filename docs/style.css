@@ -65,8 +65,9 @@ html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: 
 
 /* Add-element menu. Anchored to the Add button; rows are divs so future
    custom renderings (icons, thumbnails, previews) can drop in. */
-.tool-menu-wrap { position: relative; flex-shrink: 0; }
-#add-toggle { min-width: 110px; }
+.tool-menu-wrap { position: relative; flex-shrink: 0; display: inline-flex; align-items: stretch; }
+#add-btn { width: 140px; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; }
+#add-btn .tmi-icon { width: 22px; height: 16px; flex-shrink: 0; }
 .tool-menu {
   display: none;
   position: fixed;       /* fixed so the toolbar's overflow-x doesn't clip it */
