@@ -158,18 +158,21 @@ Detailed notes are split into topic files under `agent_docs/`:
   (~60 ms time constant) inside the worklet replaces the old
   `setTargetAtTime` calls. Fixed-range normalization: worklet receives
   `fullScale` (`BASE_INTENSITY * sqrt(raysPer)`) via rebuild; each
-  partial's bin sum is divided by `fullScale/K` to recover 0–1
-  micGain, then floor 0.05, gamma 1.3, and `1/sc^0.25` voice scale.
-  No peak-hold — quiet voices stay quiet. Partials slider (1–8,
-  default 6); `Math.sin` directly (no wavetable yet). Carrier mode:
-  `sine` (harmonic partials) or `noise` (bandpass-filtered white
-  noise per voice; 2-pole resonator with frequency-dependent `r`
-  0.993–0.998 and linear amplitude ramp `0.15 * min(2, freq/400)`
-  for even loudness). Partials slider hidden in noise mode.
-  Voices with all gains < 1e-5 are skipped (voice
-  stealing). Rebuild sends frequency array via `MessagePort` — no
-  node teardown/recreation. `synth.enable()` is async (awaits
-  `audioWorklet.addModule`).
+  partial's bin sum is divided by `fullScale/gainK` (`gainK` = `K`
+  for sine, `1` for noise) to recover 0–1 micGain, then floor 0.15,
+  gamma 1.5, and `1/sqrt(sc * gainK)` voice scale. `tanh` soft
+  limiter at ±0.8 prevents hard clipping. No peak-hold — quiet
+  voices stay quiet. Partials slider (1–8, default 6); `Math.sin`
+  directly (no wavetable yet). Carrier mode: `sine` (harmonic
+  partials) or `noise` (constant-Q bandpass noise per voice; 2-pole
+  resonator with `r = 1 - π·freq/(20·sr)`, amplitude normalized by
+  `2.2 * (1-r)` calibrated to match sine RMS). Partials slider
+  hidden in noise mode. Voices with all gains < 1e-5 are skipped
+  (voice stealing). Rebuild sends frequency array + `fullScale` via
+  `MessagePort` — no node teardown/recreation. `synth.enable()` is
+  async (awaits `audioWorklet.addModule`). Log-mode voice
+  frequencies use the same 80–6000 Hz range and `(i+0.5)/n` bucket-
+  center spacing as `micBands`.
 - Keyboard claviature voices use `'triangle'` so a single key mostly
   occupies one chromatic bucket without turning into a full harmonic
   stack like sawtooth. On key release, `_knownFrequencies` returns
@@ -249,10 +252,10 @@ Detailed notes are split into topic files under `agent_docs/`:
   checkbox in the left panel. Shows raw FFT curve (grey) and micBands
   bucket levels (colored bars) on a shared log-frequency axis.
 - Synth spectrum window: same structure, toggled separately. Shows
-  per-sensor energy on the mic-side frequency axis using absolute
-  scaling (`sensorBins / fullScale`). Bars placed by spatial position
-  on the emitter frequency ladder. Warm hues (orange→green) to
-  distinguish from mic spectrum (blue→purple).
+  the actual FFT of the synth's audio output via an `AnalyserNode`
+  tapped between the worklet and master gain. Log-frequency axis
+  80–6000 Hz. Reflects real output including partials, carrier mode,
+  and any clipping/limiting.
 - Stats window: floating draggable window toggled via a checkbox in the
   left panel (below Distort). Shows elements, sources, sensors,
   rays/src, segments, particles, pools, and spinning count. Close button

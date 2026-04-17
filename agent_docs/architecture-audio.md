@@ -79,16 +79,18 @@ no separate `.js` file, no build step. `synth.enable()` is async
   input and output ladders line up. `synth.setBase(hz)` rebuilds
   voice frequencies for all modes (not just chromatic), so changing
   the Base dropdown takes effect immediately in any scale. Log mode
-  uses a separate configured range.
+  uses the same 80–6000 Hz range and `(i+0.5)/n` bucket-center
+  spacing as `micBands`, so input and output frequencies match.
 - **Carrier mode**: selectable via the Carrier dropdown in the Audio
   out options menu. `sine` (default) uses harmonic partials;
   `noise` uses bandpass-filtered white noise per voice via a 2-pole
-  resonator (`y[n] = x[n] + 2r·cos(w)·y[n-1] - r²·y[n-2]`). The
-  resonator's `r` scales with frequency (0.993 at low, 0.998 at
-  high) so low voices get wider bands (less resonant bass buildup)
-  while high voices stay tonal. Amplitude normalized by
-  `0.15 * min(2, freq/400)` — linear ramp that attenuates bass
-  and boosts higher frequencies for even perceived loudness.
+  resonator (`y[n] = x[n] + 2r·cos(w)·y[n-1] - r²·y[n-2]`).
+  Constant-Q design (Q=20): `r = 1 - π·freq/(20·sr)`, so
+  bandwidth scales with frequency — no bass overlap between
+  adjacent semitones, no excessively narrow bands at high
+  frequencies. Amplitude normalized by `2.2 * (1-r)` to cancel
+  the resonator's gain (empirically ~`1/(1-r)` for this topology),
+  calibrated to match sine carrier RMS.
 - **Partials**: adjustable 1–8 via the Partials slider (default 6).
   Each voice synthesises that many harmonic overtones with
   `Math.sin` directly (no wavetable). Harmonic gains come from
@@ -106,11 +108,14 @@ no separate `.js` file, no build step. `synth.enable()` is async
   calls, preventing zipper noise from single-frame spikes.
 - **Fixed-range normalization**: the worklet receives `fullScale`
   (`BASE_INTENSITY * sqrt(raysPer)`) via the rebuild message. Each
-  partial's sensor bin sum is divided by `fullScale / K` to recover
-  the 0–1 micGain scale. A floor of 0.05 and gamma of 1.3 shape
-  the gain, then `1 / sc^0.25` scales for multi-voice headroom.
-  No peak-hold — quiet voices stay quiet relative to loud ones,
-  matching the mic spectrum's absolute scaling.
+  partial's sensor bin sum is divided by `fullScale / gainK` to
+  recover the 0–1 micGain scale (`gainK` = `K` for sine, `1` for
+  noise since noise uses a single band). A floor of 0.15 and gamma
+  of 1.5 shape the gain, then `1 / sqrt(sc * gainK)` scales for
+  multi-voice headroom. A `tanh` soft limiter at ±0.8 prevents
+  hard clipping when many voices overlap. No peak-hold — quiet
+  voices stay quiet relative to loud ones, matching the mic
+  spectrum's absolute scaling.
 - **Voice stealing**: voices whose gains are all < 1e-5 are skipped
   entirely in the render loop.
 - Master gain slider posts a gain value via `MessagePort`.
@@ -157,16 +162,13 @@ bleed across scenes.
 
 Toggled via the **Synth spectrum** checkbox in the left panel (below
 Mic spectrum). Floating draggable window identical in structure to the
-mic spectrum window. Shows per-sensor energy on the same log-frequency
-axis as the mic spectrum, using absolute scaling: sensor bin totals
-divided by `fullScale` (`BASE_INTENSITY * sqrt(raysPer)`) to recover
-the 0–1 micGain scale. With no elements and matched counts, bars
-should be identical heights to the mic spectrum. Bars use warm hues
-(orange → green) to distinguish from the mic spectrum (blue → purple).
-Sensor bars are placed by spatial position on the emitter frequency
-ladder (sensor `i` at `i*(emitterCount-1)/(sensorCount-1)` scale
-degrees) so the axes align even when sensor count differs from emitter
-count.
+mic spectrum window. Shows the actual FFT of the synth's audio output
+via an `AnalyserNode` (`fftSize=8192`, `smoothing=0.6`) tapped between
+the worklet node and master gain in the audio graph. Log-frequency
+axis 80–6000 Hz with `getFloatFrequencyData`. Reflects the real output
+including harmonic partials, carrier mode (sine peaks vs noise bands),
+and the `tanh` soft limiter. Changing partials or carrier mode is
+immediately visible in the spectrum.
 
 ## Input/output symmetry
 

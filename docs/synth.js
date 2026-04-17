@@ -72,24 +72,23 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const K = this.partials;
     const bc = this.binCount;
     const sc = this.sensorCount;
+    const isNoise = this.carrier === 'noise';
     // Compute target gains from latest bins snapshot.
     // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
     // the 0-1 micGain scale, then apply floor + gamma. This matches the
     // mic spectrum's absolute scaling so quiet voices stay quiet.
+    // Noise carrier uses K=1 (single band per voice, no harmonics).
     if (bins && bins.length >= sc * bc) {
       const fs = this.fullScale;
-      // fullScale is total energy across all bins for a single voice at
-      // micGain=1. Each partial covers bc/K bins, so per-partial full
-      // scale is fs / K. Scale down by sqrt(sc) so many simultaneous
-      // voices don't clip; matches the old normalization level.
-      const partialFS = fs / K;
-      const voiceScale = 1 / Math.pow(sc, 0.25);
+      const gainK = isNoise ? 1 : K;
+      const partialFS = fs / gainK;
+      const voiceScale = 1 / Math.sqrt(sc * gainK);
       for (let s = 0; s < sc; s++) {
         const v = this.voices[s];
         const nk = v.targetGains.length;
         for (let k = 0; k < nk; k++) {
-          const b0 = (k * bc / K) | 0;
-          const b1 = ((k + 1) * bc / K) | 0;
+          const b0 = (k * bc / gainK) | 0;
+          const b1 = ((k + 1) * bc / gainK) | 0;
           let sum = 0;
           for (let b = b0; b < b1; b++) sum += bins[s * bc + b];
           // Normalize to 0-1 using the known full-scale deposit.
@@ -103,7 +102,6 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const twoPi = 2 * Math.PI;
     const invSr = 1 / sampleRate;
     const smooth = 1 - Math.exp(-1 / (0.06 * sampleRate));
-    const isNoise = this.carrier === 'noise';
     for (let i = 0; i < len; i++) buf[i] = 0;
     for (let s = 0; s < this.voices.length; s++) {
       const v = this.voices[s];
@@ -117,15 +115,15 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       if (isNoise) {
         // Bandpass-filtered white noise carrier. 2-pole resonator:
         //   y[n] = x[n] - r²·y[n-2] + 2r·cos(w)·y[n-1]
-        // where w = 2π·freq/sr, r controls bandwidth (closer to 1 = narrower).
-        // r scales with frequency so low voices get wider bands (less
-        // resonant buildup) and high voices stay tonal. Amplitude
-        // normalized by sqrt(freq/200) so low voices don't dominate.
+        // Constant-Q (Q=20): bandwidth scales with frequency so bands
+        // don't overlap at low frequencies or become too narrow at high.
         const w = twoPi * v.freq * invSr;
-        const r = Math.min(0.999, 0.993 + 0.005 * Math.min(1, v.freq / 2000));
+        const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * v.freq / (20 * sampleRate)));
         const c1 = 2 * r * Math.cos(w);
         const c2 = -(r * r);
-        const ampScale = 0.15 * Math.min(2, v.freq / 400);
+        // Normalize by resonator gain (empirically ~1/(1-r)) to match
+        // sine carrier loudness. C=2.2 calibrated against sine RMS.
+        const ampScale = 2.2 * (1 - r);
         // Use first partial's gain for overall amplitude.
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
@@ -153,6 +151,11 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           buf[i] += sample;
         }
       }
+    }
+    // Soft limiter: tanh prevents hard clipping when many voices overlap.
+    for (let i = 0; i < len; i++) {
+      const x = buf[i];
+      if (x > 0.8 || x < -0.8) buf[i] = Math.tanh(x);
     }
     return true;
   }
