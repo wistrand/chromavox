@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "bench": { "w": 556, "h": 900 },
+  "emitter": { "count": 7, "wlMin": 420, "wlMax": 680, "raysPerSource": 256, "spreadDeg": 0, "apertureFactor": 0.01, "disabled": [] },
+  "sensorCount": 14,
+  "elements": [
+    { "kind": "block", "x": 280, "y": 64,  "w": 20,  "h": 110, "material": "slowGlass", "rot": 0, "delayK": 0.005 },
+    { "kind": "block", "x": 280, "y": 193, "w": 50,  "h": 110, "material": "slowGlass", "rot": 0, "delayK": 0.005 },
+    { "kind": "block", "x": 280, "y": 321, "w": 80,  "h": 110, "material": "slowGlass", "rot": 0, "delayK": 0.005 },
+    { "kind": "block", "x": 280, "y": 450, "w": 110, "h": 110, "material": "slowGlass", "rot": 0, "delayK": 0.005 },
+    { "kind": "block", "x": 280, "y": 579, "w": 140, "h": 110, "material": "slowGlass", "rot": 0, "delayK": 0.005 },
+    { "kind": "block", "x": 280, "y": 707, "w": 170, "h": 110, "material": "slowGlass", "rot": 0, "delayK": 0.005 },
+    { "kind": "block", "x": 280, "y": 836, "w": 200, "h": 110, "material": "slowGlass", "rot": 0, "delayK": 0.005 }
+  ]
+}

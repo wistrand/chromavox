@@ -114,6 +114,7 @@ number with velocity = palette color index.
 |---|---|
 | 20-27 | Display buttons (top row, left to right) |
 | 28 | Master |
+| 32 | Add (+) — Chromavox maps to "add element" |
 | 36-43 | Scene buttons (right side, 43=top, 36=bottom) |
 | 44-47 | Left, Right, Up, Down |
 | 48 | Select |

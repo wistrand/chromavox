@@ -113,7 +113,8 @@ Column 7 (8 pads) shows a downsampled sensor spectrogram. N sensors
 are compressed to 8 rows using the dominant wavelength per row
 (strongest bin, not averaged RGB). Non-zero sensor values override
 the in-key color from pass 1. The column is vertically flipped so
-the top pad corresponds to the top of the bench.
+the top pad corresponds to the top of the bench (sensor N-1, since
+sensor 0 is at the bottom).
 
 Finally calls `flush()`.
 
@@ -183,9 +184,11 @@ level — only delivers Active Sensing, no notes. The Live Port
 (hw:X,0,0) works. `mic.js` auto-selects the Live Port by name
 matching. See `notes/push3-midi.md` for details.
 
-## Push transport buttons
+## Push transport / utility buttons
 
 - **Play** (CC 85): toggles Audio out on press (clicks `synthBtn`).
+- **Add (+)** (CC 32): adds a new element (clicks the Add button).
+  Press only (`val > 0`).
 
 ## Push 3 CC differences from Push 2
 
@@ -228,12 +231,17 @@ USB. See `notes/push3-display.md` for protocol details.
   sidecar composites regions onto the base frame using a regionMap
   and refreshes at 30fps.
 - **Browser side** (`push.js`): `_connectDisplay()` connects with
-  retry every 2s. Sends two PNG regions per update at ~10fps: bench
+  retry every 2s, limited to 5 attempts (`MAX_DISPLAY_RETRIES = 5`;
+  stops after ~10 s if no display server found; counter resets on
+  successful connect). Sends two PNG regions per update at ~10fps: bench
   canvas (left, progressive-halving downsample from GL readPixels)
   and sensor spectrograms (right, rendered from sensorBins).
   `_sendRegionPng(x, y, canvas)` uses `canvas.toBlob('image/png')`.
-- **preserveDrawingBuffer**: WebGL context uses
-  `preserveDrawingBuffer: true` for reliable GL readPixels.
+- **onPreOverlay hook**: `renderer.onPreOverlay` fires between the
+  element pass and the overlay pass. `main.js` sets it conditionally
+  when the Push display is connected so `gl.readPixels` captures
+  rays + elements without emitter/sensor ticks (and without needing
+  `preserveDrawingBuffer`).
 - **Progressive halving downsample**: bench bitmap ping-pongs between
   two offscreen canvases, halving dimensions each step (~2:1) with
   bilinear `imageSmoothingEnabled` for quality. Preserves thin ray

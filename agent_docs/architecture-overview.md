@@ -39,6 +39,8 @@ No dependencies.
 - `docs/ui.js` — pointer events (mouse + touch unified), property panel,
   save/load, preset dropdown, undo/redo, keyboard shortcuts.
 - `docs/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.
+  Filters system-realtime messages (status >= 0xF0, e.g. Active Sensing)
+  before processing/logging MIDI input.
 - `docs/synth.js` — additive sensor synth; single `AudioWorkletProcessor`
   ("chromavox-synth") loaded from an inline Blob URL. Main thread posts
   `sensorBins` via `MessagePort`; worklet renders 6 harmonic partials per
@@ -50,7 +52,8 @@ No dependencies.
   scale-degree layout (`row * rowOffset + col`) in software via
   `fourthOffset()`. `push.setScale(scaleName)` updates row offset and
   scale length. `_connectDisplay()` streams bench canvas and sensor
-  spectrogram PNGs to the display sidecar via WebSocket.
+  spectrogram PNGs to the display sidecar via WebSocket (retry limited
+  to 5 attempts).
 - `docs/main.js` — wiring + dirty-flag render loop + device pickers +
   localStorage persistence (auto-save on `markDirty`, restore on load).
   Spectrum readout smoothing (`_displayBins`, `_peakMax`, `_blurBuf`)

@@ -45,6 +45,8 @@ the element's *local* frame.
   culled on the advance pass.
 - Per-ray intensity scales sub-linearly with `raysPerSource` so piling
   on rays brightens rather than dims.
+- Emitter 0 is at the **bottom** of the bench; indices increase
+  upward. Sensor index from y is likewise bottom-to-top.
 - Source modelling: each source is an extended aperture across a
   fraction of its y-strip (`emitter.apertureFactor`). Ray origins,
   wavelengths, and angles use decorrelated golden-ratio sequences so

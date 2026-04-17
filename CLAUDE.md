@@ -132,6 +132,10 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Inline mini-spectrum painted at each sensor tick on the canvas, drawn
   only when the right-side spectrum panel is off-screen (so it's
   always visible somewhere). Logic in `Renderer.buildOverlay`.
+- Emitter 0 and sensor 0 are at the **bottom** of the bench (low
+  frequency = bottom, high = top). Indices increase upward. DOM
+  readout bars are top-to-bottom so bar 0 in the right panel
+  corresponds to sensor N-1 (top of bench).
 - Vertical frequency labels overlay the canvas left edge, one per
   emitter row, just above each tick. Labels show note names in any
   scale mode, Hz in log mode. Updated whenever count, mode, base, or
