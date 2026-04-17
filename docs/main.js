@@ -484,24 +484,60 @@ function frame() {
 }
 requestAnimationFrame(frame);
 
+// (A) Gaussian-blur scratch for spatial smoothing of sensor spectrums.
+let _blurBuf = new Float32Array(0);
+// (C) Temporal IIR display buffer — lerps toward sensorBins each frame.
+let _displayBins = new Float32Array(0);
+// (D) Slow-decaying peak normalization — prevents the global scale from
+// snapping on single-frame spikes.
+let _peakMax = 1e-6;
+
 function updateSensorReadout() {
   const host = document.getElementById('sensor-readout');
   const bars = host.children;
   if (bars.length !== scene.sensorCount) return;
   const binCount = tracer.binCount;
-  // Normalise: find max across all bins for consistent scaling, fallback 1.
-  let maxVal = 1e-6;
-  for (let i = 0; i < tracer.sensorBins.length; i++) {
-    if (tracer.sensorBins[i] > maxVal) maxVal = tracer.sensorBins[i];
+  const totalBins = scene.sensorCount * binCount;
+
+  // Resize IIR buffer if sensor layout changed.
+  if (_displayBins.length !== totalBins) {
+    _displayBins = new Float32Array(totalBins);
+    _peakMax = 1e-6;
   }
+  if (_blurBuf.length < binCount) _blurBuf = new Float32Array(binCount);
+
+  // (C) Temporal IIR: displayBins lerps toward sensorBins.
+  const IIR = 0.3;
+  for (let i = 0; i < totalBins; i++) {
+    _displayBins[i] += (tracer.sensorBins[i] - _displayBins[i]) * IIR;
+  }
+
+  // (D) Slow-decaying peak normalization.
+  let curMax = 1e-6;
+  for (let i = 0; i < totalBins; i++) {
+    if (_displayBins[i] > curMax) curMax = _displayBins[i];
+  }
+  _peakMax = Math.max(curMax, _peakMax * 0.95);
+
   for (let s = 0; s < scene.sensorCount; s++) {
     const c = bars[s].querySelector('canvas');
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, c.width, c.height);
+
+    // (A) Gaussian blur across bins: [0.25, 0.5, 0.25] kernel.
+    const base = s * binCount;
+    const blur = _blurBuf;
+    for (let b = 0; b < binCount; b++) {
+      const prev = b > 0 ? _displayBins[base + b - 1] : _displayBins[base + b];
+      const cur  = _displayBins[base + b];
+      const next = b < binCount - 1 ? _displayBins[base + b + 1] : cur;
+      blur[b] = prev * 0.25 + cur * 0.5 + next * 0.25;
+    }
+
     const wlMin = 380, wlMax = 780;
     for (let b = 0; b < binCount; b++) {
-      const v = tracer.sensorBins[s * binCount + b] / maxVal;
+      const v = blur[b] / _peakMax;
       if (v <= 0) continue;
       const wl = wlMin + (b + 0.5) / binCount * (wlMax - wlMin);
       const rgb = wavelengthToRGB(wl);
