@@ -237,7 +237,7 @@ const DEFAULT_LOOK = LOOK.crown;
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', { antialias: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
+    const gl = canvas.getContext('webgl2', { antialias: true, premultipliedAlpha: false });
     if (!gl) throw new Error('WebGL2 not supported');
     this.gl = gl;
     // HDR float framebuffer for rays — required so additive blending can
@@ -444,6 +444,9 @@ export class Renderer {
     for (const el of scene.elements) {
       this.drawElement(el);
     }
+
+    // Hook for capturing the framebuffer before overlay ticks/lines.
+    if (this.onPreOverlay) this.onPreOverlay();
 
     // --- Pass 3: overlay (alpha-blended lines) ---
     this.buildOverlay(scene, tracer);

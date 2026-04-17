@@ -133,6 +133,8 @@ export class PushController {
   static DISPLAY_H = 160;
 
   _displayRetryTimer = 0;
+  _displayRetries = 0;
+  static MAX_DISPLAY_RETRIES = 5;
 
   _connectDisplay() {
     if (this._displayWs) return;
@@ -142,6 +144,7 @@ export class PushController {
       ws.onopen = () => {
         this.displayConnected = true;
         this._displayRetryTimer = 0;
+        this._displayRetries = 0;
       };
       ws.onclose = () => {
         this.displayConnected = false;
@@ -160,6 +163,8 @@ export class PushController {
 
   _scheduleDisplayRetry() {
     if (this._displayRetryTimer || !this.output) return;
+    if (this._displayRetries >= PushController.MAX_DISPLAY_RETRIES) return;
+    this._displayRetries++;
     this._displayRetryTimer = setTimeout(() => {
       this._displayRetryTimer = 0;
       if (this.output && !this._displayWs) this._connectDisplay();

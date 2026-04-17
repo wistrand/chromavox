@@ -132,6 +132,8 @@ push.onCC = (cc, val) => {
 mic.onCC = (cc, val) => {
   // Play button (CC 85) toggles audio out. Only on press (val > 0).
   if (cc === 85 && val > 0) { synthBtn.click(); return; }
+  // + button (CC 32) adds a new element (same as the Add button).
+  if (cc === 32 && val > 0) { document.getElementById('add-btn').click(); return; }
   // Volume encoder (CC 79) adjusts synth master volume.
   if (cc === 79) {
     const dir = val >= 64 ? -1 : 1;
@@ -756,12 +758,13 @@ function frame() {
   if (dirty || particlesInFlight) {
     dirty = false;
     tracer.trace(scene);
+    // Push display capture hooks into the renderer between the element
+    // pass and the overlay pass — gets rays + elements without ticks/lines.
+    renderer.onPreOverlay = (push.output && push.displayConnected)
+      ? () => push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas)
+      : null;
     renderer.draw(scene, tracer);
-    // Read GL pixels for Push display immediately after draw, while
-    // the framebuffer is guaranteed to still have content.
-    if (push.output) {
-      push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas);
-    }
+    renderer.onPreOverlay = null;
     renderer.updateReadout(scene, tracer);
   }
 
