@@ -31,7 +31,7 @@ const UI_STORAGE_KEY = 'chromavox-ui';
 const UI_CONTROL_IDS = [
   'mic-source', 'mic-device', 'midi-device', 'mic-mode', 'mic-base',
   'chromatic-span', 'mic-smoothing', 'bucket-color', 'synth-independent',
-  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials', 'synth-device',
+  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials', 'synth-noise-gain', 'synth-device',
   'sim-rate', 'distort-toggle', 'sensor-sync',
 ];
 function saveUiState() {
@@ -610,16 +610,27 @@ partialsSlider.addEventListener('input', () => {
 
 const carrierSel = document.getElementById('synth-carrier');
 const partialsRow = partialsSlider.closest('.row');
-function syncPartialsVisibility() {
-  partialsRow.style.display = carrierSel.value === 'noise' ? 'none' : '';
+const noiseGainRow = document.getElementById('noise-gain-row');
+const noiseGainSlider = document.getElementById('synth-noise-gain');
+const noiseGainVal = document.getElementById('synth-noise-gain-val');
+function syncCarrierVisibility() {
+  const isNoise = carrierSel.value === 'noise';
+  partialsRow.style.display = isNoise ? 'none' : '';
+  noiseGainRow.style.display = isNoise ? '' : 'none';
 }
-carrierSel.addEventListener('change', () => { synth.setCarrier(carrierSel.value); syncPartialsVisibility(); });
-syncPartialsVisibility();
+noiseGainSlider.addEventListener('input', () => {
+  const v = parseInt(noiseGainSlider.value, 10) / 100;
+  noiseGainVal.textContent = v.toFixed(2);
+  synth.setNoiseGain(v);
+});
+carrierSel.addEventListener('change', () => { synth.setCarrier(carrierSel.value); syncCarrierVisibility(); });
+syncCarrierVisibility();
 
 const _applyInitialPartials = () => {
   synth.setPartials(parseInt(partialsSlider.value, 10) || 1);
   synth.setCarrier(carrierSel.value);
-  syncPartialsVisibility();
+  synth.setNoiseGain(parseInt(noiseGainSlider.value, 10) / 100);
+  syncCarrierVisibility();
 };
 
 const micBtn = document.getElementById('mic-toggle');
@@ -906,13 +917,20 @@ window.addEventListener('resize', () => {
     const nyquist = synth.ctx.sampleRate / 2;
     const binCount = fd.length;
 
-    // Use the synth-side scale for the frequency axis.
-    const sMode = synthMode();
-    const sBase = synthBase();
-    const sStep = synthStep();
-
-    const loHz = 80, hiHz = 6000;
-    const logLo = Math.log(loHz), logHi = Math.log(hiHz);
+    // Match mic spectrum's frequency range so both views align.
+    const micMode = document.getElementById('mic-mode').value;
+    const baseHz = parseFloat(document.getElementById('mic-base').value) || 130.81;
+    const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
+    const n = scene.emitter.count;
+    let loHz, hiHz;
+    if (micMode === 'log') {
+      loHz = 80; hiHz = 6000;
+    } else {
+      loHz = scaleFreq(baseHz, micMode, 0, step) * 0.8;
+      hiHz = scaleFreq(baseHz, micMode, n, step) * 1.2;
+    }
+    const logLo = Math.log(Math.max(20, loHz));
+    const logHi = Math.log(Math.max(loHz + 1, hiHz));
     const freqToX = hz => hz <= 0 ? -1 : (Math.log(hz) - logLo) / (logHi - logLo) * W;
 
     // Raw FFT curve on log frequency axis.

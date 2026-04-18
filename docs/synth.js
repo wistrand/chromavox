@@ -21,6 +21,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.sensorCount = 0;
     this.partials = 1;
     this.carrier = 'sine'; // 'sine' | 'noise'
+    this.noiseGain = 0.05;
     this.port.onmessage = e => {
       const d = e.data;
       if (d.type === 'bins') {
@@ -32,6 +33,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         if (this.sensorCount > 0) this._rebuildPartials();
       } else if (d.type === 'carrier') {
         this.carrier = d.value;
+      } else if (d.type === 'noiseGain') {
+        this.noiseGain = d.value;
       }
     };
   }
@@ -58,9 +61,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         gains.push(0);
         targetGains.push(0);
       }
-      // Bandpass IIR state for noise carrier (2-pole resonator).
-      // Q chosen for moderate bandwidth; coefficients computed in process().
-      this.voices.push({ freq: f, phases, gains, targetGains, bp1: 0, bp2: 0 });
+      // Bandpass IIR state for noise carrier (single 2-pole resonator).
+      this.voices.push({ freq: f, phases, gains, targetGains,
+        bp1: 0, bp2: 0 });
     }
   }
   process(inputs, outputs) {
@@ -87,6 +90,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         const v = this.voices[s];
         const nk = v.targetGains.length;
         for (let k = 0; k < nk; k++) {
+          // In noise mode (gainK=1), only k=0 is meaningful — it sums
+          // all bc bins for this sensor. k>0 would read past this
+          // sensor's bin range into the next sensor, so zero them.
+          if (k >= gainK) { v.targetGains[k] = 0; continue; }
           const b0 = (k * bc / gainK) | 0;
           const b1 = ((k + 1) * bc / gainK) | 0;
           let sum = 0;
@@ -94,7 +101,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           // Normalize to 0-1 using the known full-scale deposit.
           const g = Math.min(1, sum / partialFS);
           v.targetGains[k] = g < 0.15 ? 0
-            : Math.pow((g - 0.15) / 0.85, 1.5) * voiceScale;
+            : Math.pow((g - 0.15) / 0.85, 1.5) * voiceScale / (k + 1);
         }
       }
     }
@@ -113,17 +120,15 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       if (!anyActive) { v.bp1 = 0; v.bp2 = 0; continue; }
 
       if (isNoise) {
-        // Bandpass-filtered white noise carrier. 2-pole resonator:
-        //   y[n] = x[n] - r²·y[n-2] + 2r·cos(w)·y[n-1]
-        // Constant-Q (Q=20): bandwidth scales with frequency so bands
-        // don't overlap at low frequencies or become too narrow at high.
+        // Bandpass-filtered white noise carrier. Single 2-pole resonator,
+        // constant-Q (Q=25). ampScale = C * sqrt(1-r) cancels both the
+        // peak gain (~1/(1-r)) and bandwidth scaling (~(1-r)), giving
+        // flat output power across frequency (Smith/CCRMA, Csound reson).
         const w = twoPi * v.freq * invSr;
-        const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * v.freq / (20 * sampleRate)));
+        const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * v.freq / (25 * sampleRate)));
         const c1 = 2 * r * Math.cos(w);
         const c2 = -(r * r);
-        // Normalize by resonator gain (empirically ~1/(1-r)) to match
-        // sine carrier loudness. C=2.2 calibrated against sine RMS.
-        const ampScale = 2.2 * (1 - r);
+        const ampScale = this.noiseGain * Math.sqrt(1 - r);
         // Use first partial's gain for overall amplitude.
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
@@ -176,11 +181,18 @@ export class SensorSynth {
     this.sinkId = '';
     this.stepSemi = 1;
     this.raysPer = 512;
+    this.noiseGain = 0.05;
   }
 
   setPartials(n) {
     if (!this.workletNode) return;
     this.workletNode.port.postMessage({ type: 'partials', value: n });
+  }
+
+  setNoiseGain(v) {
+    this.noiseGain = v;
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'noiseGain', value: v });
   }
 
   setCarrier(mode) {
