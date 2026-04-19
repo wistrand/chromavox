@@ -33,7 +33,7 @@
       <button id="mic-toggle">Audio in: off</button>
       <button id="mic-options" type="button" class="opts-toggle" aria-label="Audio in options">▾</button>
       <div id="mic-menu" class="options-menu">
-        <div class="row"><label>Source <select id="mic-source"><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keyboard</option><option value="midi">MIDI in</option></select></label></div>
+        <div class="row"><label>Source <select id="mic-source"><option value="touch" selected>touch/keys</option><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keyboard</option><option value="midi">MIDI in</option></select></label></div>
         <div class="row" id="mic-device-row"><label>Device <select id="mic-device"><option value="">default</option></select></label></div>
         <div class="row" id="midi-device-row" style="display:none"><label>MIDI device <select id="midi-device"><option value="">first available</option></select></label></div>
         <div class="row" id="midi-gain-row" style="display:none"><label>MIDI gain <input id="midi-gain" type="range" min="10" max="300" value="100"><span id="midi-gain-val">1.00</span></label></div>
@@ -74,8 +74,10 @@
       <div id="synth-menu" class="options-menu">
         <div class="row"><label>Device <select id="synth-device"><option value="">default</option></select></label></div>
         <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="100" value="25"><span id="synth-vol-val">25</span></label></div>
-        <div class="row"><label>Carrier <select id="synth-carrier"><option value="sine" selected>sine</option><option value="noise">noise</option></select></label></div>
-        <div class="row"><label>Partials <input id="synth-partials" type="range" min="1" max="8" value="6" step="1"><span id="synth-partials-val">6</span></label></div>
+        <div class="row"><label>Carrier <select id="synth-carrier"><option value="sine" selected>sine</option><option value="noise">noise</option><option value="acid">acid</option></select></label></div>
+        <div class="row" id="partials-row"><label>Partials <input id="synth-partials" type="range" min="1" max="8" value="6" step="1"><span id="synth-partials-val">6</span></label></div>
+        <div class="row" id="acid-res-row" style="display:none"><label>Resonance <input id="acid-res" type="range" min="0" max="100" value="85"><span id="acid-res-val">0.85</span></label></div>
+        <div class="row" id="acid-env-row" style="display:none"><label>Env amount <input id="acid-env" type="range" min="0" max="100" value="60"><span id="acid-env-val">0.60</span></label></div>
         <div class="row"><label><input id="synth-independent" type="checkbox"> Independent scale</label></div>
         <div class="row" id="synth-mode-row"><label>Mode <select id="synth-mode">
           <option value="log">log</option>

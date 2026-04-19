@@ -20,10 +20,22 @@ generator:
   shift the octave. Selecting this source auto-switches Mode to
   chromatic and pins Base to the current octave's C (synced with the
   Base dropdown when octave changes).
+- `touch/keys` (default) — combined touch + keyboard input, no
+  AudioContext. Pointer events on the left edge of the bench (within
+  60 bench pixels of the emitter ticks) set emitter levels directly
+  by position. Keyboard claviature (same ZXCVBNM/SDGHJ layout)
+  sets levels by scale degree. Both write to `_touchLevels`. Multi-
+  touch supported. All emitters are force-enabled (disabled set
+  cleared each frame). Context menu suppressed on the stage element.
+  Touch events listen on `#stage` (not canvas) so the letterbox
+  black bars also respond. `stopPropagation` on touch-zone pointers
+  prevents UI element-toggle/drag interference.
 
-All sources feed a single `AnalyserNode` with `fftSize = 8192` and
-`smoothingTimeConstant` set in `mic.js` `enable()`, so downstream code
-doesn't know where the audio came from.
+Mic, sine, harmonics, white, pink, and keyboard sources feed a single
+`AnalyserNode` with `fftSize = 8192` and `smoothingTimeConstant` set
+in `mic.js` `enable()`, so downstream code doesn't know where the
+audio came from. Touch/keys and MIDI sources bypass the AudioContext
+entirely — `directLevels()` returns emitter levels directly.
 
 `micBands(mic, n, mode, baseHz, stepSemi)` bins the FFT into `n`
 buckets:
@@ -82,21 +94,27 @@ no separate `.js` file, no build step. `synth.enable()` is async
   uses the same 80–6000 Hz range and `(i+0.5)/n` bucket-center
   spacing as `micBands`, so input and output frequencies match.
 - **Carrier mode**: selectable via the Carrier dropdown in the Audio
-  out options menu. `sine` (default) uses harmonic partials;
-  `noise` uses bandpass-filtered white noise per voice via a 2-pole
-  resonator (`y[n] = x[n] + 2r·cos(w)·y[n-1] - r²·y[n-2]`).
-  Constant-Q design (Q=20): `r = 1 - π·freq/(20·sr)`, so
-  bandwidth scales with frequency — no bass overlap between
-  adjacent semitones, no excessively narrow bands at high
-  frequencies. Amplitude normalized by `2.2 * (1-r)` to cancel
-  the resonator's gain (empirically ~`1/(1-r)` for this topology),
-  calibrated to match sine carrier RMS.
+  out options menu. Three modes:
+  - `sine` (default): harmonic partials with 1/k rolloff for
+    neutral sawtooth-like timbre from white light.
+  - `noise`: unity-gain bandpass noise (Csound `resonz` topology).
+    Single 2-pole resonator with zeros at DC/Nyquist:
+    `bp = (y0 - y2) * (1-r²)/2`. Constant-Q (Q=25):
+    `r = 1 - π·freq/(25·sr)`. Peak gain exactly 1.0 at all
+    frequencies — no ampScale needed.
+  - `acid`: 303-style acid carrier. PolyBLEP sawtooth → 3-pole
+    TPT/ZDF diode ladder filter (18 dB/oct) with `tanh` feedback
+    for resonance. Sensor energy drives filter cutoff (the squelch):
+    `cutoff = freq × 2^(1 + voiceGain × envAmount × 5 octaves)`.
+    Per-voice state: `sawPhase`, `lp1`, `lp2`, `lp3`. Resonance
+    and Env Amount sliders posted via MessagePort. Post-filter drive
+    via `tanh(s3 × 2.5)`.
 - **Partials**: adjustable 1–8 via the Partials slider (default 6).
   Each voice synthesises that many harmonic overtones with
   `Math.sin` directly (no wavetable). Harmonic gains come from
-  grouping the sensor's wavelength bins; per-voice timbre depends on
-  which colors hit that sensor. Partials slider is hidden in noise
-  carrier mode (noise uses only the fundamental band).
+  grouping the sensor's wavelength bins with 1/k rolloff; per-voice
+  timbre depends on which colors hit that sensor. Partials slider
+  visible only in sine mode; hidden in noise and acid modes.
   `synth.setPartials(n)` and `synth.setCarrier(mode)` post to the
   worklet via `MessagePort`.
 - **Data flow**: main thread posts `sensorBins` via `MessagePort` each
@@ -110,12 +128,12 @@ no separate `.js` file, no build step. `synth.enable()` is async
   (`BASE_INTENSITY * sqrt(raysPer)`) via the rebuild message. Each
   partial's sensor bin sum is divided by `fullScale / gainK` to
   recover the 0–1 micGain scale (`gainK` = `K` for sine, `1` for
-  noise since noise uses a single band). A floor of 0.15 and gamma
-  of 1.5 shape the gain, then `1 / sqrt(sc * gainK)` scales for
-  multi-voice headroom. A `tanh` soft limiter at ±0.8 prevents
-  hard clipping when many voices overlap. No peak-hold — quiet
-  voices stay quiet relative to loud ones, matching the mic
-  spectrum's absolute scaling.
+  noise and acid since they use a single band). A floor of 0.15
+  and gamma of 1.5 shape the gain, then `1 / sqrt(sc * gainK)`
+  scales for multi-voice headroom. Sine partials get 1/k rolloff.
+  A `tanh` soft limiter at ±0.8 prevents hard clipping when many
+  voices overlap. No peak-hold — quiet voices stay quiet relative
+  to loud ones, matching the mic spectrum's absolute scaling.
 - **Voice stealing**: voices whose gains are all < 1e-5 are skipped
   entirely in the render loop.
 - Master gain slider posts a gain value via `MessagePort`.

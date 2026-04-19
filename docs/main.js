@@ -50,7 +50,8 @@ const UI_STORAGE_KEY = 'chromavox-ui';
 const UI_CONTROL_IDS = [
   'mic-source', 'mic-device', 'midi-device', 'mic-mode', 'mic-base',
   'chromatic-span', 'mic-smoothing', 'bucket-color', 'synth-independent',
-  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials', 'synth-device',
+  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials',
+  'acid-res', 'acid-env', 'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
   'midi-gain', 'sim-rate', 'distort-toggle',
 ];
@@ -532,6 +533,67 @@ document.getElementById('midi-gain').addEventListener('input', e => {
   mic.midiGain = v;
 });
 
+// --- Touch input: pointer events on stage → emitter levels ---
+// Listen on #stage (not canvas) so touches in the letterbox black
+// bars also register — the Y coordinate maps to emitters regardless
+// of horizontal position.
+{
+  const stage = document.getElementById('stage');
+  const _touchPointers = new Map(); // pointerId → emitterIdx
+  const TOUCH_ZONE_PX = 60; // bench pixels from left wall
+  function touchEmitterIdx(e) {
+    // Map client coords to bench coords via the canvas rect.
+    const rect = canvas.getBoundingClientRect();
+    const benchX = (e.clientX - rect.left) / rect.width * scene.bench.w;
+    const benchY = (e.clientY - rect.top) / rect.height * scene.bench.h;
+    // Only accept touches near the left wall (emitter ticks) or in
+    // the black bar to the left of the canvas (benchX < 0).
+    if (benchX > TOUCH_ZONE_PX) return -1;
+    const nSrc = scene.emitter.count;
+    const stripH = scene.bench.h / nSrc;
+    const idx = nSrc - 1 - Math.floor(benchY / stripH);
+    return Math.max(0, Math.min(nSrc - 1, idx));
+  }
+  stage.addEventListener('contextmenu', e => {
+    if (mic.source === 'touch') e.preventDefault();
+  });
+  stage.addEventListener('pointerdown', e => {
+    if (mic.source !== 'touch') return;
+    const idx = touchEmitterIdx(e);
+    if (idx < 0) return; // outside touch zone — let UI handle it
+    e.preventDefault();  // prevent browser pan/drag gesture
+    e.stopPropagation(); // prevent UI emitter toggle / element select
+    _touchPointers.set(e.pointerId, idx);
+    mic.setTouchLevel(idx, 1);
+    dirty = true;
+  });
+  stage.addEventListener('pointermove', e => {
+    if (mic.source !== 'touch') return;
+    if (!_touchPointers.has(e.pointerId)) return;
+    e.stopPropagation(); // keep note pointer away from UI drag/pinch
+    const oldIdx = _touchPointers.get(e.pointerId);
+    const newIdx = touchEmitterIdx(e);
+    if (newIdx < 0) return; // moved out of touch zone — keep current
+    if (newIdx !== oldIdx) {
+      mic.setTouchLevel(oldIdx, 0);
+      mic.setTouchLevel(newIdx, 1);
+      _touchPointers.set(e.pointerId, newIdx);
+      dirty = true;
+    }
+  });
+  const touchUp = e => {
+    if (mic.source !== 'touch') return;
+    if (!_touchPointers.has(e.pointerId)) return;
+    e.stopPropagation(); // prevent UI from processing note-pointer release
+    const idx = _touchPointers.get(e.pointerId);
+    mic.setTouchLevel(idx, 0);
+    _touchPointers.delete(e.pointerId);
+    dirty = true;
+  };
+  stage.addEventListener('pointerup', touchUp);
+  stage.addEventListener('pointercancel', touchUp);
+}
+
 // MIDI device picker.
 async function populateMidiDevices() {
   const sel = document.getElementById('midi-device');
@@ -640,16 +702,35 @@ partialsSlider.addEventListener('input', () => {
 });
 
 const carrierSel = document.getElementById('synth-carrier');
-const partialsRow = partialsSlider.closest('.row');
+const partialsRow = document.getElementById('partials-row');
+const acidResRow = document.getElementById('acid-res-row');
+const acidEnvRow = document.getElementById('acid-env-row');
+const acidResSlider = document.getElementById('acid-res');
+const acidEnvSlider = document.getElementById('acid-env');
 function syncCarrierVisibility() {
-  partialsRow.style.display = carrierSel.value === 'noise' ? 'none' : '';
+  const c = carrierSel.value;
+  partialsRow.style.display = c === 'sine' ? '' : 'none';
+  acidResRow.style.display = c === 'acid' ? '' : 'none';
+  acidEnvRow.style.display = c === 'acid' ? '' : 'none';
 }
 carrierSel.addEventListener('change', () => { synth.setCarrier(carrierSel.value); syncCarrierVisibility(); });
+acidResSlider.addEventListener('input', () => {
+  const v = parseInt(acidResSlider.value, 10) / 100;
+  document.getElementById('acid-res-val').textContent = v.toFixed(2);
+  synth.setAcidRes(v);
+});
+acidEnvSlider.addEventListener('input', () => {
+  const v = parseInt(acidEnvSlider.value, 10) / 100;
+  document.getElementById('acid-env-val').textContent = v.toFixed(2);
+  synth.setAcidEnv(v);
+});
 syncCarrierVisibility();
 
 const _applyInitialPartials = () => {
   synth.setPartials(parseInt(partialsSlider.value, 10) || 1);
   synth.setCarrier(carrierSel.value);
+  synth.setAcidRes(parseInt(acidResSlider.value, 10) / 100);
+  synth.setAcidEnv(parseInt(acidEnvSlider.value, 10) / 100);
   syncCarrierVisibility();
 };
 
@@ -1081,6 +1162,8 @@ function frame() {
       // causing spectral leakage into neighboring buckets.
       scene.runtime.micLevels = mic.directLevels(scene.emitter.count, micMode, baseHz, stepSemi)
         || micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
+      // Touch mode: override disabled emitters so all ticks respond.
+      if (mic.source === 'touch') scene.emitter.disabled.clear();
       if (baseHz !== lastBaseHz) {
         if (!synthIndep()) synth.setBase(baseHz);
         rebuildEmitterLabels();

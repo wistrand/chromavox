@@ -431,6 +431,10 @@ export class Renderer {
     gl.vertexAttribDivisor(this.ray.aSeg, 0);
     gl.vertexAttribDivisor(this.ray.aCol1, 0);
     gl.vertexAttribDivisor(this.ray.aCol2, 0);
+    gl.disableVertexAttribArray(this.ray.aSeg);
+    gl.disableVertexAttribArray(this.ray.aCol1);
+    gl.disableVertexAttribArray(this.ray.aCol2);
+    gl.disableVertexAttribArray(this.ray.aCorner);
 
     // --- Pass 2a: blit FBO → screen ---
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);

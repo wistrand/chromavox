@@ -38,6 +38,7 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [Delay materials](agent_docs/architecture-delay.md)
 - [MIDI input](agent_docs/architecture-midi.md)
 - [Ableton Push](agent_docs/architecture-push.md)
+- [GPU tracer](agent_docs/architecture-gpu-tracer.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
 
 
@@ -159,18 +160,18 @@ Detailed notes are split into topic files under `agent_docs/`:
   `setTargetAtTime` calls. Fixed-range normalization: worklet receives
   `fullScale` (`BASE_INTENSITY * sqrt(raysPer)`) via rebuild; each
   partial's bin sum is divided by `fullScale/gainK` (`gainK` = `K`
-  for sine, `1` for noise) to recover 0–1 micGain, then floor 0.15,
-  gamma 1.5, and `1/sqrt(sc * gainK)` voice scale. `tanh` soft
-  limiter at ±0.8 prevents hard clipping. No peak-hold — quiet
-  voices stay quiet. Partials slider (1–8, default 6); `Math.sin`
-  directly (no wavetable yet). Carrier mode: `sine` (harmonic
-  partials) or `noise` (constant-Q bandpass noise per voice; 2-pole
-  resonator with `r = 1 - π·freq/(20·sr)`, amplitude normalized by
-  `2.2 * (1-r)` calibrated to match sine RMS). Partials slider
-  hidden in noise mode. Voices with all gains < 1e-5 are skipped
-  (voice stealing). Rebuild sends frequency array + `fullScale` via
-  `MessagePort` — no node teardown/recreation. `synth.enable()` is
-  async (awaits `audioWorklet.addModule`). Log-mode voice
+  for sine, `1` for noise/acid) to recover 0–1 micGain, then floor
+  0.15, gamma 1.5, and `1/sqrt(sc * gainK)` voice scale. Sine
+  partials get 1/k rolloff for neutral timbre. `tanh` soft limiter
+  at ±0.8 prevents hard clipping. Three carrier modes: `sine`
+  (harmonic partials), `noise` (unity-gain Csound `resonz` bandpass;
+  `bp = (y0-y2)*(1-r²)/2`, Q=25), `acid` (PolyBLEP saw → 3-pole
+  TPT/ZDF diode ladder filter with `tanh` feedback; sensor energy
+  drives cutoff for 303-style squelch; Resonance + Env Amount
+  sliders). Partials slider visible only in sine mode. Voices with
+  all gains < 1e-5 are skipped (voice stealing). Rebuild sends
+  frequency array + `fullScale` via `MessagePort`. `synth.enable()`
+  is async (awaits `audioWorklet.addModule`). Log-mode voice
   frequencies use the same 80–6000 Hz range and `(i+0.5)/n` bucket-
   center spacing as `micBands`.
 - Keyboard claviature voices use `'triangle'` so a single key mostly
@@ -179,6 +180,14 @@ Detailed notes are split into topic files under `agent_docs/`:
   `[]` (not `null`) so `directLevels` returns an all-zeros array
   instead of falling through to the FFT path, preventing spectral
   leakage from the fading oscillator from lighting up many emitters.
+- Touch/keys source (default): combined touch + keyboard, no
+  AudioContext. Touch on the left edge of the bench (≤60px from
+  emitter ticks, including letterbox black bars) sets emitter levels
+  by Y position. Keyboard claviature (ZXCVBNM layout) sets by scale
+  degree. Both write to `_touchLevels`. Multi-touch supported. All
+  emitters force-enabled. `stopPropagation` on touch-zone pointers
+  prevents UI drag interference. Element hit-test has a 15px
+  proximity fallback for easier touch selection.
 - UI shortcuts ignore key events while a drag is in progress
   (`if (this.dragging) return;`) so playing keyboard notes mid-drag
   doesn't hijack the gesture.
@@ -288,3 +297,21 @@ Detailed notes are split into topic files under `agent_docs/`:
   `tintStrength` (delayK * 80, capped at 0.5) in the renderer,
   making them look foggy. Zero-delay elements unchanged. Per-element
   `el.color` override still takes precedence.
+- GPU tracer (`docs/gpu-tracer.js`): WebGL2 transform feedback
+  alternative to the CPU tracer. Default when no delay elements are
+  present; auto-switches to CPU tracer when delay elements are added
+  (`pickTracer()` in the frame loop). Each (ray, bounce) pair is one
+  vertex; the vertex shader implements the full castRay physics
+  (Snell, TIR, Beer-Lambert, Sellmeier). Transform feedback buffer
+  is bound directly by the renderer (zero-copy). Sensor accumulation
+  via additive-blend R32F FBO + `readPixels` (~6 KB). Textures
+  allocated once at max size via `texStorage2D`, updated with
+  `texSubImage2D`. Limitations: no delay/particle simulation, max 4
+  nested dielectrics, no initial containment check. `?cpu` URL param
+  forces CPU tracer. Left panel shows "Tracer: GPU" or "Tracer: CPU".
+  Test page at `docs/gpu-test.html` compares GPU vs CPU output with
+  visual segment overlays. Snapshot infrastructure: `npm run snapshot`
+  generates references, `npm run verify` checks them.
+- Responsive layout: three tiers — full 220px panels above 960px,
+  slim 160px panels from 601–960px (foldables/small tablets), drawer
+  mode below 600px (phones). `#stage` has `touch-action: none`.

@@ -244,6 +244,51 @@ export class MicModulator {
       this.source = source;
       this.active = true;
       return;
+    } else if (source === 'touch') {
+      // Touch + keyboard input — no AudioContext. Pointer events on the
+      // bench set emitter levels by position (handled by main.js).
+      // Keyboard claviature sets levels by scale degree (same key layout
+      // as keyboard mode but without oscillators — the synth output
+      // handles the sound). Both write to _touchLevels.
+      this._touchLevels = new Float32Array(64); // max emitters
+      this.keyboardOctave = 0;
+      const KEY_TO_DEG = {
+        KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5,
+        KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
+      };
+      this._kbdActiveDegs = new Set();
+      const onDown = e => {
+        if (e.repeat) return;
+        if (e.code === 'Comma')  { this.keyboardOctave--; return; }
+        if (e.code === 'Period') { this.keyboardOctave++; return; }
+        const deg = KEY_TO_DEG[e.code];
+        if (deg === undefined) return;
+        e.preventDefault();
+        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+        const idx = scale.length * this.keyboardOctave + deg;
+        if (idx >= 0 && idx < 64) {
+          this._touchLevels[idx] = 1;
+          this._kbdActiveDegs.add(e.code);
+        }
+      };
+      const onUp = e => {
+        const deg = KEY_TO_DEG[e.code];
+        if (deg === undefined) return;
+        this._kbdActiveDegs.delete(e.code);
+        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+        const idx = scale.length * this.keyboardOctave + deg;
+        if (idx >= 0 && idx < 64) this._touchLevels[idx] = 0;
+      };
+      window.addEventListener('keydown', onDown);
+      window.addEventListener('keyup', onUp);
+      this._kbdCleanup = () => {
+        window.removeEventListener('keydown', onDown);
+        window.removeEventListener('keyup', onUp);
+        this._kbdActiveDegs = null;
+      };
+      this.source = source;
+      this.active = true;
+      return;
     } else {
       throw new Error('unknown mic source: ' + source);
     }
@@ -268,7 +313,22 @@ export class MicModulator {
   // frequencies (keyboard, sine, harmonics) we can set the correct
   // bucket directly.
   // Returns null for mic / noise sources (FFT is the right path there).
+  // Set a touch emitter level. Called by the UI on pointer events.
+  setTouchLevel(emitterIdx, level) {
+    if (!this._touchLevels) return;
+    if (emitterIdx >= 0 && emitterIdx < this._touchLevels.length) {
+      this._touchLevels[emitterIdx] = level;
+    }
+  }
+
   directLevels(n, mode, baseHz, step) {
+    // Touch: levels come directly from pointer events on the bench.
+    if (this.source === 'touch') {
+      if (!this._touchLevels) return new Float32Array(n);
+      const levels = new Float32Array(n);
+      for (let i = 0; i < n; i++) levels[i] = this._touchLevels[i] || 0;
+      return levels;
+    }
     // MIDI: column-first pad mapping so a vertical column of Push pads
     // = sequential emitters (matching the bench's vertical layout).
     if (this.source === 'midi') {
@@ -325,9 +385,9 @@ export class MicModulator {
       for (let k = 1; k <= 6; k++) out.push({ hz: 220 * k, amp: 1 / k });
       return out;
     }
-    if (this.source === 'midi') {
+    if (this.source === 'midi' || this.source === 'touch') {
       // Return empty (not null) so directLevels returns an all-zeros
-      // array and the FFT fallback never fires (MIDI has no AudioContext).
+      // array and the FFT fallback never fires (no AudioContext).
       return [];
     }
     return null;
@@ -359,6 +419,7 @@ export class MicModulator {
     if (this._midiInput) { this._midiInput.onmidimessage = null; this._midiInput = null; }
     if (this._midiAccess) { this._midiAccess.onstatechange = null; this._midiAccess = null; }
     this._midiNotes = null;
+    this._touchLevels = null;
     for (const n of this.nodes) { try { n.stop?.(); } catch {} }
     this.nodes = [];
     this.ctx?.close();
@@ -371,6 +432,14 @@ export class MicModulator {
     if (!this.active) return null;
     if (this.source === 'midi') {
       this.volume = this._midiNotes && this._midiNotes.size > 0 ? 0.8 : 0;
+      return true;
+    }
+    if (this.source === 'touch') {
+      let any = false;
+      if (this._touchLevels) for (let i = 0; i < this._touchLevels.length; i++) {
+        if (this._touchLevels[i] > 0) { any = true; break; }
+      }
+      this.volume = any ? 0.8 : 0;
       return true;
     }
     const an = this.analyser;

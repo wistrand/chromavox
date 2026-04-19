@@ -510,10 +510,20 @@ export class UI {
   }
 
   hitTestElement(x, y) {
+    // First pass: exact polygon hit.
     for (let i = this.scene.elements.length - 1; i >= 0; i--) {
       const el = this.scene.elements[i];
       const { polygon } = worldEdges(el);
       if (pointInPolygon(polygon, x, y)) return el;
+    }
+    // Second pass: proximity hit — within 15 bench pixels of the
+    // element center. Makes small/thin elements easier to grab,
+    // especially on touch screens.
+    const margin = 15;
+    for (let i = this.scene.elements.length - 1; i >= 0; i--) {
+      const el = this.scene.elements[i];
+      const dx = x - el.x, dy = y - el.y;
+      if (dx * dx + dy * dy < margin * margin) return el;
     }
     return null;
   }

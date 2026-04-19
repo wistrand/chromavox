@@ -20,7 +20,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.fullScale = 1;
     this.sensorCount = 0;
     this.partials = 1;
-    this.carrier = 'sine'; // 'sine' | 'noise'
+    this.carrier = 'sine'; // 'sine' | 'noise' | 'acid'
+    this.acidRes = 0.85;    // resonance [0, 1] → feedback k
+    this.acidEnv = 0.6;     // env amount [0, 1] → octaves of cutoff sweep
     this.port.onmessage = e => {
       const d = e.data;
       if (d.type === 'bins') {
@@ -32,6 +34,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         if (this.sensorCount > 0) this._rebuildPartials();
       } else if (d.type === 'carrier') {
         this.carrier = d.value;
+      } else if (d.type === 'acidRes') {
+        this.acidRes = d.value;
+      } else if (d.type === 'acidEnv') {
+        this.acidEnv = d.value;
       }
     };
   }
@@ -59,8 +65,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         targetGains.push(0);
       }
       // Bandpass IIR state for noise carrier (single 2-pole resonator).
+      // Acid carrier: PolyBLEP saw phase + 3-pole TPT ladder filter state.
       this.voices.push({ freq: f, phases, gains, targetGains,
-        bp1: 0, bp2: 0 });
+        bp1: 0, bp2: 0,
+        sawPhase: 0, lp1: 0, lp2: 0, lp3: 0 });
     }
   }
   process(inputs, outputs) {
@@ -73,14 +81,15 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const bc = this.binCount;
     const sc = this.sensorCount;
     const isNoise = this.carrier === 'noise';
+    const isAcid = this.carrier === 'acid';
     // Compute target gains from latest bins snapshot.
     // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
     // the 0-1 micGain scale, then apply floor + gamma. This matches the
     // mic spectrum's absolute scaling so quiet voices stay quiet.
-    // Noise carrier uses K=1 (single band per voice, no harmonics).
+    // Noise and acid carriers use K=1 (single band per voice).
     if (bins && bins.length >= sc * bc) {
       const fs = this.fullScale;
-      const gainK = isNoise ? 1 : K;
+      const gainK = (isNoise || isAcid) ? 1 : K;
       const partialFS = fs / gainK;
       const voiceScale = 1 / Math.sqrt(sc * gainK);
       for (let s = 0; s < sc; s++) {
@@ -114,9 +123,62 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       for (let k = 0; k < v.gains.length; k++) {
         if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
       }
-      if (!anyActive) { v.bp1 = 0; v.bp2 = 0; continue; }
+      if (!anyActive) { v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; continue; }
 
-      if (isNoise) {
+      if (isAcid) {
+        // 303-style acid carrier: PolyBLEP sawtooth → 3-pole TPT/ZDF
+        // diode ladder filter with tanh feedback → drive.
+        // Sensor energy drives filter cutoff (the squelch).
+        let voiceGain = v.gains[0];
+        const voiceTarget = v.targetGains[0];
+        const baseFreq = v.freq;
+        const dt = baseFreq * invSr; // phase increment per sample
+        const acidRes = this.acidRes;
+        const acidEnv = this.acidEnv;
+        // Feedback coefficient: k=0 → no resonance, k≈4.5 → self-osc.
+        const k = acidRes * 4.5;
+        let phase = v.sawPhase;
+        let s1 = v.lp1, s2 = v.lp2, s3 = v.lp3;
+        for (let i = 0; i < len; i++) {
+          voiceGain += (voiceTarget - voiceGain) * smooth;
+          if (voiceGain < 1e-6) { phase += dt; if (phase >= 1) phase -= 1; continue; }
+          // PolyBLEP sawtooth: naive saw + correction at discontinuity.
+          phase += dt;
+          let saw = 2 * phase - 1; // naive
+          if (phase >= 1) {
+            phase -= 1;
+            saw = 2 * phase - 1;
+          }
+          // PolyBLEP correction at wrap (t in [0, dt])
+          const t1 = phase / dt; // how far past the wrap (0..1 in one sample)
+          if (t1 < 1) { saw -= t1 + t1 - t1 * t1 - 1; }
+          // Correction at 1-sample before wrap
+          const t2 = (1 - phase) / dt;
+          if (t2 < 1) { saw += t2 * t2 - t2 - t2 + 1; }
+          // Filter cutoff from sensor energy: sweep 5 octaves above base.
+          // The 303's squelch comes from the VCF envelope sweeping cutoff
+          // from a low base up to ~4-5 octaves above on accent/attack.
+          const cutoff = Math.min(sampleRate * 0.45,
+            baseFreq * Math.pow(2, 1 + voiceGain * acidEnv * 5));
+          // TPT/ZDF one-pole coefficient
+          const g = Math.tan(Math.PI * cutoff * invSr);
+          const g1 = g / (1 + g);
+          // Input with resonance feedback (tanh for stability).
+          // Scale saw by 1.5 for hotter filter drive — the 303 runs
+          // its VCO into the VCF at near-clipping levels.
+          const u = saw * 1.5 - k * Math.tanh(s3);
+          // 3 cascaded one-poles (18 dB/oct diode ladder)
+          const v1 = (u - s1) * g1; s1 += 2 * v1;
+          const v2 = (s1 - s2) * g1; s2 += 2 * v2;
+          const v3 = (s2 - s3) * g1; s3 += 2 * v3;
+          // Post-filter drive — the signature 303 grit.
+          const driven = Math.tanh(s3 * 2.5);
+          buf[i] += driven * voiceGain * 1.6;
+        }
+        v.sawPhase = phase;
+        v.lp1 = s1; v.lp2 = s2; v.lp3 = s3;
+        v.gains[0] = voiceGain;
+      } else if (isNoise) {
         // Unity-gain bandpass noise carrier (Csound resonz topology).
         // Zeros at DC and Nyquist via (y0 - y2) cancel the all-pole
         // resonator's 1/sin(w) frequency dependence. Gain normalization
@@ -137,7 +199,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           const y0 = noise + c1 * y1 + c2 * y2;
           const bp = (y0 - y2) * norm;
           y2 = y1; y1 = y0;
-          buf[i] += bp * voiceGain;
+          buf[i] += bp * voiceGain * 3;
         }
         v.bp1 = y1; v.bp2 = y2;
         v.gains[0] = voiceGain;
@@ -185,6 +247,16 @@ export class SensorSynth {
   setPartials(n) {
     if (!this.workletNode) return;
     this.workletNode.port.postMessage({ type: 'partials', value: n });
+  }
+
+  setAcidRes(v) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'acidRes', value: v });
+  }
+
+  setAcidEnv(v) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'acidEnv', value: v });
   }
 
   setCarrier(mode) {
