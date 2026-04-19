@@ -965,6 +965,87 @@ window.addEventListener('resize', () => {
   };
 }
 
+// --- Synth waveform debug window ---
+{
+  const wfWin = document.getElementById('synth-waveform-window');
+  const wfToggle = document.getElementById('synth-waveform-toggle');
+  const wfClose = wfWin.querySelector('.fw-close');
+  const wfCanvas = document.getElementById('synth-waveform-canvas');
+  const wfCtx = wfCanvas.getContext('2d');
+  const titlebar = wfWin.querySelector('.fw-titlebar');
+  let wfTimeData = null;
+
+  let positioned = false;
+  function showWf() {
+    if (!positioned) {
+      wfWin.style.top = '410px';
+      wfWin.style.right = '12px';
+      wfWin.style.left = 'auto';
+      positioned = true;
+    }
+    wfWin.hidden = false;
+    wfToggle.checked = true;
+  }
+  function hideWf() { wfWin.hidden = true; wfToggle.checked = false; }
+  wfToggle.addEventListener('change', () => { wfToggle.checked ? showWf() : hideWf(); });
+  wfClose.addEventListener('click', hideWf);
+
+  let dragOff = null;
+  titlebar.addEventListener('pointerdown', e => {
+    if (e.target.closest('.fw-close')) return;
+    e.preventDefault();
+    titlebar.setPointerCapture(e.pointerId);
+    const r = wfWin.getBoundingClientRect();
+    dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+    wfWin.style.right = 'auto';
+  });
+  titlebar.addEventListener('pointermove', e => {
+    if (!dragOff) return;
+    wfWin.style.left = (e.clientX - dragOff.x) + 'px';
+    wfWin.style.top  = (e.clientY - dragOff.y) + 'px';
+  });
+  titlebar.addEventListener('pointerup', () => { dragOff = null; });
+  titlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
+
+  window._updateSynthWaveform = function() {
+    if (wfWin.hidden || !synth.active || !synth.analyser) return;
+    const W = wfCanvas.width, H = wfCanvas.height;
+    wfCtx.fillStyle = '#000';
+    wfCtx.fillRect(0, 0, W, H);
+
+    const an = synth.analyser;
+    if (!wfTimeData || wfTimeData.length !== an.fftSize) {
+      wfTimeData = new Float32Array(an.fftSize);
+    }
+    an.getFloatTimeDomainData(wfTimeData);
+
+    // Draw waveform centered vertically, scaled to fill height.
+    const samples = wfTimeData.length;
+    // Show ~2-4 periods of the lowest active voice for readable shape.
+    // Display 1024 samples (~21ms at 48kHz).
+    const dispLen = Math.min(1024, samples);
+
+    wfCtx.strokeStyle = '#8cf';
+    wfCtx.lineWidth = 1;
+    wfCtx.beginPath();
+    for (let i = 0; i < dispLen; i++) {
+      const x = (i / dispLen) * W;
+      const y = H / 2 - wfTimeData[i] * H * 0.45;
+      if (i === 0) wfCtx.moveTo(x, y);
+      else wfCtx.lineTo(x, y);
+    }
+    wfCtx.stroke();
+
+    // Center line.
+    wfCtx.strokeStyle = '#333';
+    wfCtx.lineWidth = 1;
+    wfCtx.beginPath();
+    wfCtx.moveTo(0, H / 2);
+    wfCtx.lineTo(W, H / 2);
+    wfCtx.stroke();
+  };
+}
+
 function frame() {
   if (mic.active) {
     const s = mic.sample();
@@ -1046,6 +1127,7 @@ function frame() {
   window._updateStats();
   window._updateMicSpectrum();
   window._updateSynthSpectrum();
+  window._updateSynthWaveform();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
