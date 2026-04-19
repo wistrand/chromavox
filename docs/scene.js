@@ -19,7 +19,7 @@ export function createScene() {
   return {
     bench: { ...CANONICAL_BENCH },
     emitter: {
-      count: 12, wlMin: 400, wlMax: 700,
+      count: 24, wlMin: 400, wlMax: 700,
       raysPerSource: 512, spreadDeg: 0, apertureFactor: 0.01,
       disabled: new Set(),
     },

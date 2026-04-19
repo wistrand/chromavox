@@ -25,6 +25,7 @@ export class MicModulator {
     this.keyboardBase = 261.63;
     this.keyboardStep = 1;
     this.smoothing = 0.6;
+    this.midiGain = 1.0;
   }
 
   setSmoothing(v) {
@@ -275,7 +276,7 @@ export class MicModulator {
       const levels = new Float32Array(n);
       for (const [note, vel] of this._midiNotes) {
         const idx = padNoteToEmitter(note);
-        if (idx >= 0 && idx < n) levels[idx] = Math.max(levels[idx], vel);
+        if (idx >= 0 && idx < n) levels[idx] = Math.max(levels[idx], Math.min(1, vel * this.midiGain));
       }
       return levels;
     }

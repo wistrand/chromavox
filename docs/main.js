@@ -31,8 +31,9 @@ const UI_STORAGE_KEY = 'chromavox-ui';
 const UI_CONTROL_IDS = [
   'mic-source', 'mic-device', 'midi-device', 'mic-mode', 'mic-base',
   'chromatic-span', 'mic-smoothing', 'bucket-color', 'synth-independent',
-  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials', 'synth-noise-gain', 'synth-device',
-  'sim-rate', 'distort-toggle', 'sensor-sync',
+  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials', 'synth-device',
+  'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
+  'midi-gain', 'sim-rate', 'distort-toggle',
 ];
 function saveUiState() {
   const state = {};
@@ -54,11 +55,15 @@ function restoreUiState() {
       if (el.type === 'checkbox') el.checked = val;
       else el.value = val;
     }
-    // Fire change events so dependent state syncs (span visibility,
-    // independent scale, distort, sim-rate labels, etc.).
+    // Fire input + change events so dependent state syncs (span
+    // visibility, independent scale, distort, sim-rate labels, etc.).
+    // Range inputs need 'input' to trigger scene updates; 'change'
+    // fires endEdit / label rebuilds.
     for (const id of UI_CONTROL_IDS) {
       const el = document.getElementById(id);
-      if (el) el.dispatchEvent(new Event('change'));
+      if (!el) continue;
+      if (el.type === 'range') el.dispatchEvent(new Event('input'));
+      el.dispatchEvent(new Event('change'));
     }
   } catch {}
 }
@@ -497,9 +502,16 @@ function syncMicDeviceVisibility() {
   const src = document.getElementById('mic-source').value;
   document.getElementById('mic-device-row').style.display = src === 'mic' ? '' : 'none';
   document.getElementById('midi-device-row').style.display = src === 'midi' ? '' : 'none';
+  document.getElementById('midi-gain-row').style.display = src === 'midi' ? '' : 'none';
   document.getElementById('midi-debug-row').style.display = src === 'midi' ? '' : 'none';
 }
 syncMicDeviceVisibility();
+
+document.getElementById('midi-gain').addEventListener('input', e => {
+  const v = parseInt(e.target.value, 10) / 100;
+  document.getElementById('midi-gain-val').textContent = v.toFixed(2);
+  mic.midiGain = v;
+});
 
 // MIDI device picker.
 async function populateMidiDevices() {
@@ -610,26 +622,15 @@ partialsSlider.addEventListener('input', () => {
 
 const carrierSel = document.getElementById('synth-carrier');
 const partialsRow = partialsSlider.closest('.row');
-const noiseGainRow = document.getElementById('noise-gain-row');
-const noiseGainSlider = document.getElementById('synth-noise-gain');
-const noiseGainVal = document.getElementById('synth-noise-gain-val');
 function syncCarrierVisibility() {
-  const isNoise = carrierSel.value === 'noise';
-  partialsRow.style.display = isNoise ? 'none' : '';
-  noiseGainRow.style.display = isNoise ? '' : 'none';
+  partialsRow.style.display = carrierSel.value === 'noise' ? 'none' : '';
 }
-noiseGainSlider.addEventListener('input', () => {
-  const v = parseInt(noiseGainSlider.value, 10) / 100;
-  noiseGainVal.textContent = v.toFixed(2);
-  synth.setNoiseGain(v);
-});
 carrierSel.addEventListener('change', () => { synth.setCarrier(carrierSel.value); syncCarrierVisibility(); });
 syncCarrierVisibility();
 
 const _applyInitialPartials = () => {
   synth.setPartials(parseInt(partialsSlider.value, 10) || 1);
   synth.setCarrier(carrierSel.value);
-  synth.setNoiseGain(parseInt(noiseGainSlider.value, 10) / 100);
   syncCarrierVisibility();
 };
 

@@ -21,7 +21,6 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.sensorCount = 0;
     this.partials = 1;
     this.carrier = 'sine'; // 'sine' | 'noise'
-    this.noiseGain = 0.05;
     this.port.onmessage = e => {
       const d = e.data;
       if (d.type === 'bins') {
@@ -33,8 +32,6 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         if (this.sensorCount > 0) this._rebuildPartials();
       } else if (d.type === 'carrier') {
         this.carrier = d.value;
-      } else if (d.type === 'noiseGain') {
-        this.noiseGain = d.value;
       }
     };
   }
@@ -120,16 +117,17 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       if (!anyActive) { v.bp1 = 0; v.bp2 = 0; continue; }
 
       if (isNoise) {
-        // Bandpass-filtered white noise carrier. Single 2-pole resonator,
-        // constant-Q (Q=25). ampScale = C * sqrt(1-r) cancels both the
-        // peak gain (~1/(1-r)) and bandwidth scaling (~(1-r)), giving
-        // flat output power across frequency (Smith/CCRMA, Csound reson).
+        // Unity-gain bandpass noise carrier (Csound resonz topology).
+        // Zeros at DC and Nyquist via (y0 - y2) cancel the all-pole
+        // resonator's 1/sin(w) frequency dependence. Gain normalization
+        // (1-r²)/2 makes peak gain exactly 1.0 at all frequencies.
+        // No ampScale needed — voiceGain from sensor bins is the sole
+        // amplitude control, same path as sine carrier.
         const w = twoPi * v.freq * invSr;
         const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * v.freq / (25 * sampleRate)));
         const c1 = 2 * r * Math.cos(w);
         const c2 = -(r * r);
-        const ampScale = this.noiseGain * Math.sqrt(1 - r);
-        // Use first partial's gain for overall amplitude.
+        const norm = (1 - r * r) / 2;
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
         let y1 = v.bp1, y2 = v.bp2;
@@ -137,8 +135,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           voiceGain += (voiceTarget - voiceGain) * smooth;
           const noise = Math.random() * 2 - 1;
           const y0 = noise + c1 * y1 + c2 * y2;
+          const bp = (y0 - y2) * norm;
           y2 = y1; y1 = y0;
-          buf[i] += y0 * voiceGain * ampScale;
+          buf[i] += bp * voiceGain;
         }
         v.bp1 = y1; v.bp2 = y2;
         v.gains[0] = voiceGain;
@@ -181,18 +180,11 @@ export class SensorSynth {
     this.sinkId = '';
     this.stepSemi = 1;
     this.raysPer = 512;
-    this.noiseGain = 0.05;
   }
 
   setPartials(n) {
     if (!this.workletNode) return;
     this.workletNode.port.postMessage({ type: 'partials', value: n });
-  }
-
-  setNoiseGain(v) {
-    this.noiseGain = v;
-    if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'noiseGain', value: v });
   }
 
   setCarrier(mode) {

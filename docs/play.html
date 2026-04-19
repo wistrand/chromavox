@@ -36,7 +36,8 @@
         <div class="row"><label>Source <select id="mic-source"><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keyboard</option><option value="midi">MIDI in</option></select></label></div>
         <div class="row" id="mic-device-row"><label>Device <select id="mic-device"><option value="">default</option></select></label></div>
         <div class="row" id="midi-device-row" style="display:none"><label>MIDI device <select id="midi-device"><option value="">first available</option></select></label></div>
-        <div class="row" id="midi-debug-row" style="display:none"><label>MIDI log<br><textarea id="midi-debug" rows="4" readonly style="width:100%;font:11px monospace;background:#0b0d10;color:#8a93a0;border:1px solid var(--border);resize:vertical;margin-top:4px"></textarea></label></div>
+        <div class="row" id="midi-gain-row" style="display:none"><label>MIDI gain <input id="midi-gain" type="range" min="10" max="300" value="100"><span id="midi-gain-val">1.00</span></label></div>
+        <div class="row" id="midi-debug-row" style="display:none"><label>MIDI log<br><textarea id="midi-debug" rows="4" readonly style="width:100%;font:11px monospace;background:#0b0d10;color:#8a93a0;border:1px solid var(--border);resize:vertical;margin-top:4px"></textarea></div>
         <div class="row"><label>Mode <select id="mic-mode">
           <option value="log">log</option>
           <option value="chromatic" selected>chromatic</option>
@@ -74,7 +75,6 @@
         <div class="row"><label>Device <select id="synth-device"><option value="">default</option></select></label></div>
         <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="100" value="25"><span id="synth-vol-val">25</span></label></div>
         <div class="row"><label>Carrier <select id="synth-carrier"><option value="sine" selected>sine</option><option value="noise">noise</option></select></label></div>
-        <div class="row" id="noise-gain-row" style="display:none"><label>Noise gain <input id="synth-noise-gain" type="range" min="1" max="100" value="5"><span id="synth-noise-gain-val">0.05</span></label></div>
         <div class="row"><label>Partials <input id="synth-partials" type="range" min="1" max="8" value="6" step="1"><span id="synth-partials-val">6</span></label></div>
         <div class="row"><label><input id="synth-independent" type="checkbox"> Independent scale</label></div>
         <div class="row" id="synth-mode-row"><label>Mode <select id="synth-mode">
@@ -145,7 +145,7 @@
 
   <aside id="left-panel" class="panel">
     <h2>Emitters</h2>
-    <div class="row"><label>Sources <input id="emitter-count" type="range" min="1" max="64" value="12"><span id="emitter-count-val">12</span></label></div>
+    <div class="row"><label>Sources <input id="emitter-count" type="range" min="1" max="64" value="24"><span id="emitter-count-val">24</span></label></div>
     <div class="row"><label>λ min (nm) <input id="wl-min" type="range" min="380" max="780" value="400"><span id="wl-min-val">400</span></label></div>
     <div class="row"><label>λ max (nm) <input id="wl-max" type="range" min="380" max="780" value="700"><span id="wl-max-val">700</span></label></div>
     <div class="row"><label>Rays/source <input id="rays-per" type="range" min="1" max="2000" value="512"><span id="rays-per-val">512</span></label></div>
@@ -155,7 +155,7 @@
     <h2>Sensors</h2>
     <div class="row"><label>Count <input id="sensor-count" type="range" min="1" max="128" value="24"><span id="sensor-count-val">24</span></label></div>
     <div class="row"><label><input id="sensor-sync" type="checkbox" checked> Sync to source count</label></div>
-    <div class="row" id="sensor-factor-row"><label>Factor <input id="sensor-factor" type="range" min="1" max="8" value="2" step="1"><span id="sensor-factor-val">2</span></label></div>
+    <div class="row" id="sensor-factor-row"><label>Factor <input id="sensor-factor" type="range" min="1" max="8" value="1" step="1"><span id="sensor-factor-val">1</span></label></div>
 
     <h2>Selected</h2>
     <div id="prop-panel"><em>No selection</em></div>
