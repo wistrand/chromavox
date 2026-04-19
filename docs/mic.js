@@ -37,6 +37,7 @@ export class MicModulator {
     if (this.active) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = new AC();
+    if (ctx.state === 'suspended') await ctx.resume();
     const an = ctx.createAnalyser();
     an.fftSize = 8192;
     an.smoothingTimeConstant = this.smoothing;

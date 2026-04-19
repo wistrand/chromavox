@@ -295,7 +295,16 @@ export class SensorSynth {
   async enable(sensorCount, mode = 'log') {
     if (this.active) return;
     const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) throw new Error('AudioContext not supported');
     this.ctx = new AC();
+    // Mobile browsers create AudioContext in suspended state.
+    // Must resume within a user gesture.
+    if (this.ctx.state === 'suspended') await this.ctx.resume();
+    if (!this.ctx.audioWorklet) {
+      this.ctx.close();
+      this.ctx = null;
+      throw new Error('AudioWorklet not supported (requires HTTPS)');
+    }
     this.master = this.ctx.createGain();
     this.master.gain.value = this.volume ?? 0.25;
     this.master.connect(this.ctx.destination);

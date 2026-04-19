@@ -233,12 +233,18 @@ distortToggle.addEventListener('change', () => {
 const synthBtn = document.getElementById('synth-toggle');
 synthBtn.addEventListener('click', async () => {
   if (!synth.active) {
-    synth.setBase(synthBase());
-    synth.setStep(synthStep());
-    await synth.enable(scene.sensorCount, synthMode());
-    _applyInitialPartials();
-    synthBtn.textContent = 'Audio out: on';
-    synthBtn.classList.add('active');
+    try {
+      synth.setBase(synthBase());
+      synth.setStep(synthStep());
+      await synth.enable(scene.sensorCount, synthMode());
+      _applyInitialPartials();
+      synthBtn.textContent = 'Audio out: on';
+      synthBtn.classList.add('active');
+    } catch (err) {
+      console.error('Audio out failed:', err);
+      synthBtn.textContent = `Audio out: ${err.message || err}`;
+      setTimeout(() => { synthBtn.textContent = 'Audio out: off'; }, 5000);
+    }
   } else {
     synth.disable();
     synthBtn.textContent = 'Audio out: off';
@@ -816,7 +822,16 @@ window.addEventListener('resize', () => {
   titlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
 
   // Update stats text each frame (only when visible).
+  let _fpsFrames = 0, _fpsTime = performance.now(), _fpsVal = 0;
   window._updateStats = function() {
+    // FPS: update every 500ms
+    _fpsFrames++;
+    const now = performance.now();
+    if (now - _fpsTime >= 500) {
+      _fpsVal = _fpsFrames / ((now - _fpsTime) / 1000);
+      _fpsFrames = 0;
+      _fpsTime = now;
+    }
     if (statsWin.hidden) return;
     const segs = tracer.segmentCount;
     const parts = tracer.activeParticleCount();
@@ -827,6 +842,7 @@ window.addEventListener('resize', () => {
     const rays = scene.emitter.raysPerSource;
     const spinning = scene.elements.filter(e => e.spin).length;
     statsContent.textContent =
+      `FPS:        ${_fpsVal.toFixed(0)}\n` +
       `Elements:   ${els}\n` +
       `Sources:    ${sources}\n` +
       `Sensors:    ${sensors}\n` +
