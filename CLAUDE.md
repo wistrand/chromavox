@@ -39,6 +39,7 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [MIDI input](agent_docs/architecture-midi.md)
 - [Ableton Push](agent_docs/architecture-push.md)
 - [GPU tracer](agent_docs/architecture-gpu-tracer.md)
+- [Ping-pong tracer plan](agent_docs/plan-pingpong-tracer.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
 
 
@@ -297,21 +298,23 @@ Detailed notes are split into topic files under `agent_docs/`:
   `tintStrength` (delayK * 80, capped at 0.5) in the renderer,
   making them look foggy. Zero-delay elements unchanged. Per-element
   `el.color` override still takes precedence.
-- GPU tracer (`docs/gpu-tracer.js`): WebGL2 transform feedback
-  alternative to the CPU tracer. Default when no delay elements are
-  present; auto-switches to CPU tracer when delay elements are added
-  (`pickTracer()` in the frame loop). Each (ray, bounce) pair is one
-  vertex; the vertex shader implements the full castRay physics
-  (Snell, TIR, Beer-Lambert, Sellmeier). Transform feedback buffer
-  is bound directly by the renderer (zero-copy). Sensor accumulation
-  via additive-blend R32F FBO + `readPixels` (~6 KB). Textures
-  allocated once at max size via `texStorage2D`, updated with
-  `texSubImage2D`. Limitations: no delay/particle simulation, max 4
-  nested dielectrics, no initial containment check. `?cpu` URL param
-  forces CPU tracer. Left panel shows "Tracer: GPU" or "Tracer: CPU".
-  Test page at `docs/gpu-test.html` compares GPU vs CPU output with
-  visual segment overlays. Snapshot infrastructure: `npm run snapshot`
-  generates references, `npm run verify` checks them.
+- GPU tracer (`docs/gpu-tracer.js`): WebGL2 transform feedback with
+  ping-pong bounce architecture. Default tracer; auto-switches to CPU
+  when delay elements are added (`pickTracer()`). One TF dispatch per
+  bounce, reading previous bounce's ray state from a ping-pong buffer
+  pair. `effectiveBounces = min(32, edges+1)` bounds dispatch count
+  analytically — empty scene: 1 dispatch, single prism: 4. Segment
+  buffer populated via `copyBufferSubData` per bounce; renderer binds
+  directly (zero-copy, stride 96, offset `SEG_P_OFF`). Inside-element
+  stack: depth-3 packed into one fp32 (`stkLen*262144 + stk[0]*4096 +
+  stk[1]*64 + stk[2]`). Sensor accumulation via R32F FBO + `readPixels`
+  (~6 KB); requires `EXT_color_buffer_float` + `EXT_float_blend` —
+  if either is absent the GPU tracer disables itself (`_ready=false`)
+  and `main.js` falls back to CPU tracer (console.warn names the
+  missing extension). Pre-built VAOs and TF objects (properly deleted
+  on buffer resize). 33-870x faster than CPU. `trace()` postcondition:
+  FBO unbound, blend/viewport/program left dirty. `?cpu` forces CPU.
+  Test page: `docs/gpu-test.html`.
 - Responsive layout: three tiers — full 220px panels above 960px,
   slim 160px panels from 601–960px (foldables/small tablets), drawer
   mode below 600px (phones). `#stage` has `touch-action: none`.

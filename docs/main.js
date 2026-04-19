@@ -24,8 +24,8 @@ try {
 }
 // Sync bench size to canvas aspect so content fills the viewport.
 Object.assign(scene.bench, renderer.benchSize());
-const forceGPU = new URLSearchParams(location.search).has('gpu');
-const gpuTracer = forceGPU ? new GPUTracer(renderer.gl) : null;
+const forceCPU = new URLSearchParams(location.search).has('cpu');
+const gpuTracer = forceCPU ? null : new GPUTracer(renderer.gl);
 const cpuTracer = new Tracer();
 let tracer = (gpuTracer && gpuTracer._ready) ? gpuTracer : cpuTracer;
 

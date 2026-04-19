@@ -396,13 +396,14 @@ export class Renderer {
     gl.uniform2f(this.ray.uBench, scene.bench.w, scene.bench.h);
     gl.uniform1f(this.ray.uWidth, this.rayWidth);
     // Segment buffer: use external GL buffer (GPU tracer) or upload
-    // from CPU (CPU tracer). External buffer has 16-float stride
-    // (12 segment + 4 meta); CPU buffer has 12-float stride.
-    let segBuf, segStride, segCount;
+    // from CPU (CPU tracer). GPU buffer has a stride and byte offset
+    // (segments are interleaved with ray state); CPU buffer is packed.
+    let segBuf, segStride, segCount, segOffset;
     if (tracer.glSegmentBuffer) {
       segBuf = tracer.glSegmentBuffer;
       segStride = tracer.glSegmentStride;
       segCount = tracer.glSegmentCount;
+      segOffset = tracer.glSegmentOffset || 0;
     } else {
       segBuf = this.segBuf;
       gl.bindBuffer(gl.ARRAY_BUFFER, segBuf);
@@ -410,16 +411,17 @@ export class Renderer {
         tracer.segmentData.subarray(0, tracer.segmentCount * 12), gl.DYNAMIC_DRAW);
       segStride = 12 * 4;
       segCount = tracer.segmentCount;
+      segOffset = 0;
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, segBuf);
     gl.enableVertexAttribArray(this.ray.aSeg);
-    gl.vertexAttribPointer(this.ray.aSeg, 4, gl.FLOAT, false, segStride, 0);
+    gl.vertexAttribPointer(this.ray.aSeg, 4, gl.FLOAT, false, segStride, segOffset);
     gl.vertexAttribDivisor(this.ray.aSeg, 1);
     gl.enableVertexAttribArray(this.ray.aCol1);
-    gl.vertexAttribPointer(this.ray.aCol1, 4, gl.FLOAT, false, segStride, 4 * 4);
+    gl.vertexAttribPointer(this.ray.aCol1, 4, gl.FLOAT, false, segStride, segOffset + 4 * 4);
     gl.vertexAttribDivisor(this.ray.aCol1, 1);
     gl.enableVertexAttribArray(this.ray.aCol2);
-    gl.vertexAttribPointer(this.ray.aCol2, 4, gl.FLOAT, false, segStride, 8 * 4);
+    gl.vertexAttribPointer(this.ray.aCol2, 4, gl.FLOAT, false, segStride, segOffset + 8 * 4);
     gl.vertexAttribDivisor(this.ray.aCol2, 1);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.rayCornerBuf);
     gl.enableVertexAttribArray(this.ray.aCorner);
