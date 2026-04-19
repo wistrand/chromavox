@@ -2,6 +2,7 @@
 
 import { createScene, serializeScene, deserializeScene } from './scene.js';
 import { Tracer } from './raytracer.js';
+import { GPUTracer } from './gpu-tracer.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
 import { wavelengthToRGB } from './spectrum.js';
@@ -23,7 +24,25 @@ try {
 }
 // Sync bench size to canvas aspect so content fills the viewport.
 Object.assign(scene.bench, renderer.benchSize());
-const tracer = new Tracer();
+const forceCPU = new URLSearchParams(location.search).has('cpu');
+const gpuTracer = forceCPU ? null : new GPUTracer(renderer.gl);
+const cpuTracer = new Tracer();
+let tracer = (gpuTracer && gpuTracer._ready) ? gpuTracer : cpuTracer;
+
+// Auto-switch: use CPU tracer when delay elements are present (GPU
+// tracer doesn't support particle simulation / secondary rays).
+const _tracerLabel = document.getElementById('tracer-indicator');
+function pickTracer() {
+  const hasDelay = scene.elements.some(el =>
+    (el.delayK ?? 0) > 0.0003 || el.material === 'slowGlass');
+  const want = (!gpuTracer || !gpuTracer._ready || hasDelay) ? cpuTracer : gpuTracer;
+  if (want !== tracer) {
+    tracer = want;
+    tracer.resetPersistence();
+    dirty = true;
+  }
+  _tracerLabel.textContent = `Tracer: ${tracer === gpuTracer ? 'GPU' : 'CPU'}`;
+}
 
 let dirty = true;
 
@@ -720,7 +739,7 @@ window.addEventListener('resize', () => {
     if (statsWin.hidden) return;
     const segs = tracer.segmentCount;
     const parts = tracer.activeParticleCount();
-    const pools = tracer._pools.size;
+    const pools = tracer._pools ? tracer._pools.size : 0;
     const els = scene.elements.length;
     const sensors = scene.sensorCount;
     const sources = scene.emitter.count;
@@ -1093,6 +1112,9 @@ function frame() {
   for (const el of scene.elements) {
     if (el.spin) { el.rot += el.spin * dt; dirty = true; }
   }
+
+  // Auto-switch GPU↔CPU tracer based on delay elements.
+  pickTracer();
 
   // Phase 3 simulation: particles inside delay elements advance each
   // frame, so we must re-trace whenever the scene is dirty *or* any

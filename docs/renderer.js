@@ -395,10 +395,23 @@ export class Renderer {
     gl.useProgram(this.rayProgram);
     gl.uniform2f(this.ray.uBench, scene.bench.w, scene.bench.h);
     gl.uniform1f(this.ray.uWidth, this.rayWidth);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.segBuf);
-    gl.bufferData(gl.ARRAY_BUFFER,
-      tracer.segmentData.subarray(0, tracer.segmentCount * 12), gl.DYNAMIC_DRAW);
-    const segStride = 12 * 4;
+    // Segment buffer: use external GL buffer (GPU tracer) or upload
+    // from CPU (CPU tracer). External buffer has 16-float stride
+    // (12 segment + 4 meta); CPU buffer has 12-float stride.
+    let segBuf, segStride, segCount;
+    if (tracer.glSegmentBuffer) {
+      segBuf = tracer.glSegmentBuffer;
+      segStride = tracer.glSegmentStride;
+      segCount = tracer.glSegmentCount;
+    } else {
+      segBuf = this.segBuf;
+      gl.bindBuffer(gl.ARRAY_BUFFER, segBuf);
+      gl.bufferData(gl.ARRAY_BUFFER,
+        tracer.segmentData.subarray(0, tracer.segmentCount * 12), gl.DYNAMIC_DRAW);
+      segStride = 12 * 4;
+      segCount = tracer.segmentCount;
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, segBuf);
     gl.enableVertexAttribArray(this.ray.aSeg);
     gl.vertexAttribPointer(this.ray.aSeg, 4, gl.FLOAT, false, segStride, 0);
     gl.vertexAttribDivisor(this.ray.aSeg, 1);
@@ -412,8 +425,8 @@ export class Renderer {
     gl.enableVertexAttribArray(this.ray.aCorner);
     gl.vertexAttribPointer(this.ray.aCorner, 2, gl.FLOAT, false, 0, 0);
     gl.vertexAttribDivisor(this.ray.aCorner, 0);
-    if (tracer.segmentCount > 0) {
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, tracer.segmentCount);
+    if (segCount > 0) {
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, segCount);
     }
     gl.vertexAttribDivisor(this.ray.aSeg, 0);
     gl.vertexAttribDivisor(this.ray.aCol1, 0);

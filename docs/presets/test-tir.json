@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "bench": { "w": 556, "h": 900 },
+  "emitter": { "count": 3, "wlMin": 400, "wlMax": 700, "raysPerSource": 32, "spreadDeg": 8, "apertureFactor": 0.3, "disabled": [] },
+  "sensorCount": 16,
+  "elements": [
+    { "kind": "prism", "x": 250, "y": 450, "size": 180, "material": "diamond", "rot": 0.3 }
+  ]
+}

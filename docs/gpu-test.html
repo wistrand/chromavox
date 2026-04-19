@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GPU Tracer Test</title>
+<style>
+  body { background: #0b0d10; color: #d8dde3; font: 13px/1.6 monospace; margin: 20px; }
+  .pass { color: #4c4; }
+  .fail { color: #e44; }
+  .warn { color: #ea4; }
+  #log { white-space: pre-wrap; margin-bottom: 20px; }
+  .test-row { display: flex; align-items: flex-start; gap: 12px; margin: 8px 0; padding: 8px; border: 1px solid #242a33; border-radius: 4px; cursor: pointer; }
+  .test-row:hover { border-color: #4aa3ff; }
+  .test-row.expanded { flex-wrap: wrap; }
+  .test-row canvas { background: #000; border-radius: 3px; flex-shrink: 0; }
+  .test-row .label { min-width: 160px; font-size: 12px; }
+  .test-row .stats { font-size: 11px; color: #8a93a0; flex: 1; }
+  .test-row .thumb { width: 120px; height: 80px; }
+  .test-row .full { display: none; width: 278px; height: 450px; }
+  .test-row.expanded .full { display: block; }
+  .test-row.expanded .thumb { display: none; }
+  .legend { display: flex; gap: 20px; margin: 10px 0; font-size: 12px; color: #8a93a0; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend .swatch { width: 12px; height: 12px; border-radius: 2px; }
+  canvas#gl { display: none; }
+</style>
+</head>
+<body>
+<h2>GPU Tracer vs CPU Tracer</h2>
+<div class="legend">
+  <span><span class="swatch" style="background:#4aa3ff"></span> CPU tracer</span>
+  <span><span class="swatch" style="background:#ff6644"></span> GPU tracer</span>
+  <span>Click a row to expand</span>
+</div>
+<div id="log">Loading...</div>
+<div id="results"></div>
+<canvas id="gl" width="556" height="900"></canvas>
+<script type="module">
+import { createScene, makeElement, deserializeScene } from './scene.js';
+import { Tracer } from './raytracer.js';
+import { GPUTracer } from './gpu-tracer.js';
+
+const logEl = document.getElementById('log');
+const resultsEl = document.getElementById('results');
+
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl2', { antialias: false });
+if (!gl) { logEl.innerHTML = '<span class="fail">WebGL2 not available</span>'; throw new Error(); }
+gl.getExtension('EXT_color_buffer_float');
+
+const BENCH_W = 556, BENCH_H = 900;
+const POS_TOL = 0.5, COLOR_TOL = 0.05, INTENSITY_TOL = 0.05, SENSOR_TOL = 0.1;
+
+// --- Draw segments onto a 2D canvas ---
+function drawSegments(tracer, cvs, color) {
+  const ctx = cvs.getContext('2d');
+  const sx = cvs.width / BENCH_W;
+  const sy = cvs.height / BENCH_H;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cvs.width, cvs.height);
+  for (let i = 0; i < tracer.segmentCount; i++) {
+    const off = i * 12;
+    const I1 = tracer.segmentData[off + 7];
+    const I2 = tracer.segmentData[off + 11];
+    if (I1 < 1e-6 && I2 < 1e-6) continue;
+    const r = tracer.segmentData[off + 4] / (I1 || 1);
+    const g = tracer.segmentData[off + 5] / (I1 || 1);
+    const b = tracer.segmentData[off + 6] / (I1 || 1);
+    const alpha = Math.min(1, Math.max(0.15, (I1 + I2) * 2));
+    if (color) {
+      ctx.strokeStyle = color.replace('A', alpha.toFixed(2));
+    } else {
+      ctx.strokeStyle = `rgba(${(r*255)|0},${(g*255)|0},${(b*255)|0},${alpha.toFixed(2)})`;
+    }
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(tracer.segmentData[off] * sx, tracer.segmentData[off+1] * sy);
+    ctx.lineTo(tracer.segmentData[off+2] * sx, tracer.segmentData[off+3] * sy);
+    ctx.stroke();
+  }
+}
+
+// --- Draw both overlaid for diff view ---
+function drawOverlay(cpuTracer, gpuTracer, cvs) {
+  const ctx = cvs.getContext('2d');
+  const sx = cvs.width / BENCH_W;
+  const sy = cvs.height / BENCH_H;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cvs.width, cvs.height);
+  // CPU in blue
+  ctx.globalAlpha = 0.7;
+  for (let i = 0; i < cpuTracer.segmentCount; i++) {
+    const off = i * 12;
+    if (cpuTracer.segmentData[off+7] < 1e-6 && cpuTracer.segmentData[off+11] < 1e-6) continue;
+    ctx.strokeStyle = '#4aa3ff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cpuTracer.segmentData[off]*sx, cpuTracer.segmentData[off+1]*sy);
+    ctx.lineTo(cpuTracer.segmentData[off+2]*sx, cpuTracer.segmentData[off+3]*sy);
+    ctx.stroke();
+  }
+  // GPU in red-orange
+  for (let i = 0; i < gpuTracer.segmentCount; i++) {
+    const off = i * 12;
+    if (gpuTracer.segmentData[off+7] < 1e-6 && gpuTracer.segmentData[off+11] < 1e-6) continue;
+    ctx.strokeStyle = '#ff6644';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(gpuTracer.segmentData[off]*sx, gpuTracer.segmentData[off+1]*sy);
+    ctx.lineTo(gpuTracer.segmentData[off+2]*sx, gpuTracer.segmentData[off+3]*sy);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// --- Test scenes ---
+function emptyScene() {
+  const s = createScene(); s.emitter.count = 8; s.emitter.raysPerSource = 16;
+  s.sensorCount = 8; s.runtime = { micLevels: null, wlPerSource: null }; return s;
+}
+function prismScene() {
+  const s = createScene(); s.emitter.count = 4; s.emitter.raysPerSource = 16;
+  s.sensorCount = 8; s.runtime = { micLevels: null, wlPerSource: null };
+  const el = makeElement('prism', 200, 450); el.material = 'crown'; s.elements.push(el); return s;
+}
+function mirrorScene() {
+  const s = createScene(); s.emitter.count = 4; s.emitter.raysPerSource = 16;
+  s.sensorCount = 8; s.runtime = { micLevels: null, wlPerSource: null };
+  const el = makeElement('mirror', 300, 450); el.rot = Math.PI/4; s.elements.push(el); return s;
+}
+function blockScene() {
+  const s = createScene(); s.emitter.count = 4; s.emitter.raysPerSource = 16;
+  s.sensorCount = 8; s.runtime = { micLevels: null, wlPerSource: null };
+  const el = makeElement('block', 250, 450); el.material = 'crown'; el.w = 100; el.h = 400;
+  s.elements.push(el); return s;
+}
+function micLevelScene() {
+  const s = createScene(); s.emitter.count = 8; s.emitter.raysPerSource = 16;
+  s.sensorCount = 8; const levels = new Float32Array(8);
+  levels[2] = 0.9; levels[5] = 0.5;
+  s.runtime = { micLevels: levels, wlPerSource: null }; return s;
+}
+async function loadPreset(name) {
+  const resp = await fetch(`presets/${name}.json`);
+  const s = deserializeScene(await resp.text());
+  s.emitter.raysPerSource = Math.min(s.emitter.raysPerSource, 32);
+  s.runtime = { micLevels: null, wlPerSource: null }; return s;
+}
+
+// --- Comparison (returns result object) ---
+function compare(cpuTracer, gpuTracer) {
+  let cpuSegs = 0;
+  for (let i = 0; i < cpuTracer.segmentCount; i++) {
+    const off = i * 12;
+    if (cpuTracer.segmentData[off+7] > 1e-6 || cpuTracer.segmentData[off+11] > 1e-6) cpuSegs++;
+  }
+  const gpuSegs = gpuTracer.segmentCount;
+  const cpuByStart = new Map();
+  for (let i = 0; i < cpuTracer.segmentCount; i++) {
+    const off = i * 12;
+    if (cpuTracer.segmentData[off+7] < 1e-6 && cpuTracer.segmentData[off+11] < 1e-6) continue;
+    const key = Math.round(cpuTracer.segmentData[off]*10) + ',' + Math.round(cpuTracer.segmentData[off+1]*10);
+    if (!cpuByStart.has(key)) cpuByStart.set(key, []);
+    cpuByStart.get(key).push(i);
+  }
+  let matched = 0, unmatched = 0, maxPosErr = 0, maxColorErr = 0, maxIntErr = 0;
+  for (let gi = 0; gi < gpuSegs; gi++) {
+    const gOff = gi * 12;
+    const gp1x = gpuTracer.segmentData[gOff], gp1y = gpuTracer.segmentData[gOff+1];
+    let bestDist = Infinity, bestIdx = -1;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      const nk = (Math.round(gp1x*10)+dx)+','+(Math.round(gp1y*10)+dy);
+      for (const ci of (cpuByStart.get(nk)||[])) {
+        const cOff = ci*12;
+        const ddx = cpuTracer.segmentData[cOff]-gp1x, ddy = cpuTracer.segmentData[cOff+1]-gp1y;
+        const d = ddx*ddx+ddy*ddy;
+        if (d < bestDist) { bestDist = d; bestIdx = ci; }
+      }
+    }
+    if (bestIdx === -1 || bestDist > POS_TOL*POS_TOL*4) { unmatched++; continue; }
+    matched++;
+    const cOff = bestIdx * 12;
+    for (let f = 0; f < 12; f++) {
+      const err = Math.abs(gpuTracer.segmentData[gOff+f] - cpuTracer.segmentData[cOff+f]);
+      if (f < 4) { if (err > maxPosErr) maxPosErr = err; }
+      else if (f===7||f===11) { if (err > maxIntErr) maxIntErr = err; }
+      else { if (err > maxColorErr) maxColorErr = err; }
+    }
+  }
+  const sc = cpuTracer.sensorCount, bc = cpuTracer.binCount;
+  let cpuTotal = 0, gpuTotal = 0;
+  for (let i = 0; i < sc*bc; i++) { cpuTotal += cpuTracer.sensorBins[i]; gpuTotal += (gpuTracer.sensorBins?gpuTracer.sensorBins[i]:0); }
+  const segOk = Math.abs(cpuSegs-gpuSegs) < Math.max(1, cpuSegs*0.1);
+  const matchOk = unmatched < Math.max(1, gpuSegs*0.15);
+  const ok = segOk && matchOk;
+  return { ok, cpuSegs, gpuSegs, matched, unmatched, maxPosErr, maxColorErr, maxIntErr, cpuTotal, gpuTotal };
+}
+
+// --- Build a test row with canvases ---
+function addTestRow(name, cpuTracer, gpuTracer, result) {
+  const row = document.createElement('div');
+  row.className = 'test-row';
+
+  // Thumbnails (small)
+  const cpuThumb = document.createElement('canvas');
+  cpuThumb.className = 'thumb'; cpuThumb.width = 120; cpuThumb.height = 80;
+  const gpuThumb = document.createElement('canvas');
+  gpuThumb.className = 'thumb'; gpuThumb.width = 120; gpuThumb.height = 80;
+  const diffThumb = document.createElement('canvas');
+  diffThumb.className = 'thumb'; diffThumb.width = 120; diffThumb.height = 80;
+
+  // Full size (expanded)
+  const cpuFull = document.createElement('canvas');
+  cpuFull.className = 'full'; cpuFull.width = 278; cpuFull.height = 450;
+  const gpuFull = document.createElement('canvas');
+  gpuFull.className = 'full'; gpuFull.width = 278; gpuFull.height = 450;
+  const diffFull = document.createElement('canvas');
+  diffFull.className = 'full'; diffFull.width = 278; diffFull.height = 450;
+
+  // Draw
+  drawSegments(cpuTracer, cpuThumb); drawSegments(cpuTracer, cpuFull);
+  drawSegments(gpuTracer, gpuThumb); drawSegments(gpuTracer, gpuFull);
+  drawOverlay(cpuTracer, gpuTracer, diffThumb); drawOverlay(cpuTracer, gpuTracer, diffFull);
+
+  // Label
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.innerHTML = `<span class="${result.ok ? 'pass' : 'fail'}">${result.ok ? 'PASS' : 'FAIL'}</span> ${name}`;
+
+  // Stats
+  const r = result;
+  const stats = document.createElement('div');
+  stats.className = 'stats';
+  stats.textContent = `CPU=${r.cpuSegs} GPU=${r.gpuSegs} match=${r.matched} miss=${r.unmatched} ` +
+    `pos=${r.maxPosErr.toFixed(1)} color=${r.maxColorErr.toFixed(3)} int=${r.maxIntErr.toFixed(3)} ` +
+    `sensor=${r.cpuTotal>0?(r.gpuTotal/r.cpuTotal*100).toFixed(0):100}%`;
+
+  // Headers
+  const makeLabel = (text) => { const d = document.createElement('div'); d.style.cssText = 'font-size:10px;color:#8a93a0;text-align:center;'; d.textContent = text; return d; };
+
+  const cpuCol = document.createElement('div');
+  cpuCol.append(makeLabel('CPU'), cpuThumb, cpuFull);
+  const gpuCol = document.createElement('div');
+  gpuCol.append(makeLabel('GPU'), gpuThumb, gpuFull);
+  const diffCol = document.createElement('div');
+  diffCol.append(makeLabel('Overlay'), diffThumb, diffFull);
+
+  row.append(label, cpuCol, gpuCol, diffCol, stats);
+  row.addEventListener('click', () => row.classList.toggle('expanded'));
+  resultsEl.appendChild(row);
+}
+
+// --- Run ---
+async function run() {
+  logEl.textContent = 'Initializing GPU tracer...';
+  const gpu = new GPUTracer(gl);
+  gpu._debugReadback = true; // enable CPU segment copy for visual comparison
+  if (!gpu._ready) { logEl.innerHTML = '<span class="fail">GPU tracer failed to initialize</span>'; return; }
+
+  const cpu = new Tracer();
+  const scenes = [
+    ['empty', emptyScene()],
+    ['prism', prismScene()],
+    ['mirror', mirrorScene()],
+    ['block', blockScene()],
+    ['mic-levels', micLevelScene()],
+  ];
+  const presets = [
+    'prism-rainbow', 'double-prism', 'mirror-bounce', 'dichroic', 'tinted-glass',
+    'test-nested', 'test-tir', 'test-grazing', 'test-multibounce',
+    'test-hyper-refract', 'test-dichroic-chain', 'test-mixed',
+  ];
+  for (const name of presets) {
+    try { scenes.push([name, await loadPreset(name)]); }
+    catch (e) { logEl.textContent += `\nSkipped ${name}: ${e.message}`; }
+  }
+
+  let pass = 0, fail = 0;
+  logEl.textContent = `Running ${scenes.length} tests...\n`;
+
+  for (const [name, scene] of scenes) {
+    try {
+      cpu.resetPersistence();
+      cpu.trace(scene);
+      gpu.trace(scene);
+      const result = compare(cpu, gpu);
+      // Snapshot tracer data before next test overwrites it
+      const cpuSnap = { segmentCount: cpu.segmentCount, segmentData: cpu.segmentData.slice(0, cpu.segmentCount*12),
+        sensorBins: cpu.sensorBins ? new Float32Array(cpu.sensorBins) : null, sensorCount: cpu.sensorCount, binCount: cpu.binCount };
+      const gpuSnap = { segmentCount: gpu.segmentCount, segmentData: gpu.segmentData.slice(0, gpu.segmentCount*12),
+        sensorBins: gpu.sensorBins ? new Float32Array(gpu.sensorBins) : null, sensorCount: gpu.sensorCount, binCount: gpu.binCount };
+      addTestRow(name, cpuSnap, gpuSnap, result);
+      result.ok ? pass++ : fail++;
+    } catch (e) {
+      logEl.textContent += `${name}: ERROR — ${e.message}\n`;
+      console.error(e);
+      fail++;
+    }
+  }
+  logEl.innerHTML = `<span class="${fail===0?'pass':'fail'}">${pass} passed, ${fail} failed</span>`;
+}
+
+run().catch(e => { logEl.innerHTML = `<span class="fail">Fatal: ${e.message}</span>`; console.error(e); });
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "bench": { "w": 556, "h": 900 },
+  "emitter": { "count": 6, "wlMin": 400, "wlMax": 700, "raysPerSource": 32, "spreadDeg": 4, "apertureFactor": 0.1, "disabled": [] },
+  "sensorCount": 12,
+  "elements": [
+    { "kind": "prism", "x": 150, "y": 350, "size": 100, "material": "crown", "rot": 0.3 },
+    { "kind": "mirror", "x": 400, "y": 250, "size": 150, "material": "mirror", "rot": 2.2 },
+    { "kind": "block", "x": 300, "y": 550, "w": 80, "h": 200, "material": "water", "rot": -0.1 },
+    { "kind": "lens-convex", "x": 250, "y": 700, "radius": 150, "material": "fused", "rot": 0 },
+    { "kind": "mirror", "x": 450, "y": 650, "size": 120, "material": "mirror-red", "rot": 1.0 }
+  ]
+}

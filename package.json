@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node serve.js",
-    "test": "node test/run.js"
+    "test": "node test/run.js",
+    "snapshot": "node tools/trace-snapshot.js",
+    "verify": "node tools/trace-verify.js"
   }
 }

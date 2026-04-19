@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "bench": { "w": 556, "h": 900 },
+  "emitter": { "count": 2, "wlMin": 400, "wlMax": 700, "raysPerSource": 16, "spreadDeg": 3, "apertureFactor": 0.01, "disabled": [] },
+  "sensorCount": 8,
+  "elements": [
+    { "kind": "mirror", "x": 150, "y": 300, "size": 250, "material": "mirror", "rot": 0.4 },
+    { "kind": "mirror", "x": 400, "y": 600, "size": 250, "material": "mirror", "rot": -0.4 },
+    { "kind": "mirror", "x": 280, "y": 150, "size": 200, "material": "mirror", "rot": 1.2 }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "bench": { "w": 556, "h": 900 },
+  "emitter": { "count": 6, "wlMin": 400, "wlMax": 700, "raysPerSource": 32, "spreadDeg": 15, "apertureFactor": 0.5, "disabled": [] },
+  "sensorCount": 12,
+  "elements": [
+    { "kind": "block", "x": 300, "y": 300, "w": 300, "h": 40, "material": "crown", "rot": 0.08 },
+    { "kind": "block", "x": 300, "y": 600, "w": 300, "h": 40, "material": "crown", "rot": -0.08 }
+  ]
+}

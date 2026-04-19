@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "bench": { "w": 556, "h": 900 },
+  "emitter": { "count": 4, "wlMin": 400, "wlMax": 700, "raysPerSource": 32, "spreadDeg": 0, "apertureFactor": 0.01, "disabled": [] },
+  "sensorCount": 16,
+  "elements": [
+    { "kind": "prism", "x": 180, "y": 450, "size": 120, "material": "hyper", "rot": 0.2 },
+    { "kind": "lens-convex", "x": 350, "y": 450, "radius": 200, "material": "flint", "rot": 0 }
+  ]
+}
