@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "title": "Demo",
+  "bpm": 120,
+  "duration": 16.0,
+  "loop": true,
+
+  "global": {
+    "emitter": { "count": 24, "wlMin": 400, "wlMax": 700, "raysPerSource": 256 },
+    "sensorCount": 24,
+    "carrier": "sine",
+    "partials": 4,
+    "volume": 0.25
+  },
+
+  "keyframes": [
+    {
+      "time": 0,
+      "elements": [
+        { "id": "p1", "kind": "prism", "x": 200, "y": 450, "size": 130, "material": "crown", "rot": 0.3 }
+      ]
+    },
+    {
+      "time": 8.0,
+      "elements": [
+        { "id": "p1", "kind": "prism", "x": 350, "y": 350, "size": 160, "material": "crown", "rot": 1.2 },
+        { "id": "m1", "kind": "mirror", "x": 450, "y": 600, "size": 120, "material": "mirror", "rot": 2.0 }
+      ]
+    },
+    {
+      "time": 16.0,
+      "elements": [
+        { "id": "p1", "kind": "prism", "x": 200, "y": 450, "size": 130, "material": "crown", "rot": 0.3 }
+      ]
+    }
+  ],
+
+  "notes": [
+    { "time": 0.0,  "emitter": 4,  "vel": 1.0, "dur": 0.4 },
+    { "time": 0.5,  "emitter": 7,  "vel": 0.8, "dur": 0.4 },
+    { "time": 1.0,  "emitter": 11, "vel": 0.9, "dur": 0.4 },
+    { "time": 1.5,  "emitter": 7,  "vel": 0.7, "dur": 0.4 },
+    { "time": 2.0,  "emitter": 4,  "vel": 1.0, "dur": 0.8 },
+    { "time": 3.0,  "emitter": 9,  "vel": 0.8, "dur": 0.4 },
+    { "time": 3.5,  "emitter": 11, "vel": 0.9, "dur": 0.4 },
+    { "time": 4.0,  "emitter": [4, 7, 11], "vel": 0.8, "dur": 1.0 },
+
+    { "time": 5.0,  "emitter": 5,  "vel": 1.0, "dur": 0.4 },
+    { "time": 5.5,  "emitter": 8,  "vel": 0.8, "dur": 0.4 },
+    { "time": 6.0,  "emitter": 12, "vel": 0.9, "dur": 0.4 },
+    { "time": 6.5,  "emitter": 8,  "vel": 0.7, "dur": 0.4 },
+    { "time": 7.0,  "emitter": 5,  "vel": 1.0, "dur": 0.8 },
+    { "time": 8.0,  "emitter": [5, 8, 12], "vel": 0.7, "dur": 1.5 },
+
+    { "time": 10.0, "emitter": 6,  "vel": 1.0, "dur": 0.3 },
+    { "time": 10.5, "emitter": 9,  "vel": 0.9, "dur": 0.3 },
+    { "time": 11.0, "emitter": 13, "vel": 0.8, "dur": 0.3 },
+    { "time": 11.5, "emitter": 9,  "vel": 0.7, "dur": 0.3 },
+    { "time": 12.0, "emitter": [4, 7, 11], "vel": 1.0, "dur": 2.0 },
+    { "time": 14.0, "emitter": [5, 8, 12], "vel": 0.6, "dur": 2.0 }
+  ],
+
+  "automation": [
+    { "param": "volume", "points": [[0, 0.2], [4, 0.35], [8, 0.25], [12, 0.4], [15, 0.2]] }
+  ]
+}

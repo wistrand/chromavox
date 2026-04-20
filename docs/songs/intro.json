@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "title": "Chromavox Demo Song",
+  "welcome": "Chromavox\nOptical synthesizer\n\nPress ▶ to play\nor tap emitters on the left",
+  "bpm": 100,
+  "duration": 24.0,
+  "loop": true,
+
+  "global": {
+    "emitter": { "count": 24, "wlMin": 400, "wlMax": 700, "raysPerSource": 384 },
+    "sensorCount": 24,
+    "carrier": "sine",
+    "partials": 4,
+    "volume": 0.30
+  },
+
+  "keyframes": [
+    {
+      "time": 0,
+      "elements": [
+        { "id": "prism", "kind": "prism", "x": 240, "y": 450, "size": 150, "material": "flint", "rot": 0.35 },
+        { "id": "lens", "kind": "lens-convex", "x": 420, "y": 450, "radius": 180, "material": "crown", "rot": 0 }
+      ]
+    },
+    {
+      "time": 6.0,
+      "elements": [
+        { "id": "prism", "kind": "prism", "x": 220, "y": 400, "size": 170, "material": "flint", "rot": 0.7 },
+        { "id": "lens", "kind": "lens-convex", "x": 400, "y": 350, "radius": 200, "material": "crown", "rot": 0.1 }
+      ]
+    },
+    {
+      "time": 12.0,
+      "elements": [
+        { "id": "prism", "kind": "prism", "x": 260, "y": 500, "size": 140, "material": "flint", "rot": 1.1 },
+        { "id": "lens", "kind": "lens-convex", "x": 380, "y": 550, "radius": 160, "material": "crown", "rot": -0.1 }
+      ]
+    },
+    {
+      "time": 18.0,
+      "elements": [
+        { "id": "prism", "kind": "prism", "x": 250, "y": 420, "size": 160, "material": "flint", "rot": 0.5 },
+        { "id": "lens", "kind": "lens-convex", "x": 410, "y": 430, "radius": 190, "material": "crown", "rot": 0.05 }
+      ]
+    },
+    {
+      "time": 24.0,
+      "elements": [
+        { "id": "prism", "kind": "prism", "x": 240, "y": 450, "size": 150, "material": "flint", "rot": 0.35 },
+        { "id": "lens", "kind": "lens-convex", "x": 420, "y": 450, "radius": 180, "material": "crown", "rot": 0 }
+      ]
+    }
+  ],
+
+  "notes": [
+    {"_": "=== Ascending scale sweep (C major, two octaves) ==="},
+    {"_": "C3=0 D3=2 E3=4 F3=5 G3=7 A3=9 B3=11 C4=12 D4=14 E4=16 F4=17 G4=19 A4=21 B4=23"},
+    {"_": "Crescendo up — each note brighter, fast 16ths at BPM 100 = 0.15s"},
+    { "time": 0.00, "emitter": 0,  "vel": 0.30, "dur": 0.20 },
+    { "time": 0.10, "emitter": 2,  "vel": 0.35, "dur": 0.20 },
+    { "time": 0.20, "emitter": 4,  "vel": 0.40, "dur": 0.20 },
+    { "time": 0.30, "emitter": 5,  "vel": 0.45, "dur": 0.20 },
+    { "time": 0.40, "emitter": 7,  "vel": 0.50, "dur": 0.20 },
+    { "time": 0.50, "emitter": 9,  "vel": 0.55, "dur": 0.20 },
+    { "time": 0.60, "emitter": 11, "vel": 0.60, "dur": 0.20 },
+    { "time": 0.70, "emitter": 12, "vel": 0.65, "dur": 0.20 },
+    { "time": 0.80, "emitter": 14, "vel": 0.70, "dur": 0.20 },
+    { "time": 0.90, "emitter": 16, "vel": 0.75, "dur": 0.20 },
+    { "time": 1.00, "emitter": 17, "vel": 0.80, "dur": 0.20 },
+    { "time": 1.10, "emitter": 19, "vel": 0.85, "dur": 0.20 },
+    { "time": 1.20, "emitter": 21, "vel": 0.90, "dur": 0.20 },
+    { "time": 1.30, "emitter": 23, "vel": 1.00, "dur": 0.35 },
+
+    {"_": "=== Descending scale sweep — decrescendo ==="},
+    { "time": 1.80, "emitter": 23, "vel": 1.00, "dur": 0.20 },
+    { "time": 1.90, "emitter": 21, "vel": 0.90, "dur": 0.20 },
+    { "time": 2.00, "emitter": 19, "vel": 0.85, "dur": 0.20 },
+    { "time": 2.10, "emitter": 17, "vel": 0.80, "dur": 0.20 },
+    { "time": 2.20, "emitter": 16, "vel": 0.75, "dur": 0.20 },
+    { "time": 2.30, "emitter": 14, "vel": 0.70, "dur": 0.20 },
+    { "time": 2.40, "emitter": 12, "vel": 0.65, "dur": 0.20 },
+    { "time": 2.50, "emitter": 11, "vel": 0.60, "dur": 0.20 },
+    { "time": 2.60, "emitter": 9,  "vel": 0.55, "dur": 0.20 },
+    { "time": 2.70, "emitter": 7,  "vel": 0.50, "dur": 0.20 },
+    { "time": 2.80, "emitter": 5,  "vel": 0.45, "dur": 0.20 },
+    { "time": 2.90, "emitter": 4,  "vel": 0.40, "dur": 0.20 },
+    { "time": 3.00, "emitter": 2,  "vel": 0.35, "dur": 0.20 },
+    { "time": 3.10, "emitter": 0,  "vel": 0.30, "dur": 0.40 },
+
+    {"_": "Brief pause — let the optics settle"},
+
+    {"_": "=== Section A: C major chord — wide voicing ==="},
+    { "time": 4.20, "emitter": [0, 4, 7, 12, 16, 19], "vel": 0.75, "dur": 2.2 },
+
+    {"_": "=== Am chord ==="},
+    { "time": 6.60, "emitter": [9, 12, 16, 21], "vel": 0.70, "dur": 2.2 },
+
+    {"_": "=== F major chord ==="},
+    { "time": 9.00, "emitter": [5, 9, 12, 17], "vel": 0.72, "dur": 2.2 },
+
+    {"_": "=== G major chord with passing tone ==="},
+    { "time": 11.40, "emitter": [7, 11, 14, 19], "vel": 0.78, "dur": 1.8 },
+    { "time": 12.80, "emitter": 21, "vel": 0.60, "dur": 0.40 },
+
+    {"_": "=== Section B: melody over chords ==="},
+
+    {"_": "C chord + melody E-G-E"},
+    { "time": 13.80, "emitter": [0, 4, 7, 12], "vel": 0.55, "dur": 2.4 },
+    { "time": 13.80, "emitter": 16, "vel": 0.90, "dur": 0.55 },
+    { "time": 14.40, "emitter": 19, "vel": 0.85, "dur": 0.55 },
+    { "time": 15.00, "emitter": 16, "vel": 0.80, "dur": 0.80 },
+
+    {"_": "Am chord + melody C-D-E"},
+    { "time": 16.20, "emitter": [9, 12, 16], "vel": 0.55, "dur": 2.4 },
+    { "time": 16.20, "emitter": 12, "vel": 0.88, "dur": 0.50 },
+    { "time": 16.80, "emitter": 14, "vel": 0.82, "dur": 0.50 },
+    { "time": 17.40, "emitter": 16, "vel": 0.90, "dur": 0.80 },
+
+    {"_": "F chord sustained — visual bloom"},
+    { "time": 18.60, "emitter": [5, 9, 12, 17], "vel": 0.70, "dur": 2.0 },
+
+    {"_": "G → C resolution — ascending arpeggio into final chord"},
+    { "time": 20.80, "emitter": 7,  "vel": 0.65, "dur": 0.25 },
+    { "time": 21.00, "emitter": 11, "vel": 0.70, "dur": 0.25 },
+    { "time": 21.20, "emitter": 14, "vel": 0.75, "dur": 0.25 },
+    { "time": 21.40, "emitter": 19, "vel": 0.80, "dur": 0.25 },
+
+    {"_": "Final C chord — full, sustained, fade out"},
+    { "time": 21.80, "emitter": [0, 4, 7, 12, 16, 19], "vel": 0.85, "dur": 2.0 }
+  ],
+
+  "automation": [
+    { "param": "volume", "points": [
+      [0, 0.15], [1.3, 0.35], [3.5, 0.18],
+      [4.2, 0.30], [8, 0.33], [12, 0.28],
+      [13.8, 0.32], [18, 0.35], [21.8, 0.38], [23.5, 0.15]
+    ]}
+  ]
+}

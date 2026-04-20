@@ -11,13 +11,16 @@ html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: 
 #app {
   display: grid;
   grid-template-columns: 220px 1fr 220px;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
   grid-template-areas:
     "header header header"
-    "left   stage  right";
+    "left   stage  right"
+    "footer footer footer";
   height: 100vh;
+  height: 100dvh; /* dynamic viewport height — excludes mobile URL bar */
 }
-#toolbar  { grid-area: header; }
+#toolbar    { grid-area: header; }
+#transport  { grid-area: footer; }
 #left-panel  { grid-area: left; }
 #stage       { grid-area: stage; }
 #right-panel { grid-area: right; }
@@ -118,6 +121,23 @@ html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: 
 button { background: #1d222a; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font: inherit; cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: 0.35; cursor: not-allowed; border-color: var(--border); }
+
+#transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  height: 38px;
+  min-height: 38px;
+  box-sizing: border-box;
+}
+#transport select { font: inherit; padding: 4px 6px; background: #1d222a; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; }
+#transport button { padding: 4px 10px; font-size: 13px; }
+#song-play { width: 36px; text-align: center; }
+#song-time { font: 11px/1 monospace; color: var(--muted); min-width: 36px; }
+#song-seek { flex: 1; min-width: 60px; }
 button.active { background: var(--accent); color: #061018; border-color: var(--accent); }
 #stage {
   position: relative;
@@ -137,6 +157,27 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 #gl { width: 100%; height: 100%; display: block; touch-action: none; }
 #emitter-labels { position: absolute; top: 0; left: 0; bottom: 0; width: 56px; pointer-events: none; z-index: 4; }
 #sensor-labels  { position: absolute; top: 0; right: 0; bottom: 0; width: 56px; pointer-events: none; z-index: 4; }
+#welcome-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12%;
+  pointer-events: none;
+  z-index: 5;
+  text-align: center;
+  font: 15px/1.8 system-ui, sans-serif;
+  color: rgba(220, 230, 240, 0.85);
+  white-space: pre-line;
+  text-shadow: 0 0 8px #000, 0 0 16px #000, 0 2px 4px rgba(0,0,0,0.8);
+}
+#welcome-overlay .welcome-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 2px;
+}
 #rotation-label {
   position: absolute; pointer-events: none; z-index: 4;
   font: 11px/1 monospace; color: rgba(255, 204, 77, 0.9);
@@ -207,12 +248,13 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 @media (max-width: 600px) {
   #app {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto 1fr auto;
     grid-template-areas:
       "header"
-      "stage";
+      "stage"
+      "footer";
   }
-  .panel { position: absolute; top: 54px; bottom: 0; width: 280px; z-index: 5; transform: translateX(-100%); transition: transform 0.2s; border: 0; }
+  .panel { position: absolute; top: 54px; bottom: 38px; width: 280px; z-index: 5; transform: translateX(-100%); transition: transform 0.2s; border: 0; }
   #left-panel { left: 0; }
   #right-panel { right: 0; transform: translateX(100%); }
   #app.show-left #left-panel { transform: translateX(0); box-shadow: 0 0 30px rgba(0,0,0,0.5); }

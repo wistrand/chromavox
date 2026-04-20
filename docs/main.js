@@ -10,14 +10,16 @@ import { MicModulator, micBands } from './mic.js';
 import { SensorSynth } from './synth.js';
 import { PushController } from './push.js';
 import { scaleFreq } from './spectrum.js';
+import { SongPlayer } from './song.js';
 
 const STORAGE_KEY = 'chromavox-scene';
 
 const canvas = document.getElementById('gl');
 const renderer = new Renderer(canvas);
+const freshStart = new URLSearchParams(location.search).has('init');
 let scene;
 try {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = freshStart ? null : localStorage.getItem(STORAGE_KEY);
   scene = saved ? deserializeScene(saved) : createScene();
 } catch {
   scene = createScene();
@@ -95,12 +97,15 @@ function restoreUiState() {
 
 const markDirty = () => {
   dirty = true;
+  if (window._hideWelcome) window._hideWelcome();
   try { localStorage.setItem(STORAGE_KEY, serializeScene(scene)); } catch {}
   saveUiState();
 };
 function resetDisplay() {
   renderer.resetReadout();
   tracer.resetPersistence();
+  songPlayer.stop();
+  document.getElementById('song-select').value = '';
 }
 let lastFrameTime = performance.now() / 1000;
 
@@ -223,7 +228,7 @@ function syncBaseSelect(hz) {
   if (best && sel.value !== best.value) sel.value = best.value;
 }
 const ui = new UI(scene, canvas, markDirty, resetDisplay);
-restoreUiState();
+if (!freshStart) restoreUiState();
 ui.syncControls();
 ui.rebuildSensorReadout();
 syncKeyboardScale();
@@ -594,6 +599,7 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     e.stopPropagation(); // prevent UI emitter toggle / element select
     _touchPointers.set(e.pointerId, idx);
     mic.setTouchLevel(idx, 1);
+    if (window._hideWelcome) window._hideWelcome();
     dirty = true;
   });
   stage.addEventListener('pointermove', e => {
@@ -1198,8 +1204,134 @@ window.addEventListener('resize', () => {
   };
 }
 
+// --- Song player ---
+const songPlayer = new SongPlayer();
+{
+  const songSelect = document.getElementById('song-select');
+  const playBtn = document.getElementById('song-play');
+  const stopBtn = document.getElementById('song-stop');
+  const seekSlider = document.getElementById('song-seek');
+  const timeLabel = document.getElementById('song-time');
+
+  // Load song index. Auto-select + load the default song.
+  fetch('songs/index.json').then(r => r.json()).then(async index => {
+    let defaultFile = null;
+    for (const entry of index) {
+      const opt = document.createElement('option');
+      opt.value = entry.file;
+      opt.textContent = entry.label;
+      songSelect.appendChild(opt);
+      if (entry.default) defaultFile = entry.file;
+    }
+    // Only auto-load the default song if there's no saved scene.
+    // User's saved work in localStorage takes precedence.
+    const hasSaved = !freshStart && !!localStorage.getItem(STORAGE_KEY);
+    if (defaultFile && !hasSaved) {
+      songSelect.value = defaultFile;
+      songSelect.dispatchEvent(new Event('change'));
+    }
+  }).catch(() => {});
+
+  const welcomeEl = document.getElementById('welcome-overlay');
+  function showWelcome(text) {
+    if (!text || !welcomeEl) return;
+    const lines = text.split('\n');
+    const title = lines[0];
+    const body = lines.slice(1).join('\n');
+    welcomeEl.innerHTML = `<div><div class="welcome-title">${title}</div>${body}</div>`;
+    welcomeEl.style.display = 'flex';
+  }
+  window._hideWelcome = function() {
+    if (welcomeEl) welcomeEl.style.display = 'none';
+  };
+
+  songSelect.addEventListener('change', async () => {
+    const file = songSelect.value;
+    if (!file) { songPlayer.stop(); window._hideWelcome(); return; }
+    try {
+      const resp = await fetch('songs/' + file);
+      const json = await resp.json();
+      songPlayer.load(json);
+      songPlayer.applyKeyframeAt(scene, 0);
+      dirty = true;
+      playBtn.disabled = false;
+      stopBtn.disabled = false;
+      seekSlider.disabled = false;
+      seekSlider.max = songPlayer.duration;
+      if (json.welcome) showWelcome(json.welcome);
+      else window._hideWelcome();
+    } catch (err) {
+      console.error('Song load failed:', err);
+    }
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (!songPlayer.song) return;
+    window._hideWelcome();
+    if (songPlayer.playing) {
+      songPlayer.pause();
+    } else {
+      if (!synth.active) synthBtn.click();
+      songPlayer.play();
+    }
+  });
+
+  stopBtn.addEventListener('click', () => {
+    window._hideWelcome();
+    songPlayer.stop();
+  });
+
+  seekSlider.addEventListener('input', () => {
+    songPlayer.seek(parseFloat(seekSlider.value));
+    dirty = true;
+  });
+
+  songPlayer.onStateChange = state => {
+    playBtn.textContent = state === 'playing' ? '❚❚' : '▶';
+    if (state === 'stopped') {
+      seekSlider.value = 0;
+      timeLabel.textContent = '0:00';
+    }
+  };
+
+  // Route automation param changes to synth/scene.
+  songPlayer.onParamChange = (param, value) => {
+    if (param === 'volume') synth.setVolume(value);
+    else if (param === 'carrier') synth.setCarrier(value);
+    else if (param === 'acidRes') synth.setAcidRes(value);
+    else if (param === 'acidEnv') synth.setAcidEnv(value);
+    else if (param === 'partials') synth.setPartials(value);
+  };
+
+  // Update transport display every frame.
+  window._updateSongTransport = () => {
+    if (!songPlayer.song) return;
+    if (songPlayer.playing) {
+      const t = songPlayer.time;
+      const m = Math.floor(t / 60);
+      const s = Math.floor(t % 60);
+      timeLabel.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+      seekSlider.value = t;
+    }
+  };
+}
+
 function frame() {
-  if (mic.active) {
+  // Song playback: update before mic/trace so song notes override input.
+  // If the user starts interacting with elements (drag/rotate/pinch),
+  // pause keyframe interpolation — the user owns element positions now.
+  // Notes and automation continue playing.
+  if (songPlayer.playing) {
+    if (window._hideWelcome) window._hideWelcome();
+    if (ui.dragging) songPlayer.keyframesPaused = true;
+    const now = performance.now() / 1000;
+    const dt = Math.min(now - lastFrameTime, 0.25);
+    songPlayer.update(scene, dt);
+    dirty = true;
+  }
+  window._updateSongTransport();
+
+  if (mic.active && !songPlayer.playing) {
     const s = mic.sample();
     if (s) {
       // Each source maps to one audio bucket; bucket amplitude scales that

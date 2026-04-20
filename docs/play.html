@@ -219,6 +219,7 @@
       <div id="emitter-labels"></div>
       <div id="sensor-labels"></div>
       <div id="rotation-label" hidden></div>
+      <div id="welcome-overlay" hidden></div>
     </div>
   </main>
 
@@ -228,6 +229,14 @@
 
   <button id="left-toggle"  class="panel-toggle panel-toggle-left"  aria-label="Toggle left panel">☰</button>
   <button id="right-toggle" class="panel-toggle panel-toggle-right" aria-label="Toggle right panel">☰</button>
+
+  <footer id="transport">
+    <select id="song-select"><option value="">[song]</option></select>
+    <button id="song-play" disabled>▶</button>
+    <button id="song-stop" disabled>■</button>
+    <span id="song-time">0:00</span>
+    <input id="song-seek" type="range" min="0" max="100" value="0" step="0.1" disabled>
+  </footer>
 </div>
 <script type="module" src="main.js"></script>
 </body>
