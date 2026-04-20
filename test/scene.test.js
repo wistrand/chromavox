@@ -29,7 +29,7 @@ test('makeElement: prism has id, kind, position, size, material', () => {
   assert(el.x === 100 && el.y === 200);
   assert(el.size > 0);
   assert(typeof el.material === 'string');
-  assert(typeof el.id === 'number');
+  assert(typeof el.id === 'string' && el.id.length > 0);
 });
 
 test('makeElement: block has w and h', () => {

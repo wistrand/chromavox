@@ -40,6 +40,7 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [Ableton Push](agent_docs/architecture-push.md)
 - [GPU tracer](agent_docs/architecture-gpu-tracer.md)
 - [Ping-pong tracer plan](agent_docs/plan-pingpong-tracer.md)
+- [Song format design](agent_docs/design-song-format.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
 
 

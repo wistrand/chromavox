@@ -1,6 +1,6 @@
 // UI: input handling, property panel, save/load.
 
-import { makeElement, worldEdges, pointInPolygon, serializeScene, deserializeScene, bumpIdCeiling, createScene } from './scene.js';
+import { makeElement, worldEdges, pointInPolygon, serializeScene, deserializeScene, createScene } from './scene.js';
 import { MATERIALS } from './spectrum.js';
 
 // Undo/redo. Snapshots the mutable scene state (elements, emitter settings,
@@ -92,9 +92,6 @@ class History {
     scene.emitter.disabled = new Set(data.emitter.disabled || []);
     scene.sensorCount = data.sensorCount;
     scene.elements = data.elements.map(e => ({ ...e }));
-    let maxId = 0;
-    for (const el of scene.elements) if (el.id > maxId) maxId = el.id;
-    bumpIdCeiling(maxId);
   }
   begin(scene) {
     if (this.pending !== null) return;

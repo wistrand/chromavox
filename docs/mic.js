@@ -35,6 +35,118 @@ export class MicModulator {
 
   async enable(source = 'mic', deviceId = null) {
     if (this.active) return;
+
+    // Sources that don't need an AudioContext — handle setup and
+    // return early. The AudioContext is created below for audio sources.
+    if (source === 'touch') {
+      this._touchLevels = new Float32Array(64);
+      this.keyboardOctave = 0;
+      const KEY_TO_DEG = {
+        KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5,
+        KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
+      };
+      this._kbdActiveDegs = new Set();
+      const onDown = e => {
+        if (e.repeat) return;
+        if (e.code === 'Comma')  { this.keyboardOctave--; return; }
+        if (e.code === 'Period') { this.keyboardOctave++; return; }
+        const deg = KEY_TO_DEG[e.code];
+        if (deg === undefined) return;
+        e.preventDefault();
+        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+        const idx = scale.length * this.keyboardOctave + deg;
+        if (idx >= 0 && idx < 64) {
+          this._touchLevels[idx] = 1;
+          this._kbdActiveDegs.add(e.code);
+        }
+      };
+      const onUp = e => {
+        const deg = KEY_TO_DEG[e.code];
+        if (deg === undefined) return;
+        this._kbdActiveDegs.delete(e.code);
+        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+        const idx = scale.length * this.keyboardOctave + deg;
+        if (idx >= 0 && idx < 64) this._touchLevels[idx] = 0;
+      };
+      window.addEventListener('keydown', onDown);
+      window.addEventListener('keyup', onUp);
+      this._kbdCleanup = () => {
+        window.removeEventListener('keydown', onDown);
+        window.removeEventListener('keyup', onUp);
+        this._kbdActiveDegs = null;
+      };
+      this.source = source;
+      this.active = true;
+      return;
+    }
+
+    if (source === 'midi') {
+      this._midiNotes = new Map();
+      this._midiAccess = null;
+      this._midiInput = null;
+      const debugEl = typeof document !== 'undefined' ? document.getElementById('midi-debug') : null;
+      const MAX_LOG = 40;
+      const onMessage = e => {
+        const bytes = [...e.data];
+        const [status, note, vel] = bytes;
+        if (status >= 0xF0) return;
+        const cmd = status & 0xf0;
+        if (cmd === 0x90 && vel > 0) {
+          this._midiNotes.set(note, vel / 127);
+        } else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) {
+          this._midiNotes.delete(note);
+        }
+        if (cmd === 0xB0 && this.onCC) {
+          this.onCC(note, vel);
+        }
+        if (debugEl) {
+          const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
+          const ch = (status & 0x0f) + 1;
+          const names = { 0x80: 'off', 0x90: vel ? 'ON' : 'off', 0xa0: 'aft', 0xb0: 'CC', 0xc0: 'prg', 0xd0: 'chP', 0xe0: 'bend' };
+          const label = names[cmd] || '???';
+          const line = `${hex}  ch${ch} ${label} ${note ?? ''} ${vel ?? ''}`;
+          const lines = debugEl.value ? debugEl.value.split('\n') : [];
+          lines.push(line);
+          if (lines.length > MAX_LOG) lines.splice(0, lines.length - MAX_LOG);
+          debugEl.value = lines.join('\n');
+          debugEl.scrollTop = debugEl.scrollHeight;
+        }
+      };
+      try {
+        let access;
+        try { access = await navigator.requestMIDIAccess({ sysex: true }); }
+        catch { access = await navigator.requestMIDIAccess(); }
+        this._midiAccess = access;
+        let input = null;
+        if (deviceId) input = access.inputs.get(deviceId);
+        if (!input) {
+          for (const inp of access.inputs.values()) {
+            if (/live\s*port/i.test(inp.name)) { input = inp; break; }
+          }
+        }
+        if (!input) {
+          for (const inp of access.inputs.values()) { input = inp; break; }
+        }
+        if (input) { input.onmidimessage = onMessage; this._midiInput = input; }
+        access.onstatechange = () => {
+          if (this._midiInput && this._midiInput.state === 'disconnected') {
+            this._midiInput = null;
+            for (const inp of access.inputs.values()) {
+              inp.onmidimessage = onMessage;
+              this._midiInput = inp;
+              break;
+            }
+          }
+        };
+      } catch (err) {
+        throw new Error('MIDI access denied: ' + err.message);
+      }
+      this.source = source;
+      this.active = true;
+      return;
+    }
+
+    // Audio sources: create AudioContext + AnalyserNode.
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = new AC();
     if (ctx.state === 'suspended') await ctx.resume();
@@ -175,121 +287,6 @@ export class MicModulator {
       bn.start();
       nodes.push(bn);
       srcNode = bn;
-    } else if (source === 'midi') {
-      // MIDI input — no AudioContext needed. Note-on/off events write
-      // directly to _midiNotes; directLevels maps them to emitters.
-      // Push-specific output (LED palette, pad colors) lives in push.js.
-      this._midiNotes = new Map();
-      this._midiAccess = null;
-      this._midiInput = null;
-      const debugEl = typeof document !== 'undefined' ? document.getElementById('midi-debug') : null;
-      const MAX_LOG = 40;
-      const onMessage = e => {
-        const bytes = [...e.data];
-        const [status, note, vel] = bytes;
-        // Skip system-realtime messages (0xF0+): Active Sensing, Clock, etc.
-        if (status >= 0xF0) return;
-        const cmd = status & 0xf0;
-        if (cmd === 0x90 && vel > 0) {
-          this._midiNotes.set(note, vel / 127);
-        } else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) {
-          this._midiNotes.delete(note);
-        }
-        if (cmd === 0xB0 && this.onCC) {
-          this.onCC(note, vel);
-        }
-        if (debugEl) {
-          const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
-          const ch = (status & 0x0f) + 1;
-          const names = { 0x80: 'off', 0x90: vel ? 'ON' : 'off', 0xa0: 'aft', 0xb0: 'CC', 0xc0: 'prg', 0xd0: 'chP', 0xe0: 'bend' };
-          const label = names[cmd] || '???';
-          const line = `${hex}  ch${ch} ${label} ${note ?? ''} ${vel ?? ''}`;
-          const lines = debugEl.value ? debugEl.value.split('\n') : [];
-          lines.push(line);
-          if (lines.length > MAX_LOG) lines.splice(0, lines.length - MAX_LOG);
-          debugEl.value = lines.join('\n');
-          debugEl.scrollTop = debugEl.scrollHeight;
-        }
-      };
-      try {
-        // Request SysEx for Push palette (push.js). Fall back to basic.
-        let access;
-        try { access = await navigator.requestMIDIAccess({ sysex: true }); }
-        catch { access = await navigator.requestMIDIAccess(); }
-        this._midiAccess = access;
-        // Prefer Push Live Port (User Port broken on Linux seq layer).
-        let input = null;
-        if (deviceId) input = access.inputs.get(deviceId);
-        if (!input) {
-          for (const inp of access.inputs.values()) {
-            if (/live\s*port/i.test(inp.name)) { input = inp; break; }
-          }
-        }
-        if (!input) {
-          for (const inp of access.inputs.values()) { input = inp; break; }
-        }
-        if (input) { input.onmidimessage = onMessage; this._midiInput = input; }
-        access.onstatechange = () => {
-          if (this._midiInput && this._midiInput.state === 'disconnected') {
-            this._midiInput = null;
-            for (const inp of access.inputs.values()) {
-              inp.onmidimessage = onMessage;
-              this._midiInput = inp;
-              break;
-            }
-          }
-        };
-      } catch (err) {
-        throw new Error('MIDI access denied: ' + err.message);
-      }
-      this.source = source;
-      this.active = true;
-      return;
-    } else if (source === 'touch') {
-      // Touch + keyboard input — no AudioContext. Pointer events on the
-      // bench set emitter levels by position (handled by main.js).
-      // Keyboard claviature sets levels by scale degree (same key layout
-      // as keyboard mode but without oscillators — the synth output
-      // handles the sound). Both write to _touchLevels.
-      this._touchLevels = new Float32Array(64); // max emitters
-      this.keyboardOctave = 0;
-      const KEY_TO_DEG = {
-        KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5,
-        KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
-      };
-      this._kbdActiveDegs = new Set();
-      const onDown = e => {
-        if (e.repeat) return;
-        if (e.code === 'Comma')  { this.keyboardOctave--; return; }
-        if (e.code === 'Period') { this.keyboardOctave++; return; }
-        const deg = KEY_TO_DEG[e.code];
-        if (deg === undefined) return;
-        e.preventDefault();
-        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
-        const idx = scale.length * this.keyboardOctave + deg;
-        if (idx >= 0 && idx < 64) {
-          this._touchLevels[idx] = 1;
-          this._kbdActiveDegs.add(e.code);
-        }
-      };
-      const onUp = e => {
-        const deg = KEY_TO_DEG[e.code];
-        if (deg === undefined) return;
-        this._kbdActiveDegs.delete(e.code);
-        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
-        const idx = scale.length * this.keyboardOctave + deg;
-        if (idx >= 0 && idx < 64) this._touchLevels[idx] = 0;
-      };
-      window.addEventListener('keydown', onDown);
-      window.addEventListener('keyup', onUp);
-      this._kbdCleanup = () => {
-        window.removeEventListener('keydown', onDown);
-        window.removeEventListener('keyup', onUp);
-        this._kbdActiveDegs = null;
-      };
-      this.source = source;
-      this.active = true;
-      return;
     } else {
       throw new Error('unknown mic source: ' + source);
     }

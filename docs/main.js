@@ -791,6 +791,19 @@ micBtn.addEventListener('click', async () => {
   }
 });
 
+// Auto-enable touch/keys on startup — no AudioContext cost, the bench
+// starts responsive to touch immediately. Without this, mic is off and
+// all emitters fire at full intensity (the null-micLevels fallback).
+{
+  const src = document.getElementById('mic-source').value;
+  if (src === 'touch') {
+    mic.enable('touch').then(() => {
+      micBtn.textContent = 'Audio in: on';
+      micBtn.classList.add('active');
+    }).catch(() => {});
+  }
+}
+
 window.addEventListener('resize', () => {
   // Bench is canonical / letterboxed; no element rescaling on resize.
   renderer.resize();

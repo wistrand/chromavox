@@ -3,9 +3,18 @@
 
 import { MATERIALS } from './spectrum.js';
 
-let nextId = 1;
-const genId = () => nextId++;
-export function bumpIdCeiling(n) { if (n >= nextId) nextId = n + 1; }
+// Stable UUIDs for element IDs — survive serialization, undo/redo,
+// and session boundaries. Used by the song format to match elements
+// across keyframes.
+const genId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+// Legacy compat: bumpIdCeiling is a no-op with UUIDs.
+export function bumpIdCeiling(_n) {}
 
 // Canonical bench: portrait, golden ratio. h / w = φ ≈ 1.618.
 // w = round(900 / φ) = 556. The renderer letterboxes the canvas to this
@@ -221,7 +230,7 @@ export function deserializeScene(text) {
   scene.sensorCount = data.sensorCount;
   const SIZE_KEYS = ['size', 'w', 'h', 'radius'];
   scene.elements = data.elements.map(e => {
-    const el = { ...e, id: genId(), x: e.x * sx, y: e.y * sy };
+    const el = { ...e, id: e.id || genId(), x: e.x * sx, y: e.y * sy };
     for (const k of SIZE_KEYS) {
       if (typeof el[k] === 'number') el[k] *= ssize;
     }
