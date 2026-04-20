@@ -141,7 +141,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         let s1 = v.lp1, s2 = v.lp2, s3 = v.lp3;
         for (let i = 0; i < len; i++) {
           voiceGain += (voiceTarget - voiceGain) * smooth;
-          if (voiceGain < 1e-6) { phase += dt; if (phase >= 1) phase -= 1; continue; }
+          // No early-continue for silent voices: the filter must keep
+          // running on zero input so its state decays naturally. Skipping
+          // would freeze s1/s2/s3 and cause a click on re-onset.
           // PolyBLEP sawtooth: naive saw + correction at discontinuity.
           phase += dt;
           let saw = 2 * phase - 1; // naive
