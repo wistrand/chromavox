@@ -422,10 +422,8 @@ export class UI {
       const kind = item.dataset.tool;
       item.insertAdjacentHTML('afterbegin', buildElementIcon(kind));
       item.addEventListener('click', () => {
-        if (placeable.has(kind)) {
-          setLastKind(kind);
-          place(kind);
-        }
+        setLastKind(kind);
+        place(kind);
         closeMenu();
       });
     });
