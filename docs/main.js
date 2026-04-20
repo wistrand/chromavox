@@ -50,7 +50,9 @@ function pickTracer() {
     (el.delayK ?? 0) > 0.0003 || el.material === 'slowGlass');
   const want = (!gpuTracer || !gpuTracer._ready || hasDelay) ? cpuTracer : gpuTracer;
   if (want !== tracer) {
+    const prevRate = tracer.simRate;
     tracer = want;
+    tracer.simRate = prevRate; // preserve sim rate across tracer switches
     tracer.resetPersistence();
     dirty = true;
   }
@@ -120,6 +122,7 @@ function resetDisplay() {
 let lastFrameTime = performance.now() / 1000;
 
 const mic = new MicModulator();
+const songPlayer = new SongPlayer();
 const synth = new SensorSynth();
 const push = new PushController();
 
@@ -238,7 +241,7 @@ function syncBaseSelect(hz) {
   if (best && sel.value !== best.value) sel.value = best.value;
 }
 const ui = new UI(scene, canvas, markDirty, resetDisplay);
-if (!freshStart) restoreUiState();
+// restoreUiState is called after carrier param sliders are built (below).
 ui.syncControls();
 ui.rebuildSensorReadout();
 syncKeyboardScale();
@@ -802,6 +805,10 @@ carrierSel.addEventListener('change', () => {
 });
 syncCarrierVisibility();
 
+// Restore UI state now — after carrier param sliders exist in the DOM.
+// Must happen after carrier UI is built so cp-* slider values are restored.
+if (!freshStart) restoreUiState();
+
 const _applyInitialPartials = () => {
   synth.setCarrier(carrierSel.value);
   // Send all carrier params to the worklet from current slider values.
@@ -1253,7 +1260,6 @@ window.addEventListener('resize', () => {
 }
 
 // --- Song player ---
-const songPlayer = new SongPlayer();
 {
   const songSelect = document.getElementById('song-select');
   const playBtn = document.getElementById('song-play');
