@@ -1280,6 +1280,8 @@ const songPlayer = new SongPlayer();
       songPlayer.pause();
     } else {
       if (!synth.active) synthBtn.click();
+      // Resume AudioContext if it was suspended (e.g. by visibilitychange).
+      if (synth.ctx && synth.ctx.state === 'suspended') synth.ctx.resume();
       songPlayer.play();
     }
   });
@@ -1467,3 +1469,17 @@ function frame() {
 Object.assign(cv, { scene, renderer, tracer, cpuTracer, gpuTracer, ui, mic, synth, songPlayer });
 requestAnimationFrame(frame);
 
+// Pause audio when the page is hidden (tab switch, screen off).
+// The RAF loop stops automatically but the AudioWorklet keeps running
+// on stale sensorBins, producing frozen sound. Suspend the context
+// and pause the song; resume on return.
+// Pause audio when the page is hidden (tab switch, screen off).
+// The RAF loop stops automatically but the AudioWorklet keeps running
+// on stale sensorBins. Suspend the context; it auto-resumes on the
+// next user gesture when the page becomes visible again.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (synth.ctx && synth.ctx.state === 'running') synth.ctx.suspend();
+    if (songPlayer.playing) songPlayer.pause();
+  }
+});
