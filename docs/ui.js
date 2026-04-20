@@ -938,6 +938,7 @@ export class UI {
     });
     document.getElementById('right-toggle').addEventListener('click', () => {
       app.classList.toggle('show-right');
+      this.onChange(); // force readout redraw when panel slides in
     });
   }
 
