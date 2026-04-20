@@ -14,6 +14,11 @@ import { SongPlayer } from './song.js';
 
 const STORAGE_KEY = 'chromavox-scene';
 
+// App namespace — avoids scattered window._ globals. Also useful
+// for console debugging: chromavox.synth, chromavox.tracer, etc.
+const cv = {};
+window.chromavox = cv;
+
 const canvas = document.getElementById('gl');
 const renderer = new Renderer(canvas);
 const freshStart = new URLSearchParams(location.search).has('init');
@@ -97,7 +102,7 @@ function restoreUiState() {
 
 const markDirty = () => {
   dirty = true;
-  if (window._hideWelcome) window._hideWelcome();
+  if (cv.hideWelcome) cv.hideWelcome();
   try { localStorage.setItem(STORAGE_KEY, serializeScene(scene)); } catch {}
   saveUiState();
 };
@@ -599,7 +604,7 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     e.stopPropagation(); // prevent UI emitter toggle / element select
     _touchPointers.set(e.pointerId, idx);
     mic.setTouchLevel(idx, 1);
-    if (window._hideWelcome) window._hideWelcome();
+    if (cv.hideWelcome) cv.hideWelcome();
     dirty = true;
   });
   stage.addEventListener('pointermove', e => {
@@ -865,7 +870,7 @@ window.addEventListener('resize', () => {
 
   // Update stats text each frame (only when visible).
   let _fpsFrames = 0, _fpsTime = performance.now(), _fpsVal = 0;
-  window._updateStats = function() {
+  cv.updateStats = function() {
     // FPS: update every 500ms
     _fpsFrames++;
     const now = performance.now();
@@ -939,7 +944,7 @@ window.addEventListener('resize', () => {
 
   // Render raw FFT (grey) + micBands bucket levels (colored bars) on a
   // shared log-frequency axis so both align visually.
-  window._updateMicSpectrum = function() {
+  cv.updateMicSpectrum = function() {
     if (specWin.hidden || !mic.active) return;
     const W = specCanvas.width, H = specCanvas.height;
     specCtx.fillStyle = '#000';
@@ -1063,7 +1068,7 @@ window.addEventListener('resize', () => {
 
   // Render actual synth output FFT — same approach as the mic spectrum
   // but reading from synth.analyser instead of mic.analyser.
-  window._updateSynthSpectrum = function() {
+  cv.updateSynthSpectrum = function() {
     if (specWin.hidden || !synth.active || !synth.analyser) return;
     const W = specCanvas.width, H = specCanvas.height;
     specCtx.fillStyle = '#000';
@@ -1165,7 +1170,7 @@ window.addEventListener('resize', () => {
   titlebar.addEventListener('pointerup', () => { dragOff = null; });
   titlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
 
-  window._updateSynthWaveform = function() {
+  cv.updateSynthWaveform = function() {
     if (wfWin.hidden || !synth.active || !synth.analyser) return;
     const W = wfCanvas.width, H = wfCanvas.height;
     wfCtx.fillStyle = '#000';
@@ -1241,13 +1246,13 @@ const songPlayer = new SongPlayer();
     welcomeEl.innerHTML = `<div><div class="welcome-title">${title}</div>${body}</div>`;
     welcomeEl.style.display = 'flex';
   }
-  window._hideWelcome = function() {
+  cv.hideWelcome = function() {
     if (welcomeEl) welcomeEl.style.display = 'none';
   };
 
   songSelect.addEventListener('change', async () => {
     const file = songSelect.value;
-    if (!file) { songPlayer.stop(); window._hideWelcome(); return; }
+    if (!file) { songPlayer.stop(); cv.hideWelcome(); return; }
     try {
       const resp = await fetch('songs/' + file);
       const json = await resp.json();
@@ -1259,7 +1264,7 @@ const songPlayer = new SongPlayer();
       seekSlider.disabled = false;
       seekSlider.max = songPlayer.duration;
       if (json.welcome) showWelcome(json.welcome);
-      else window._hideWelcome();
+      else cv.hideWelcome();
     } catch (err) {
       console.error('Song load failed:', err);
     }
@@ -1267,7 +1272,7 @@ const songPlayer = new SongPlayer();
 
   playBtn.addEventListener('click', () => {
     if (!songPlayer.song) return;
-    window._hideWelcome();
+    cv.hideWelcome();
     if (songPlayer.playing) {
       songPlayer.pause();
     } else {
@@ -1277,7 +1282,7 @@ const songPlayer = new SongPlayer();
   });
 
   stopBtn.addEventListener('click', () => {
-    window._hideWelcome();
+    cv.hideWelcome();
     songPlayer.stop();
   });
 
@@ -1304,7 +1309,7 @@ const songPlayer = new SongPlayer();
   };
 
   // Update transport display every frame.
-  window._updateSongTransport = () => {
+  cv.updateSongTransport = () => {
     if (!songPlayer.song) return;
     if (songPlayer.playing) {
       const t = songPlayer.time;
@@ -1322,14 +1327,14 @@ function frame() {
   // pause keyframe interpolation — the user owns element positions now.
   // Notes and automation continue playing.
   if (songPlayer.playing) {
-    if (window._hideWelcome) window._hideWelcome();
+    if (cv.hideWelcome) cv.hideWelcome();
     if (ui.dragging) songPlayer.keyframesPaused = true;
     const now = performance.now() / 1000;
     const dt = Math.min(now - lastFrameTime, 0.25);
     songPlayer.update(scene, dt);
     dirty = true;
   }
-  window._updateSongTransport();
+  cv.updateSongTransport();
 
   if (mic.active && !songPlayer.playing) {
     const s = mic.sample();
@@ -1439,11 +1444,13 @@ function frame() {
     push.updateFromSensors(tracer.sensorBins, tracer.binCount, scene.sensorCount, scene.emitter, scene.runtime);
   }
 
-  window._updateStats();
-  window._updateMicSpectrum();
-  window._updateSynthSpectrum();
-  window._updateSynthWaveform();
+  cv.updateStats();
+  cv.updateMicSpectrum();
+  cv.updateSynthSpectrum();
+  cv.updateSynthWaveform();
   requestAnimationFrame(frame);
 }
+// Expose key objects for console debugging: chromavox.scene, chromavox.synth, etc.
+Object.assign(cv, { scene, renderer, tracer, cpuTracer, gpuTracer, ui, mic, synth, songPlayer });
 requestAnimationFrame(frame);
 
