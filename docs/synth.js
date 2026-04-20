@@ -362,7 +362,7 @@ export class SensorSynth {
   setStep(stepSemi) {
     if (this.stepSemi === stepSemi) return;
     this.stepSemi = stepSemi;
-    if (this.active && this.mode !== 'log') this.rebuild(this.count);
+    if (this.active && this.mode !== 'log' && this.mode !== 'voice') this.rebuild(this.count);
   }
 
   async setSinkId(id) {
@@ -432,13 +432,15 @@ export class SensorSynth {
 
   rebuild(sensorCount) {
     if (!this.ctx || !this.workletNode) return;
-    const loHz = 80, hiHz = 6000;
+    const isLog = this.mode === 'log' || this.mode === 'voice';
+    const loHz = this.mode === 'voice' ? 100 : 80;
+    const hiHz = this.mode === 'voice' ? 4000 : 6000;
     const baseHz = this.baseHz ?? 130.81;
     const stepDeg = this.stepSemi ?? 1;
-    const scaleName = (this.mode && this.mode !== 'log') ? this.mode : 'chromatic';
+    const scaleName = (this.mode && !isLog) ? this.mode : 'chromatic';
     const freqs = new Float32Array(sensorCount);
     for (let i = 0; i < sensorCount; i++) {
-      if (this.mode !== 'log') {
+      if (!isLog) {
         freqs[i] = scaleFreq(baseHz, scaleName, i, stepDeg);
       } else {
         const t = (i + 0.5) / sensorCount;

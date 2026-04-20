@@ -226,7 +226,7 @@ function syncKeyboardScale() {
   const mode = document.getElementById('mic-mode').value;
   const base = currentBaseHz();
   const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
-  const scaleName = mode === 'log' ? 'chromatic' : mode;
+  const scaleName = (mode === 'log' || mode === 'voice') ? 'chromatic' : mode;
   mic.setKeyboardScale(scaleName, base, step);
   push.setScale(scaleName);
 }
@@ -276,7 +276,8 @@ synthBtn.addEventListener('click', async () => {
 });
 
 function syncSpanVisibility() {
-  const on = document.getElementById('mic-mode').value !== 'log';
+  const m = document.getElementById('mic-mode').value;
+  const on = m !== 'log' && m !== 'voice';
   document.getElementById('chromatic-span-row').style.visibility = on ? 'visible' : 'hidden';
 }
 syncSpanVisibility();
@@ -392,10 +393,11 @@ function rebuildEmitterLabels() {
   const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
   for (let i = 0; i < n; i++) {
     let txt;
-    if (mode !== 'log') {
+    if (mode !== 'log' && mode !== 'voice') {
       txt = freqToNote(scaleFreq(base, mode, i, stepSemi));
     } else {
-      const lo = 80, hi = 6000;
+      const lo = mode === 'voice' ? 100 : 80;
+      const hi = mode === 'voice' ? 4000 : 6000;
       const t = n > 1 ? i / (n - 1) : 0;
       const hz = Math.exp(Math.log(lo) + t * (Math.log(hi) - Math.log(lo)));
       txt = hz >= 1000 ? `${(hz / 1000).toFixed(1)}k` : `${Math.round(hz)}`;
@@ -423,10 +425,11 @@ function rebuildSensorLabels() {
   const stepDeg = synthStep();
   for (let i = 0; i < n; i++) {
     let txt;
-    if (mode !== 'log') {
+    if (mode !== 'log' && mode !== 'voice') {
       txt = freqToNote(scaleFreq(base, mode, i, stepDeg));
     } else {
-      const lo = 80, hi = 6000;
+      const lo = mode === 'voice' ? 100 : 80;
+      const hi = mode === 'voice' ? 4000 : 6000;
       const t = n > 1 ? i / (n - 1) : 0;
       const hz = Math.exp(Math.log(lo) + t * (Math.log(hi) - Math.log(lo)));
       txt = hz >= 1000 ? `${(hz / 1000).toFixed(1)}k` : `${Math.round(hz)}`;
@@ -553,8 +556,54 @@ function syncMicDeviceVisibility() {
   document.getElementById('midi-device-row').style.display = src === 'midi' ? '' : 'none';
   document.getElementById('midi-gain-row').style.display = src === 'midi' ? '' : 'none';
   document.getElementById('midi-debug-row').style.display = src === 'midi' ? '' : 'none';
+  document.getElementById('file-source-row').style.display = src === 'file' ? '' : 'none';
+  if (src !== 'file') document.getElementById('file-transport-row').style.display = 'none';
 }
 syncMicDeviceVisibility();
+
+// Audio file transport controls.
+const filePlayBtn = document.getElementById('file-play');
+const fileRestartBtn = document.getElementById('file-restart');
+const fileTimeLabel = document.getElementById('file-time');
+const fileTransportRow = document.getElementById('file-transport-row');
+
+filePlayBtn.addEventListener('click', () => {
+  if (mic._filePlaying) {
+    mic.filePause();
+    filePlayBtn.textContent = '▶';
+  } else {
+    mic.fileResume();
+    filePlayBtn.textContent = '❚❚';
+  }
+});
+fileRestartBtn.addEventListener('click', () => {
+  mic.fileRestart();
+  filePlayBtn.textContent = '❚❚';
+});
+
+// Audio file input: read file, store buffer, auto-enable.
+document.getElementById('audio-file-input').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  // Reset so re-selecting the same file fires 'change' again.
+  e.target.value = '';
+  const arrayBuf = await file.arrayBuffer();
+  // Auto-enable with the file source.
+  if (mic.active) { mic.disable(); }
+  document.getElementById('mic-source').value = 'file';
+  syncMicDeviceVisibility();
+  try {
+    await mic.enable('file', arrayBuf);
+    micBtn.textContent = 'Audio in: on';
+    micBtn.classList.add('active');
+    filePlayBtn.disabled = false;
+    fileRestartBtn.disabled = false;
+    filePlayBtn.textContent = '❚❚';
+    fileTransportRow.style.display = '';
+  } catch (err) {
+    alert('Audio file: ' + err.message);
+  }
+});
 
 document.getElementById('midi-gain').addEventListener('input', e => {
   const v = parseInt(e.target.value, 10) / 100;
@@ -708,13 +757,25 @@ document.getElementById('mic-source').addEventListener('change', async e => {
 
   if (e.target.value === 'midi') populateMidiDevices();
 
+  // Reset file transport UI whenever source changes.
+  filePlayBtn.disabled = true;
+  fileRestartBtn.disabled = true;
+  filePlayBtn.textContent = '▶';
+  fileTimeLabel.textContent = '0:00';
+
   if (!mic.active) return;
   detachPush();
   mic.disable();
+  // File source: don't auto-re-enable — wait for the file picker.
+  if (e.target.value === 'file') {
+    micBtn.textContent = 'Audio in: off';
+    micBtn.classList.remove('active');
+    return;
+  }
   try {
-    const dev = e.target.value === 'midi'
-      ? (document.getElementById('midi-device').value || null)
-      : (document.getElementById('mic-device').value || null);
+    let dev;
+    if (e.target.value === 'midi') dev = document.getElementById('midi-device').value || null;
+    else dev = document.getElementById('mic-device').value || null;
     await mic.enable(e.target.value, dev);
     if (e.target.value === 'midi') attachPush();
   } catch (err) {
@@ -829,9 +890,10 @@ micBtn.addEventListener('click', async () => {
   if (!mic.active) {
     try {
       const src = document.getElementById('mic-source').value;
-      const dev = src === 'midi'
-        ? (document.getElementById('midi-device').value || null)
-        : (document.getElementById('mic-device').value || null);
+      let dev;
+      if (src === 'midi') dev = document.getElementById('midi-device').value || null;
+      else if (src === 'file') dev = mic._pendingFileBuffer || null;
+      else dev = document.getElementById('mic-device').value || null;
       await mic.enable(src, dev);
       if (src === 'midi') { populateMidiDevices(); attachPush(); }
       micBtn.textContent = 'Audio in: on';
@@ -1008,8 +1070,9 @@ window.addEventListener('resize', () => {
 
     // Compute the frequency range from the bucket endpoints.
     let loHz, hiHz;
-    if (micMode === 'log') {
-      loHz = 80; hiHz = 6000;
+    if (micMode === 'log' || micMode === 'voice') {
+      loHz = micMode === 'voice' ? 100 : 80;
+      hiHz = micMode === 'voice' ? 4000 : 6000;
     } else {
       loHz = scaleFreq(baseHz, micMode, 0, step) * 0.8;
       hiHz = scaleFreq(baseHz, micMode, n, step) * 1.2;
@@ -1043,9 +1106,11 @@ window.addEventListener('resize', () => {
         const v = levels[i];
         if (v < 0.01) continue;
         let f0, f1;
-        if (micMode === 'log') {
-          f0 = Math.exp(Math.log(80) + (i / n) * (Math.log(6000) - Math.log(80)));
-          f1 = Math.exp(Math.log(80) + ((i + 1) / n) * (Math.log(6000) - Math.log(80)));
+        if (micMode === 'log' || micMode === 'voice') {
+          const lo = micMode === 'voice' ? 100 : 80;
+          const hi = micMode === 'voice' ? 4000 : 6000;
+          f0 = Math.exp(Math.log(lo) + (i / n) * (Math.log(hi) - Math.log(lo)));
+          f1 = Math.exp(Math.log(lo) + ((i + 1) / n) * (Math.log(hi) - Math.log(lo)));
         } else {
           const fc = scaleFreq(baseHz, micMode, i, step);
           const fcN = scaleFreq(baseHz, micMode, i + 1, step);
@@ -1137,8 +1202,9 @@ window.addEventListener('resize', () => {
     const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
     const n = scene.emitter.count;
     let loHz, hiHz;
-    if (micMode === 'log') {
-      loHz = 80; hiHz = 6000;
+    if (micMode === 'log' || micMode === 'voice') {
+      loHz = micMode === 'voice' ? 100 : 80;
+      hiHz = micMode === 'voice' ? 4000 : 6000;
     } else {
       loHz = scaleFreq(baseHz, micMode, 0, step) * 0.8;
       hiHz = scaleFreq(baseHz, micMode, n, step) * 1.2;
@@ -1508,6 +1574,13 @@ function frame() {
   cv.updateMicSpectrum();
   cv.updateSynthSpectrum();
   cv.updateSynthWaveform();
+  // File playback time display.
+  if (mic.source === 'file' && mic._fileBuffer) {
+    const t = mic.fileTime();
+    const d = mic.fileDuration();
+    const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`;
+    fileTimeLabel.textContent = `${fmt(t)} / ${fmt(d)}`;
+  }
   requestAnimationFrame(frame);
 }
 // Expose key objects for console debugging: chromavox.scene, chromavox.synth, etc.

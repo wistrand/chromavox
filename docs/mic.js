@@ -287,6 +287,21 @@ export class MicModulator {
       bn.start();
       nodes.push(bn);
       srcNode = bn;
+    } else if (source === 'file') {
+      // Audio file input. The file ArrayBuffer is passed as deviceId.
+      if (!deviceId) throw new Error('No audio file provided');
+      const audioData = await ctx.decodeAudioData(deviceId);
+      this._fileBuffer = audioData;
+      this._fileStartTime = ctx.currentTime;
+      this._fileOffset = 0;
+      this._filePlaying = true;
+      const bn = ctx.createBufferSource();
+      bn.buffer = audioData;
+      bn.loop = true;
+      bn.start(0, 0);
+      nodes.push(bn);
+      srcNode = bn;
+      this._fileSource = bn;
     } else {
       throw new Error('unknown mic source: ' + source);
     }
@@ -341,8 +356,9 @@ export class MicModulator {
     const freqs = this._knownFrequencies();
     if (!freqs) return null;
     const levels = new Float32Array(n);
-    if (mode === 'log') {
-      const loHz = 80, hiHz = 6000;
+    if (mode === 'log' || mode === 'voice') {
+      const loHz = mode === 'voice' ? 100 : 80;
+      const hiHz = mode === 'voice' ? 4000 : 6000;
       const logLo = Math.log(loHz), logRange = Math.log(hiHz) - logLo;
       for (const { hz, amp } of freqs) {
         if (hz < loHz || hz > hiHz) continue;
@@ -418,12 +434,69 @@ export class MicModulator {
     if (this._midiAccess) { this._midiAccess.onstatechange = null; this._midiAccess = null; }
     this._midiNotes = null;
     this._touchLevels = null;
+    this._fileSource = null;
+    this._fileBuffer = null;
+    this._filePlaying = false;
+    this._fileOffset = 0;
     for (const n of this.nodes) { try { n.stop?.(); } catch {} }
     this.nodes = [];
     this.ctx?.close();
     this.stream = null;
     this.ctx = null;
     this.analyser = null;
+  }
+
+  // --- Audio file transport ---
+  filePause() {
+    if (this.source !== 'file' || !this._filePlaying || !this._fileSource) return;
+    // Record current position within the buffer (modulo loop).
+    const elapsed = this.ctx.currentTime - this._fileStartTime + this._fileOffset;
+    this._fileOffset = elapsed % this._fileBuffer.duration;
+    try { this._fileSource.stop(); } catch {}
+    this._fileSource.disconnect();
+    this._fileSource = null;
+    this._filePlaying = false;
+  }
+
+  fileResume() {
+    if (this.source !== 'file' || this._filePlaying || !this._fileBuffer) return;
+    const bn = this.ctx.createBufferSource();
+    bn.buffer = this._fileBuffer;
+    bn.loop = true;
+    bn.connect(this.analyser);
+    bn.start(0, this._fileOffset);
+    this._fileSource = bn;
+    this._fileStartTime = this.ctx.currentTime;
+    this._filePlaying = true;
+  }
+
+  fileRestart() {
+    if (this.source !== 'file' || !this._fileBuffer) return;
+    if (this._fileSource) {
+      try { this._fileSource.stop(); } catch {}
+      this._fileSource.disconnect();
+    }
+    this._fileOffset = 0;
+    const bn = this.ctx.createBufferSource();
+    bn.buffer = this._fileBuffer;
+    bn.loop = true;
+    bn.connect(this.analyser);
+    bn.start(0, 0);
+    this._fileSource = bn;
+    this._fileStartTime = this.ctx.currentTime;
+    this._filePlaying = true;
+  }
+
+  fileTime() {
+    if (this.source !== 'file' || !this._fileBuffer) return 0;
+    if (this._filePlaying) {
+      return (this.ctx.currentTime - this._fileStartTime + this._fileOffset) % this._fileBuffer.duration;
+    }
+    return this._fileOffset;
+  }
+
+  fileDuration() {
+    return this._fileBuffer ? this._fileBuffer.duration : 0;
   }
 
   sample() {
@@ -477,6 +550,11 @@ export function pitchToWavelength(hz) {
 // Uses getFloatFrequencyData (dB) → linear magnitude → peak per bucket
 // → steep gamma for sharp vocoder-like channel separation.
 // mode: 'log' for 80–6000 Hz log-spaced; any other value is a scale name.
+// Peak-hold for file source normalization — rises instantly, decays at
+// ~0.95/frame (~1 s to half at 60 fps).
+let _peakHold = 0;
+const PEAK_DECAY = 0.95;
+
 export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
   if (!mic.active || !mic.freqFloat) return null;
   const fd = mic.freqFloat;
@@ -484,27 +562,25 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
   const binCount = fd.length;
   const out = new Float32Array(n);
 
-  // Map dB to 0-1 using the analyser's fixed range. Same mapping the
-  // byte API uses internally, but from the float data for precision.
+  // Work in linear amplitude so dynamic range is preserved.
   const minDb = mic.analyser.minDecibels;   // default -100
   const maxDb = mic.analyser.maxDecibels;   // default -30
   const dbRange = maxDb - minDb;
+  const dbToLin = db => db <= minDb ? 0 : Math.pow(10, db / 20);
+  // dB-normalized 0-1 for absolute (non-file) sources.
   const dbNorm = db => Math.max(0, Math.min(1, (db - minDb) / dbRange));
 
-  const floor = 0.15;
-  const shape = raw => {
-    const v = Math.max(0, (raw - floor) / (1 - floor));
-    return Math.pow(v, 1.5);
-  };
+  // File source uses peak-normalized linear; everything else uses the
+  // original absolute dB mapping so silence looks quiet.
+  const isFile = mic.source === 'file';
 
-  // Noise gate on the normalized scale (~10% of dB range from the bottom).
-  const NOISE_GATE = 0.10;
+  const NOISE_GATE = 0.10;          // absolute dB-norm threshold
+  const NOISE_GATE_LIN = 0.001;     // linear threshold for file
 
   let framePeak = 0;
 
-  if (mode !== 'log') {
+  if (mode !== 'log' && mode !== 'voice') {
     const scaleName = mode;
-    // First pass: peak per bucket in linear magnitude.
     for (let i = 0; i < n; i++) {
       const fc = scaleFreq(baseHz, scaleName, i, stepSemi);
       const fcNext = scaleFreq(baseHz, scaleName, i + 1, stepSemi);
@@ -517,18 +593,29 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
       const b1 = Math.max(b0 + 1, Math.ceil(f1 / nyquist * binCount));
       let peak = 0;
       for (let b = b0; b < b1 && b < binCount; b++) {
-        const v = dbNorm(fd[b]);
+        const v = isFile ? dbToLin(fd[b]) : dbNorm(fd[b]);
         if (v > peak) peak = v;
       }
       out[i] = peak;
       if (peak > framePeak) framePeak = peak;
     }
-    if (framePeak < NOISE_GATE) return out.fill(0), out;
-    for (let i = 0; i < n; i++) out[i] = shape(out[i]);
+    if (isFile) {
+      _peakHold = Math.max(framePeak, _peakHold * PEAK_DECAY);
+      if (_peakHold < NOISE_GATE_LIN) return out.fill(0), out;
+      const inv = 1 / _peakHold;
+      for (let i = 0; i < n; i++) out[i] = Math.sqrt(out[i] * inv);
+    } else {
+      if (framePeak < NOISE_GATE) return out.fill(0), out;
+      for (let i = 0; i < n; i++) {
+        const v = Math.max(0, (out[i] - 0.15) / 0.85);
+        out[i] = Math.pow(v, 1.5);
+      }
+    }
     return out;
   }
 
-  const loHz = 80, hiHz = 6000;
+  const loHz = mode === 'voice' ? 100 : 80;
+  const hiHz = mode === 'voice' ? 4000 : 6000;
   const logLo = Math.log(loHz), logHi = Math.log(hiHz);
   for (let i = 0; i < n; i++) {
     const f0 = Math.exp(logLo + (i / n) * (logHi - logLo));
@@ -537,13 +624,23 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
     const b1 = Math.max(b0 + 1, Math.ceil(f1 / nyquist * binCount));
     let peak = 0;
     for (let b = b0; b < b1 && b < binCount; b++) {
-      const v = dbNorm(fd[b]);
+      const v = isFile ? dbToLin(fd[b]) : dbNorm(fd[b]);
       if (v > peak) peak = v;
     }
     out[i] = peak;
     if (peak > framePeak) framePeak = peak;
   }
-  if (framePeak < NOISE_GATE) return out.fill(0), out;
-  for (let i = 0; i < n; i++) out[i] = shape(out[i]);
+  if (isFile) {
+    _peakHold = Math.max(framePeak, _peakHold * PEAK_DECAY);
+    if (_peakHold < NOISE_GATE_LIN) return out.fill(0), out;
+    const inv = 1 / _peakHold;
+    for (let i = 0; i < n; i++) out[i] = Math.sqrt(out[i] * inv);
+  } else {
+    if (framePeak < NOISE_GATE) return out.fill(0), out;
+    for (let i = 0; i < n; i++) {
+      const v = Math.max(0, (out[i] - 0.15) / 0.85);
+      out[i] = Math.pow(v, 1.5);
+    }
+  }
   return out;
 }
