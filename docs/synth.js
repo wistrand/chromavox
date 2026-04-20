@@ -37,7 +37,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.fullScale = 1;
     this.sensorCount = 0;
     this.partials = 1;
-    this.carrier = 'sine'; // 'sine' | 'noise' | 'acid'
+    this.carrier = 'sine'; // 'sine' | 'noise' | 'acid' | 'fm' | 'supersaw'
+    this.fmRatio = 2.0;     // modulator/carrier frequency ratio
+    this.fmDepth = 0.5;     // env amount [0, 1] → modulation index scale
+    this.ssDetune = 0.3;    // supersaw detune [0, 1] → 0-50 cents spread
     this.acidRes = 0.85;    // resonance [0, 1] → feedback k
     this.acidEnv = 0.6;     // env amount [0, 1] → octaves of cutoff sweep
     this.acidCutoff = 0.5;  // base cutoff [0, 1] → 80-8000 Hz
@@ -54,6 +57,12 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         if (this.sensorCount > 0) this._rebuildPartials();
       } else if (d.type === 'carrier') {
         this.carrier = d.value;
+      } else if (d.type === 'fmRatio') {
+        this.fmRatio = d.value;
+      } else if (d.type === 'fmDepth') {
+        this.fmDepth = d.value;
+      } else if (d.type === 'ssDetune') {
+        this.ssDetune = d.value;
       } else if (d.type === 'acidRes') {
         this.acidRes = d.value;
       } else if (d.type === 'acidEnv') {
@@ -95,7 +104,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       // + smoothed cutoff to avoid clicks from abrupt sweeps.
       this.voices.push({ freq: f, phases, gains, targetGains,
         bp1: 0, bp2: 0,
-        sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: 0 });
+        sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: 0,
+        modPhase: 0,
+        ssPhases: new Float32Array(7) });
     }
   }
   process(inputs, outputs) {
@@ -109,6 +120,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const sc = this.sensorCount;
     const isNoise = this.carrier === 'noise';
     const isAcid = this.carrier === 'acid';
+    const isFM = this.carrier === 'fm';
+    const isSupersaw = this.carrier === 'supersaw';
     // Compute target gains from latest bins snapshot.
     // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
     // the 0-1 micGain scale, then apply floor + gamma. This matches the
@@ -116,7 +129,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // Noise and acid carriers use K=1 (single band per voice).
     if (bins && bins.length >= sc * bc) {
       const fs = this.fullScale;
-      const gainK = (isNoise || isAcid) ? 1 : K;
+      const gainK = (isNoise || isAcid || isFM || isSupersaw) ? 1 : K;
       const partialFS = fs / gainK;
       const voiceScale = 1 / Math.sqrt(sc * gainK);
       for (let s = 0; s < sc; s++) {
@@ -219,6 +232,70 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         v.lp1 = s1; v.lp2 = s2; v.lp3 = s3;
         v.smoothCutoff = sCutoff;
         v.gains[0] = voiceGain;
+      } else if (isFM) {
+        // FM synthesis carrier. Modulator sine modulates carrier sine.
+        // Sensor energy (voiceGain) drives modulation index — low energy
+        // = clean sine, high energy = bright metallic harmonics.
+        let voiceGain = v.gains[0];
+        const voiceTarget = v.targetGains[0];
+        const cFreq = v.freq;
+        const mFreq = cFreq * this.fmRatio;
+        const maxIndex = this.fmDepth * 8; // mod index 0-8
+        const cInc = twoPi * cFreq * invSr;
+        const mInc = twoPi * mFreq * invSr;
+        let cPhase = v.phases.length > 0 ? v.phases[0] : 0;
+        let mPhase = v.modPhase;
+        for (let i = 0; i < len; i++) {
+          voiceGain += (voiceTarget - voiceGain) * smooth;
+          const modIndex = voiceGain * maxIndex;
+          const mod = Math.sin(mPhase) * modIndex;
+          const sample = Math.sin(cPhase + mod) * voiceGain;
+          buf[i] += sample;
+          cPhase += cInc;
+          mPhase += mInc;
+          if (cPhase > twoPi) cPhase -= twoPi;
+          if (mPhase > twoPi) mPhase -= twoPi;
+        }
+        if (v.phases.length > 0) v.phases[0] = cPhase;
+        v.modPhase = mPhase;
+        v.gains[0] = voiceGain;
+      } else if (isSupersaw) {
+        // Supersaw: 7 detuned saws (center + 3 pairs symmetrically spread).
+        // Detune in cents, spread across pairs: ±1/3, ±2/3, ±1 of max.
+        // PolyBLEP on each saw for antialiasing. Normalized by 1/7.
+        let voiceGain = v.gains[0];
+        const voiceTarget = v.targetGains[0];
+        const baseFreq = v.freq;
+        const maxCents = this.ssDetune * 50; // 0-50 cents
+        const detuneRatios = [
+          1,
+          Math.pow(2, maxCents / 3 / 1200),
+          Math.pow(2, -maxCents / 3 / 1200),
+          Math.pow(2, maxCents * 2 / 3 / 1200),
+          Math.pow(2, -maxCents * 2 / 3 / 1200),
+          Math.pow(2, maxCents / 1200),
+          Math.pow(2, -maxCents / 1200),
+        ];
+        const dts = new Float32Array(7);
+        for (let j = 0; j < 7; j++) dts[j] = baseFreq * detuneRatios[j] * invSr;
+        const ph = v.ssPhases;
+        for (let i = 0; i < len; i++) {
+          voiceGain += (voiceTarget - voiceGain) * smooth;
+          let sum = 0;
+          for (let j = 0; j < 7; j++) {
+            ph[j] += dts[j];
+            let saw = 2 * ph[j] - 1;
+            if (ph[j] >= 1) { ph[j] -= 1; saw = 2 * ph[j] - 1; }
+            // PolyBLEP correction
+            const t1 = ph[j] / dts[j];
+            if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
+            const t2 = (1 - ph[j]) / dts[j];
+            if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
+            sum += saw;
+          }
+          buf[i] += sum * (1 / 7) * voiceGain;
+        }
+        v.gains[0] = voiceGain;
       } else if (isNoise) {
         // Unity-gain bandpass noise carrier (Csound resonz topology).
         // Zeros at DC and Nyquist via (y0 - y2) cancel the all-pole
@@ -287,6 +364,21 @@ export class SensorSynth {
   setPartials(n) {
     if (!this.workletNode) return;
     this.workletNode.port.postMessage({ type: 'partials', value: n });
+  }
+
+  setFmRatio(v) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'fmRatio', value: v });
+  }
+
+  setFmDepth(v) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'fmDepth', value: v });
+  }
+
+  setSsDetune(v) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'ssDetune', value: v });
   }
 
   setAcidRes(v) {
