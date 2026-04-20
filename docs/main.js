@@ -11,6 +11,7 @@ import { SensorSynth } from './synth.js';
 import { PushController } from './push.js';
 import { scaleFreq } from './spectrum.js';
 import { SongPlayer } from './song.js';
+import { CARRIERS, ALL_PARAM_IDS } from './carriers.js';
 
 const STORAGE_KEY = 'chromavox-scene';
 
@@ -62,9 +63,9 @@ const UI_STORAGE_KEY = 'chromavox-ui';
 const UI_CONTROL_IDS = [
   'mic-source', 'mic-device', 'midi-device', 'mic-mode', 'mic-base',
   'chromatic-span', 'mic-smoothing', 'bucket-color', 'synth-independent',
-  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials',
-  'acid-res', 'acid-env', 'acid-cutoff', 'acid-decay', 'acid-drive',
-  'fm-ratio', 'fm-depth', 'ss-detune', 'synth-device',
+  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier',
+  ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
+  'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
   'midi-gain', 'sim-rate', 'distort-toggle', 'no-overlap',
 ];
@@ -739,72 +740,80 @@ volSlider.addEventListener('input', () => {
   synth._volumeOverride = true;
 });
 
-const partialsSlider = document.getElementById('synth-partials');
-const partialsLabel = document.getElementById('synth-partials-val');
-partialsSlider.addEventListener('input', () => {
-  const v = parseInt(partialsSlider.value, 10) || 1;
-  partialsLabel.textContent = v;
-  synth.setPartials(v);
-});
-
+// --- Carrier param UI (generated from carriers.js schema) ---
 const carrierSel = document.getElementById('synth-carrier');
-const partialsRow = document.getElementById('partials-row');
-const acidRows = ['acid-res-row', 'acid-env-row', 'acid-cutoff-row', 'acid-decay-row', 'acid-drive-row'];
-const fmRows = ['fm-ratio-row', 'fm-depth-row'];
-const ssRows = ['ss-detune-row'];
+const carrierParamsHost = document.getElementById('carrier-params');
+
+// Build dropdown options from schema.
+for (const [key, def] of Object.entries(CARRIERS)) {
+  const opt = document.createElement('option');
+  opt.value = key; opt.textContent = def.label;
+  if (key === 'sine') opt.selected = true;
+  carrierSel.appendChild(opt);
+}
+
+// Build slider rows for all carriers. Each row has id="cp-{paramId}-row".
+// Slider has id="cp-{paramId}", value span has id="cp-{paramId}-val".
+const _cpRows = {}; // carrierKey → [rowElement, ...]
+for (const [cKey, cDef] of Object.entries(CARRIERS)) {
+  _cpRows[cKey] = [];
+  for (const p of cDef.params) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.display = 'none';
+    row.id = 'cp-' + p.id + '-row';
+    const label = document.createElement('label');
+    const steps = p.step || 0.01;
+    const sliderMin = Math.round(p.min / steps);
+    const sliderMax = Math.round(p.max / steps);
+    const sliderDefault = Math.round(p.default / steps);
+    const displayFn = p.display || (v => v.toFixed(2));
+    const inp = document.createElement('input');
+    inp.type = 'range'; inp.min = sliderMin; inp.max = sliderMax;
+    inp.value = sliderDefault; inp.step = 1; inp.id = 'cp-' + p.id;
+    const span = document.createElement('span');
+    span.id = 'cp-' + p.id + '-val';
+    span.textContent = displayFn(p.default);
+    label.textContent = p.label + ' ';
+    label.appendChild(inp);
+    label.appendChild(span);
+    row.appendChild(label);
+    carrierParamsHost.appendChild(row);
+    _cpRows[cKey].push(row);
+    // Listener: map slider int → real value via step, send to worklet.
+    inp.addEventListener('input', () => {
+      const v = parseInt(inp.value, 10) * steps;
+      span.textContent = displayFn(v);
+      synth.setParam(p.id, v);
+    });
+  }
+}
+
 function syncCarrierVisibility() {
   const c = carrierSel.value;
-  partialsRow.style.display = c === 'sine' ? '' : 'none';
-  for (const id of acidRows) document.getElementById(id).style.display = c === 'acid' ? '' : 'none';
-  for (const id of fmRows) document.getElementById(id).style.display = c === 'fm' ? '' : 'none';
-  for (const id of ssRows) document.getElementById(id).style.display = c === 'supersaw' ? '' : 'none';
+  for (const [cKey, rows] of Object.entries(_cpRows)) {
+    const show = cKey === c;
+    for (const row of rows) row.style.display = show ? '' : 'none';
+  }
 }
-carrierSel.addEventListener('change', () => { synth.setCarrier(carrierSel.value); syncCarrierVisibility(); });
-const acidSliders = [
-  ['acid-res',    'acid-res-val',    v => synth.setAcidRes(v)],
-  ['acid-env',    'acid-env-val',    v => synth.setAcidEnv(v)],
-  ['acid-cutoff', 'acid-cutoff-val', v => synth.setAcidCutoff(v)],
-  ['acid-decay',  'acid-decay-val',  v => synth.setAcidDecay(v)],
-  ['acid-drive',  'acid-drive-val',  v => synth.setAcidDrive(v)],
-];
-for (const [sliderId, valId, setter] of acidSliders) {
-  document.getElementById(sliderId).addEventListener('input', e => {
-    const v = parseInt(e.target.value, 10) / 100;
-    document.getElementById(valId).textContent = v.toFixed(2);
-    setter(v);
-  });
-}
-// Supersaw slider
-const ssDetuneSlider = document.getElementById('ss-detune');
-ssDetuneSlider.addEventListener('input', () => {
-  const v = parseInt(ssDetuneSlider.value, 10) / 100;
-  document.getElementById('ss-detune-val').textContent = v.toFixed(2);
-  synth.setSsDetune(v);
-});
-// FM sliders: ratio maps 10-80 → 1.0-8.0
-const fmRatioSlider = document.getElementById('fm-ratio');
-const fmDepthSlider = document.getElementById('fm-depth');
-fmRatioSlider.addEventListener('input', () => {
-  const v = parseInt(fmRatioSlider.value, 10) / 10;
-  document.getElementById('fm-ratio-val').textContent = v.toFixed(1);
-  synth.setFmRatio(v);
-});
-fmDepthSlider.addEventListener('input', () => {
-  const v = parseInt(fmDepthSlider.value, 10) / 100;
-  document.getElementById('fm-depth-val').textContent = v.toFixed(2);
-  synth.setFmDepth(v);
+carrierSel.addEventListener('change', () => {
+  synth.setCarrier(carrierSel.value);
+  syncCarrierVisibility();
 });
 syncCarrierVisibility();
 
 const _applyInitialPartials = () => {
-  synth.setPartials(parseInt(partialsSlider.value, 10) || 1);
   synth.setCarrier(carrierSel.value);
-  for (const [sliderId, , setter] of acidSliders) {
-    setter(parseInt(document.getElementById(sliderId).value, 10) / 100);
+  // Send all carrier params to the worklet from current slider values.
+  for (const cDef of Object.values(CARRIERS)) {
+    for (const p of cDef.params) {
+      const inp = document.getElementById('cp-' + p.id);
+      if (inp) {
+        const steps = p.step || 0.01;
+        synth.setParam(p.id, parseInt(inp.value, 10) * steps);
+      }
+    }
   }
-  synth.setFmRatio(parseInt(fmRatioSlider.value, 10) / 10);
-  synth.setFmDepth(parseInt(fmDepthSlider.value, 10) / 100);
-  synth.setSsDetune(parseInt(ssDetuneSlider.value, 10) / 100);
   syncCarrierVisibility();
 };
 
@@ -1340,15 +1349,7 @@ const songPlayer = new SongPlayer();
   songPlayer.onParamChange = (param, value) => {
     if (param === 'volume' && !synth._volumeOverride) synth.setVolume(value);
     else if (param === 'carrier') synth.setCarrier(value);
-    else if (param === 'acidRes') synth.setAcidRes(value);
-    else if (param === 'acidEnv') synth.setAcidEnv(value);
-    else if (param === 'acidCutoff') synth.setAcidCutoff(value);
-    else if (param === 'acidDecay') synth.setAcidDecay(value);
-    else if (param === 'acidDrive') synth.setAcidDrive(value);
-    else if (param === 'fmRatio') synth.setFmRatio(value);
-    else if (param === 'fmDepth') synth.setFmDepth(value);
-    else if (param === 'ssDetune') synth.setSsDetune(value);
-    else if (param === 'partials') synth.setPartials(value);
+    else synth.setParam(param, value);
   };
 
   // Update transport display every frame.

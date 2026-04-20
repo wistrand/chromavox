@@ -72,17 +72,9 @@
       <button id="synth-options" type="button" class="opts-toggle" aria-label="Audio out options">▾</button>
       <div id="synth-menu" class="options-menu">
         <div class="row"><label>Device <select id="synth-device"><option value="">default</option></select></label></div>
-        <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="100" value="25"><span id="synth-vol-val">25</span></label></div>
-        <div class="row"><label>Synth <select id="synth-carrier"><option value="sine" selected>sine</option><option value="noise">noise</option><option value="acid">acid</option><option value="fm">FM</option><option value="supersaw">supersaw</option></select></label></div>
-        <div class="row" id="partials-row"><label>Partials <input id="synth-partials" type="range" min="1" max="8" value="6" step="1"><span id="synth-partials-val">6</span></label></div>
-        <div class="row" id="acid-res-row" style="display:none"><label>Resonance <input id="acid-res" type="range" min="0" max="100" value="85"><span id="acid-res-val">0.85</span></label></div>
-        <div class="row" id="acid-env-row" style="display:none"><label>Env amount <input id="acid-env" type="range" min="0" max="100" value="60"><span id="acid-env-val">0.60</span></label></div>
-        <div class="row" id="acid-cutoff-row" style="display:none"><label>Cutoff <input id="acid-cutoff" type="range" min="0" max="100" value="50"><span id="acid-cutoff-val">0.50</span></label></div>
-        <div class="row" id="acid-decay-row" style="display:none"><label>Decay <input id="acid-decay" type="range" min="0" max="100" value="40"><span id="acid-decay-val">0.40</span></label></div>
-        <div class="row" id="acid-drive-row" style="display:none"><label>Drive <input id="acid-drive" type="range" min="0" max="100" value="60"><span id="acid-drive-val">0.60</span></label></div>
-        <div class="row" id="ss-detune-row" style="display:none"><label>Detune <input id="ss-detune" type="range" min="0" max="100" value="30"><span id="ss-detune-val">0.30</span></label></div>
-        <div class="row" id="fm-ratio-row" style="display:none"><label>Ratio <input id="fm-ratio" type="range" min="10" max="80" value="20" step="1"><span id="fm-ratio-val">2.0</span></label></div>
-        <div class="row" id="fm-depth-row" style="display:none"><label>Depth <input id="fm-depth" type="range" min="0" max="100" value="50"><span id="fm-depth-val">0.50</span></label></div>
+        <div class="row"><label>Volume <input id="synth-vol" type="range" min="0" max="200" value="25"><span id="synth-vol-val">25</span></label></div>
+        <div class="row"><label>Synth <select id="synth-carrier"></select></label></div>
+        <div id="carrier-params"></div>
         <div class="row"><label><input id="synth-independent" type="checkbox"> Independent scale</label></div>
         <div class="row" id="synth-mode-row"><label>Mode <select id="synth-mode">
           <option value="log">log</option>

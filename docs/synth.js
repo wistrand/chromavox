@@ -9,6 +9,7 @@
 // block. Voices with zero energy are skipped (free voice stealing).
 
 import { scaleFreq } from './spectrum.js';
+import { CARRIERS, ALL_PARAM_IDS, PARAM_DEFAULTS } from './carriers.js';
 
 const WORKLET_SRC = `
 // Fast tanh via lookup table. 4096 entries over [-4, 4].
@@ -37,15 +38,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.fullScale = 1;
     this.sensorCount = 0;
     this.partials = 1;
-    this.carrier = 'sine'; // 'sine' | 'noise' | 'acid' | 'fm' | 'supersaw'
-    this.fmRatio = 2.0;     // modulator/carrier frequency ratio
-    this.fmDepth = 0.5;     // env amount [0, 1] → modulation index scale
-    this.ssDetune = 0.3;    // supersaw detune [0, 1] → 0-50 cents spread
-    this.acidRes = 0.85;    // resonance [0, 1] → feedback k
-    this.acidEnv = 0.6;     // env amount [0, 1] → octaves of cutoff sweep
-    this.acidCutoff = 0.5;  // base cutoff [0, 1] → 80-8000 Hz
-    this.acidDecay = 0.4;   // envelope decay [0, 1] → 30ms-2s time constant
-    this.acidDrive = 0.6;   // post-filter drive [0, 1] → 1-5× saturation
+    this.carrier = 'sine';
+    // Carrier params — defaults injected from carriers.js at build time.
+    this.P = ${JSON.stringify(PARAM_DEFAULTS)};
     this.port.onmessage = e => {
       const d = e.data;
       if (d.type === 'bins') {
@@ -54,25 +49,12 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         this._rebuild(d.freqs, d.binCount, d.sensorCount, d.fullScale);
       } else if (d.type === 'partials') {
         this.partials = d.value;
+        this.P.partials = d.value;
         if (this.sensorCount > 0) this._rebuildPartials();
       } else if (d.type === 'carrier') {
         this.carrier = d.value;
-      } else if (d.type === 'fmRatio') {
-        this.fmRatio = d.value;
-      } else if (d.type === 'fmDepth') {
-        this.fmDepth = d.value;
-      } else if (d.type === 'ssDetune') {
-        this.ssDetune = d.value;
-      } else if (d.type === 'acidRes') {
-        this.acidRes = d.value;
-      } else if (d.type === 'acidEnv') {
-        this.acidEnv = d.value;
-      } else if (d.type === 'acidCutoff') {
-        this.acidCutoff = d.value;
-      } else if (d.type === 'acidDecay') {
-        this.acidDecay = d.value;
-      } else if (d.type === 'acidDrive') {
-        this.acidDrive = d.value;
+      } else if (d.type in this.P) {
+        this.P[d.type] = d.value;
       }
     };
   }
@@ -174,16 +156,16 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         const voiceTarget = v.targetGains[0];
         const baseFreq = v.freq;
         const dt = baseFreq * invSr;
-        const acidRes = this.acidRes;
-        const acidEnv = this.acidEnv;
+        const acidRes = this.P.acidRes;
+        const acidEnv = this.P.acidEnv;
         // Base cutoff: 80-8000 Hz log-mapped from the knob [0,1].
-        const baseCutoffHz = 80 * Math.pow(100, this.acidCutoff);
+        const baseCutoffHz = 80 * Math.pow(100, this.P.acidCutoff);
         // Decay: per-sample smoothing constant. Maps [0,1] → 30ms-2s.
         // Lower values = longer decay = slower squelch = more 303.
-        const decayMs = 0.03 + this.acidDecay * 1.97; // 30ms to 2s
+        const decayMs = 0.03 + this.P.acidDecay * 1.97; // 30ms to 2s
         const envSmooth = 1 - Math.exp(-1 / (decayMs * sampleRate));
         // Drive: 1× (clean) to 5× (screaming).
-        const driveAmt = 1 + this.acidDrive * 4;
+        const driveAmt = 1 + this.P.acidDrive * 4;
         // Feedback coefficient: k=0 → no resonance, k≈4.5 → self-osc.
         const k = acidRes * 4.5;
         let phase = v.sawPhase;
@@ -239,8 +221,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
         const cFreq = v.freq;
-        const mFreq = cFreq * this.fmRatio;
-        const maxIndex = this.fmDepth * 8; // mod index 0-8
+        const mFreq = cFreq * this.P.fmRatio;
+        const maxIndex = this.P.fmDepth * 8; // mod index 0-8
         const cInc = twoPi * cFreq * invSr;
         const mInc = twoPi * mFreq * invSr;
         let cPhase = v.phases.length > 0 ? v.phases[0] : 0;
@@ -266,7 +248,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
         const baseFreq = v.freq;
-        const maxCents = this.ssDetune * 50; // 0-50 cents
+        const maxCents = this.P.ssDetune * 50; // 0-50 cents
         const detuneRatios = [
           1,
           Math.pow(2, maxCents / 3 / 1200),
@@ -366,44 +348,10 @@ export class SensorSynth {
     this.workletNode.port.postMessage({ type: 'partials', value: n });
   }
 
-  setFmRatio(v) {
+  // Generic carrier param setter — works for all params in carriers.js.
+  setParam(id, v) {
     if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'fmRatio', value: v });
-  }
-
-  setFmDepth(v) {
-    if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'fmDepth', value: v });
-  }
-
-  setSsDetune(v) {
-    if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'ssDetune', value: v });
-  }
-
-  setAcidRes(v) {
-    if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'acidRes', value: v });
-  }
-
-  setAcidEnv(v) {
-    if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'acidEnv', value: v });
-  }
-
-  setAcidCutoff(v) {
-    if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'acidCutoff', value: v });
-  }
-
-  setAcidDecay(v) {
-    if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'acidDecay', value: v });
-  }
-
-  setAcidDrive(v) {
-    if (!this.workletNode) return;
-    this.workletNode.port.postMessage({ type: 'acidDrive', value: v });
+    this.workletNode.port.postMessage({ type: id, value: v });
   }
 
   setCarrier(mode) {
