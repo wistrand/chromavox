@@ -31,17 +31,31 @@ generator:
   black bars also respond. `stopPropagation` on touch-zone pointers
   prevents UI element-toggle/drag interference.
 
-Mic, sine, harmonics, white, pink, and keyboard sources feed a single
-`AnalyserNode` with `fftSize = 8192` and `smoothingTimeConstant` set
-in `mic.js` `enable()`, so downstream code doesn't know where the
-audio came from. Touch/keys and MIDI sources bypass the AudioContext
-entirely — `directLevels()` returns emitter levels directly.
+- `file` — audio file decoded via `decodeAudioData`, looped via a
+  `BufferSource`. Transport controls (play/pause/restart/time) exposed
+  via `filePause()`, `fileResume()`, `fileRestart()`, `fileTime()`,
+  `fileDuration()`. `disable()` clears `_fileBuffer`, `_filePlaying`,
+  and `_fileOffset` so no stale transport state persists. Switching
+  source in the dropdown resets the file transport buttons/time display.
+  The file `<input>` resets `e.target.value` on change so the same file
+  can be re-selected.
+
+Mic, sine, harmonics, white, pink, keyboard, and file sources feed a
+single `AnalyserNode` with `fftSize = 8192` and
+`smoothingTimeConstant` set in `mic.js` `enable()`, so downstream code
+doesn't know where the audio came from. Touch/keys and MIDI sources
+bypass the AudioContext entirely — `directLevels()` returns emitter
+levels directly.
 
 `micBands(mic, n, mode, baseHz, stepSemi)` bins the FFT into `n`
 buckets:
 
-- **`log`** mode: log-spaced across a broadband range (see the `loHz`
-  / `hiHz` constants in `micBands`).
+- **`log`** mode: log-spaced across 80–6000 Hz.
+- **`voice`** mode: log-spaced across a focused 100–4000 Hz range
+  optimized for vocal content. Treated identically to `log` in the
+  code paths (same bucket-center spacing, same `directLevels` logic)
+  but with the tighter frequency bounds. Span slider is hidden (same
+  as log). `synth.setStep` skips rebuild for voice (like log).
 - **scale modes** (`chromatic`, `major`, `minor`, `pentaMajor`,
   `pentaMinor`, `wholeTone`, `blues`): the mode value is the scale
   name; `scaleFreq(base, scaleName, i, stepSemi)` in `spectrum.js`
@@ -60,14 +74,25 @@ via `mic.setSmoothing(v)`. Lower for snappier per-key response on the
 keyboard claviature; higher for smoother envelope tracking on vocals
 or sustained sources.
 
-Both modes use `getFloatFrequencyData` (dB values) mapped to 0–1 via
-the analyser's fixed `minDecibels`/`maxDecibels` range (`dbNorm`).
+All modes use `getFloatFrequencyData` (dB values). Normalization is
+**split by source type**:
+
+- **File source** (`mic.source === 'file'`): converts dB to linear
+  amplitude via `dbToLin` (`10^(dB/20)`), then peak-normalizes using
+  `_peakHold` (module-scope; rises instantly, decays at 0.95/frame —
+  roughly 1 s to half at 60 fps). After normalization, `sqrt` shaping
+  recovers spectral contrast from mastered broadband audio. A linear
+  noise gate (`NOISE_GATE_LIN = 0.001`) blanks output when silent.
+- **All other audio sources** (mic, sine, harmonics, noise, keyboard):
+  absolute `dbNorm` mapping (dB → 0–1 via the analyser's fixed
+  `minDecibels`/`maxDecibels` range). Floor 0.15, gamma 1.5 zero out
+  quiet buckets. A noise gate (`NOISE_GATE = 0.10` on the normalized
+  frame peak) blanks the entire output when nothing is playing. No
+  peak-hold — the fixed dB range provides stable scaling so silence
+  stays quiet.
+
 Peak per bucket (not mean) gives sharper vocoder-like channel
-separation. A noise floor (`floor = 0.08`) and gamma shaping
-(`pow(v, 1.5)`) zero out quiet buckets. A noise gate
-(`NOISE_GATE = 0.10` on the normalized frame peak) blanks the entire
-output when nothing is playing. No per-frame peak-hold normalization
-— the fixed dB range provides stable scaling. Result is written to
+separation in both paths. Result is written to
 `scene.runtime.micLevels`. The renderer draws an amber bar extending
 from each emitter tick proportional to its bucket.
 
@@ -91,8 +116,10 @@ no separate `.js` file, no build step. `synth.enable()` is async
   input and output ladders line up. `synth.setBase(hz)` rebuilds
   voice frequencies for all modes (not just chromatic), so changing
   the Base dropdown takes effect immediately in any scale. Log mode
-  uses the same 80–6000 Hz range and `(i+0.5)/n` bucket-center
-  spacing as `micBands`, so input and output frequencies match.
+  uses 80–6000 Hz; voice mode uses 100–4000 Hz. Both use
+  `(i+0.5)/n` bucket-center spacing matching `micBands`.
+  `synth.setStep` skips rebuild for both log and voice (step is
+  irrelevant when frequencies are log-spaced).
 - **Carrier mode**: selectable via the Carrier dropdown in the Audio
   out options menu. Three modes:
   - `sine` (default): harmonic partials with 1/k rolloff for

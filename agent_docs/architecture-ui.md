@@ -220,8 +220,13 @@ Two overlays inside `#bench-viewport`:
 
 Each row is a tiny `<div>` whose `top` is `((i + 0.5) / count) × 100%`
 so labels track the canvas height regardless of resize. In any scale
-mode they show note names via `freqToNote(scaleFreq(...))`; in log
-mode they show bucket centre frequency in Hz / kHz.
+mode they show note names via `freqToNote(scaleFreq(...))`; in log and
+voice modes they show bucket centre frequency in Hz / kHz (voice uses
+the 100–4000 Hz range, log uses 80–6000 Hz).
+
+The **Span** slider row is hidden when the mode is `log` or `voice`
+(both are log-spaced, so step size is meaningless). Visibility is
+toggled by `syncSpanVisibility()` in `main.js`.
 
 ## Help dialog
 

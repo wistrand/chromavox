@@ -174,8 +174,9 @@ Detailed notes are split into topic files under `agent_docs/`:
   all gains < 1e-5 are skipped (voice stealing). Rebuild sends
   frequency array + `fullScale` via `MessagePort`. `synth.enable()`
   is async (awaits `audioWorklet.addModule`). Log-mode voice
-  frequencies use the same 80–6000 Hz range and `(i+0.5)/n` bucket-
-  center spacing as `micBands`.
+  frequencies use 80–6000 Hz; voice-mode uses 100–4000 Hz. Both use
+  `(i+0.5)/n` bucket-center spacing matching `micBands`.
+  `synth.setStep` skips rebuild for log and voice.
 - Keyboard claviature voices use `'triangle'` so a single key mostly
   occupies one chromatic bucket without turning into a full harmonic
   stack like sawtooth. On key release, `_knownFrequencies` returns
@@ -194,15 +195,18 @@ Detailed notes are split into topic files under `agent_docs/`:
   (`if (this.dragging) return;`) so playing keyboard notes mid-drag
   doesn't hijack the gesture.
 - Audio bucketing supports musical scales: `Mode` is one dropdown
-  combining `log` with the `SCALES` keys (`chromatic`, `major`,
+  combining `log`, `voice`, and the `SCALES` keys (`chromatic`, `major`,
   `minor`, `pentaMajor`, `pentaMinor`, `wholeTone`, `blues`). `log`
-  picks the broadband path; any other value names a scale walked by
-  `scaleFreq` from `baseHz`. Window per bucket is the geometric
-  midpoint between neighboring scale degrees, so any scale gets full
-  coverage with no overlap. `micBands` uses `getFloatFrequencyData`
-  (dB) mapped to 0–1 via the analyser's fixed dB range (`dbNorm`),
-  peak per bucket, floor 0.08, gamma 1.5, noise gate 0.10. No
-  per-frame peak-hold normalization.
+  picks the broadband 80–6000 Hz path; `voice` picks a focused
+  100–4000 Hz log-spaced path (same code path as log, tighter range);
+  any other value names a scale walked by `scaleFreq` from `baseHz`.
+  Window per bucket is the geometric midpoint between neighboring
+  scale degrees, so any scale gets full coverage with no overlap.
+  Span slider hidden for log and voice. `micBands` normalization is
+  **split by source**: file source uses `dbToLin` (linear amplitude)
+  with `_peakHold` (decays 0.95/frame) + `sqrt` shaping; all other
+  sources use absolute `dbNorm` (dB to 0–1 via analyser range),
+  floor 0.15, gamma 1.5, noise gate 0.10.
 - Synth side can run **independent** of the mic side via the
   `Independent scale` checkbox — separate Mode/Base/Span controls
   appear (and stay visible but **disabled / dimmed** via the
