@@ -63,7 +63,7 @@ const UI_CONTROL_IDS = [
   'mic-source', 'mic-device', 'midi-device', 'mic-mode', 'mic-base',
   'chromatic-span', 'mic-smoothing', 'bucket-color', 'synth-independent',
   'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials',
-  'acid-res', 'acid-env', 'synth-device',
+  'acid-res', 'acid-env', 'acid-cutoff', 'acid-decay', 'acid-drive', 'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
   'midi-gain', 'sim-rate', 'distort-toggle', 'no-overlap',
 ];
@@ -734,6 +734,8 @@ synth.setVolume(parseInt(volSlider.value, 10) / 100);
 volSlider.addEventListener('input', () => {
   synth.setVolume(parseInt(volSlider.value, 10) / 100);
   volLabel.textContent = volSlider.value;
+  // User-set volume overrides song automation.
+  synth._volumeOverride = true;
 });
 
 const partialsSlider = document.getElementById('synth-partials');
@@ -746,34 +748,35 @@ partialsSlider.addEventListener('input', () => {
 
 const carrierSel = document.getElementById('synth-carrier');
 const partialsRow = document.getElementById('partials-row');
-const acidResRow = document.getElementById('acid-res-row');
-const acidEnvRow = document.getElementById('acid-env-row');
-const acidResSlider = document.getElementById('acid-res');
-const acidEnvSlider = document.getElementById('acid-env');
+const acidRows = ['acid-res-row', 'acid-env-row', 'acid-cutoff-row', 'acid-decay-row', 'acid-drive-row'];
 function syncCarrierVisibility() {
   const c = carrierSel.value;
   partialsRow.style.display = c === 'sine' ? '' : 'none';
-  acidResRow.style.display = c === 'acid' ? '' : 'none';
-  acidEnvRow.style.display = c === 'acid' ? '' : 'none';
+  for (const id of acidRows) document.getElementById(id).style.display = c === 'acid' ? '' : 'none';
 }
 carrierSel.addEventListener('change', () => { synth.setCarrier(carrierSel.value); syncCarrierVisibility(); });
-acidResSlider.addEventListener('input', () => {
-  const v = parseInt(acidResSlider.value, 10) / 100;
-  document.getElementById('acid-res-val').textContent = v.toFixed(2);
-  synth.setAcidRes(v);
-});
-acidEnvSlider.addEventListener('input', () => {
-  const v = parseInt(acidEnvSlider.value, 10) / 100;
-  document.getElementById('acid-env-val').textContent = v.toFixed(2);
-  synth.setAcidEnv(v);
-});
+const acidSliders = [
+  ['acid-res',    'acid-res-val',    v => synth.setAcidRes(v)],
+  ['acid-env',    'acid-env-val',    v => synth.setAcidEnv(v)],
+  ['acid-cutoff', 'acid-cutoff-val', v => synth.setAcidCutoff(v)],
+  ['acid-decay',  'acid-decay-val',  v => synth.setAcidDecay(v)],
+  ['acid-drive',  'acid-drive-val',  v => synth.setAcidDrive(v)],
+];
+for (const [sliderId, valId, setter] of acidSliders) {
+  document.getElementById(sliderId).addEventListener('input', e => {
+    const v = parseInt(e.target.value, 10) / 100;
+    document.getElementById(valId).textContent = v.toFixed(2);
+    setter(v);
+  });
+}
 syncCarrierVisibility();
 
 const _applyInitialPartials = () => {
   synth.setPartials(parseInt(partialsSlider.value, 10) || 1);
   synth.setCarrier(carrierSel.value);
-  synth.setAcidRes(parseInt(acidResSlider.value, 10) / 100);
-  synth.setAcidEnv(parseInt(acidEnvSlider.value, 10) / 100);
+  for (const [sliderId, , setter] of acidSliders) {
+    setter(parseInt(document.getElementById(sliderId).value, 10) / 100);
+  }
   syncCarrierVisibility();
 };
 
@@ -1299,6 +1302,7 @@ const songPlayer = new SongPlayer();
   songPlayer.onStateChange = state => {
     playBtn.textContent = state === 'playing' ? '❚❚' : '▶';
     if (state === 'stopped') {
+      synth._volumeOverride = false;
       seekSlider.value = 0;
       timeLabel.textContent = '0:00';
     }
@@ -1306,10 +1310,13 @@ const songPlayer = new SongPlayer();
 
   // Route automation param changes to synth/scene.
   songPlayer.onParamChange = (param, value) => {
-    if (param === 'volume') synth.setVolume(value);
+    if (param === 'volume' && !synth._volumeOverride) synth.setVolume(value);
     else if (param === 'carrier') synth.setCarrier(value);
     else if (param === 'acidRes') synth.setAcidRes(value);
     else if (param === 'acidEnv') synth.setAcidEnv(value);
+    else if (param === 'acidCutoff') synth.setAcidCutoff(value);
+    else if (param === 'acidDecay') synth.setAcidDecay(value);
+    else if (param === 'acidDrive') synth.setAcidDrive(value);
     else if (param === 'partials') synth.setPartials(value);
   };
 

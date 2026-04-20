@@ -11,6 +11,23 @@
 import { scaleFreq } from './spectrum.js';
 
 const WORKLET_SRC = `
+// Fast tanh via lookup table. 4096 entries over [-4, 4].
+// Beyond ±4, tanh ≈ ±1. Linear interpolation between entries.
+const _TANH_N = 4096;
+const _TANH_MAX = 4;
+const _TANH_TBL = new Float32Array(_TANH_N + 1);
+for (let i = 0; i <= _TANH_N; i++) {
+  _TANH_TBL[i] = Math.tanh(-_TANH_MAX + (2 * _TANH_MAX * i / _TANH_N));
+}
+function ftanh(x) {
+  if (x <= -_TANH_MAX) return -1;
+  if (x >= _TANH_MAX) return 1;
+  const t = (x + _TANH_MAX) * (_TANH_N / (2 * _TANH_MAX));
+  const i = t | 0;
+  const f = t - i;
+  return _TANH_TBL[i] + (_TANH_TBL[i + 1] - _TANH_TBL[i]) * f;
+}
+
 class ChromavoxSynth extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -23,6 +40,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.carrier = 'sine'; // 'sine' | 'noise' | 'acid'
     this.acidRes = 0.85;    // resonance [0, 1] → feedback k
     this.acidEnv = 0.6;     // env amount [0, 1] → octaves of cutoff sweep
+    this.acidCutoff = 0.5;  // base cutoff [0, 1] → 80-8000 Hz
+    this.acidDecay = 0.4;   // envelope decay [0, 1] → 30ms-2s time constant
+    this.acidDrive = 0.6;   // post-filter drive [0, 1] → 1-5× saturation
     this.port.onmessage = e => {
       const d = e.data;
       if (d.type === 'bins') {
@@ -38,6 +58,12 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         this.acidRes = d.value;
       } else if (d.type === 'acidEnv') {
         this.acidEnv = d.value;
+      } else if (d.type === 'acidCutoff') {
+        this.acidCutoff = d.value;
+      } else if (d.type === 'acidDecay') {
+        this.acidDecay = d.value;
+      } else if (d.type === 'acidDrive') {
+        this.acidDrive = d.value;
       }
     };
   }
@@ -117,38 +143,52 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const invSr = 1 / sampleRate;
     const smooth = 1 - Math.exp(-1 / (0.06 * sampleRate));
     for (let i = 0; i < len; i++) buf[i] = 0;
-    for (let s = 0; s < this.voices.length; s++) {
-      const v = this.voices[s];
+    const voices = this.voices;
+    const voiceCount = voices.length;
+    for (let s = 0; s < voiceCount; s++) {
+      const v = voices[s];
       // Overall voice gain = sum of partial target gains (for noise mode).
       let anyActive = false;
       for (let k = 0; k < v.gains.length; k++) {
         if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
       }
-      if (!anyActive) { v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; continue; }
+      if (!anyActive) { v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = 0; continue; }
 
       if (isAcid) {
         // 303-style acid carrier: PolyBLEP sawtooth → 3-pole TPT/ZDF
         // diode ladder filter with tanh feedback → drive.
-        // Sensor energy drives filter cutoff (the squelch).
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
         const baseFreq = v.freq;
-        const dt = baseFreq * invSr; // phase increment per sample
+        const dt = baseFreq * invSr;
         const acidRes = this.acidRes;
         const acidEnv = this.acidEnv;
+        // Base cutoff: 80-8000 Hz log-mapped from the knob [0,1].
+        const baseCutoffHz = 80 * Math.pow(100, this.acidCutoff);
+        // Decay: per-sample smoothing constant. Maps [0,1] → 30ms-2s.
+        // Lower values = longer decay = slower squelch = more 303.
+        const decayMs = 0.03 + this.acidDecay * 1.97; // 30ms to 2s
+        const envSmooth = 1 - Math.exp(-1 / (decayMs * sampleRate));
+        // Drive: 1× (clean) to 5× (screaming).
+        const driveAmt = 1 + this.acidDrive * 4;
         // Feedback coefficient: k=0 → no resonance, k≈4.5 → self-osc.
         const k = acidRes * 4.5;
         let phase = v.sawPhase;
         let s1 = v.lp1, s2 = v.lp2, s3 = v.lp3;
         let sCutoff = v.smoothCutoff;
-        // Cutoff smoothing: ~8ms time constant (slower than gain's 60ms
-        // would sweep, fast enough for the 303 squelch character, smooth
-        // enough to avoid clicks from abrupt cutoff jumps).
-        const cutoffSmooth = 1 - Math.exp(-1 / (0.008 * sampleRate));
+        // Precompute constants for the inner loop.
+        const envScale = acidEnv * 5;
+        const ln2 = 0.6931471805599453;
+        const piInvSr = Math.PI * invSr;
+        const cutoffCeil = sampleRate * 0.45;
+        // Compute tan(g) once per block from the current smoothed cutoff.
+        // The cutoff changes slowly (smoothed by envSmooth per sample),
+        // so recomputing tan every sample is wasteful. Update once per
+        // block; the per-sample error is inaudible at 128-sample blocks.
+        let g = Math.tan(piInvSr * sCutoff);
+        let g1 = g / (1 + g);
         for (let i = 0; i < len; i++) {
           voiceGain += (voiceTarget - voiceGain) * smooth;
-          // No early-continue for silent voices: the filter must keep
-          // running on zero input so its state decays naturally.
           // PolyBLEP sawtooth
           phase += dt;
           let saw = 2 * phase - 1;
@@ -157,25 +197,23 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           if (t1 < 1) { saw -= t1 + t1 - t1 * t1 - 1; }
           const t2 = (1 - phase) / dt;
           if (t2 < 1) { saw += t2 * t2 - t2 - t2 + 1; }
-          // Target cutoff from sensor energy.
-          const targetCutoff = Math.min(sampleRate * 0.45,
-            baseFreq * Math.pow(2, 1 + voiceGain * acidEnv * 5));
-          // Smooth cutoff to prevent clicks from abrupt sweeps.
-          sCutoff += (targetCutoff - sCutoff) * cutoffSmooth;
-          // TPT/ZDF one-pole coefficient
-          const g = Math.tan(Math.PI * sCutoff * invSr);
-          const g1 = g / (1 + g);
-          // Input with resonance feedback (tanh for stability).
-          // Scale saw by 1.5 for hotter filter drive — the 303 runs
-          // its VCO into the VCF at near-clipping levels.
-          const u = saw * 1.5 - k * Math.tanh(s3);
+          // Target cutoff: base + envelope sweep from sensor energy.
+          // exp(x * ln2) is faster than pow(2, x).
+          const targetCutoff = Math.min(cutoffCeil,
+            baseCutoffHz * Math.exp(voiceGain * envScale * ln2));
+          // Smooth cutoff with the decay time constant.
+          sCutoff += (targetCutoff - sCutoff) * envSmooth;
+          // Recompute filter coefficient at midpoint of block.
+          if (i === (len >> 1)) { g = Math.tan(piInvSr * sCutoff); g1 = g / (1 + g); }
+          // Input with resonance feedback.
+          const u = saw * 1.5 - k * ftanh(s3);
           // 3 cascaded one-poles (18 dB/oct diode ladder)
           const v1 = (u - s1) * g1; s1 += 2 * v1;
           const v2 = (s1 - s2) * g1; s2 += 2 * v2;
           const v3 = (s2 - s3) * g1; s3 += 2 * v3;
-          // Post-filter drive — the signature 303 grit.
-          const driven = Math.tanh(s3 * 2.5);
-          buf[i] += driven * voiceGain * 1.6;
+          // Post-filter drive.
+          const driven = ftanh(s3 * driveAmt);
+          buf[i] += driven * voiceGain;
         }
         v.sawPhase = phase;
         v.lp1 = s1; v.lp2 = s2; v.lp3 = s3;
@@ -202,7 +240,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           const y0 = noise + c1 * y1 + c2 * y2;
           const bp = (y0 - y2) * norm;
           y2 = y1; y1 = y0;
-          buf[i] += bp * voiceGain * 3;
+          buf[i] += bp * voiceGain * 8;
         }
         v.bp1 = y1; v.bp2 = y2;
         v.gains[0] = voiceGain;
@@ -221,11 +259,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         }
       }
     }
-    // Soft limiter: tanh prevents hard clipping when many voices overlap.
-    for (let i = 0; i < len; i++) {
-      const x = buf[i];
-      if (x > 0.8 || x < -0.8) buf[i] = Math.tanh(x);
-    }
+    // Soft limiter: always-on tanh avoids the sharp knee at ±0.8 that
+    // caused intermodulation clicks with many simultaneous voices.
+    // tanh(x) ≈ x for small x, compresses gradually for larger values.
+    for (let i = 0; i < len; i++) buf[i] = ftanh(buf[i]);
     return true;
   }
 }
@@ -260,6 +297,21 @@ export class SensorSynth {
   setAcidEnv(v) {
     if (!this.workletNode) return;
     this.workletNode.port.postMessage({ type: 'acidEnv', value: v });
+  }
+
+  setAcidCutoff(v) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'acidCutoff', value: v });
+  }
+
+  setAcidDecay(v) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'acidDecay', value: v });
+  }
+
+  setAcidDrive(v) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'acidDrive', value: v });
   }
 
   setCarrier(mode) {
@@ -310,7 +362,6 @@ export class SensorSynth {
     }
     this.master = this.ctx.createGain();
     this.master.gain.value = this.volume ?? 0.25;
-    this.master.connect(this.ctx.destination);
     this.mode = mode;
     if (this.sinkId && typeof this.ctx.setSinkId === 'function') {
       this.ctx.setSinkId(this.sinkId).catch(err => console.warn('setSinkId:', err));
@@ -326,8 +377,9 @@ export class SensorSynth {
     this.analyser.fftSize = 8192;
     this.analyser.smoothingTimeConstant = 0.6;
     this.freqFloat = new Float32Array(this.analyser.frequencyBinCount);
-    this.workletNode.connect(this.analyser);
-    this.analyser.connect(this.master);
+    this.workletNode.connect(this.master);
+    this.master.connect(this.analyser);
+    this.analyser.connect(this.ctx.destination);
     this.rebuild(sensorCount);
     this.active = true;
   }

@@ -1,42 +1,7 @@
 // UI: input handling, property panel, save/load.
 
-import { makeElement, worldEdges, pointInPolygon, serializeScene, deserializeScene, createScene } from './scene.js';
+import { makeElement, worldEdges, pointInPolygon, overlapsAny, serializeScene, deserializeScene, createScene } from './scene.js';
 import { MATERIALS } from './spectrum.js';
-
-// --- Overlap detection ---
-function edgesIntersect(e1, e2) {
-  // Test if two line segments (p1→p2) cross.
-  const d1x = e1.p2.x - e1.p1.x, d1y = e1.p2.y - e1.p1.y;
-  const d2x = e2.p2.x - e2.p1.x, d2y = e2.p2.y - e2.p1.y;
-  const denom = d1x * d2y - d1y * d2x;
-  if (Math.abs(denom) < 1e-9) return false;
-  const ex = e2.p1.x - e1.p1.x, ey = e2.p1.y - e1.p1.y;
-  const t = (ex * d2y - ey * d2x) / denom;
-  const u = (ex * d1y - ey * d1x) / denom;
-  return t > 0 && t < 1 && u > 0 && u < 1;
-}
-
-function elementsOverlap(elA, elB) {
-  const a = worldEdges(elA), b = worldEdges(elB);
-  // Edge crossing test.
-  for (const ea of a.edges) {
-    for (const eb of b.edges) {
-      if (edgesIntersect(ea, eb)) return true;
-    }
-  }
-  // Containment test: either center inside the other's polygon.
-  if (pointInPolygon(b.polygon, elA.x, elA.y)) return true;
-  if (pointInPolygon(a.polygon, elB.x, elB.y)) return true;
-  return false;
-}
-
-function overlapsAny(el, elements) {
-  for (const other of elements) {
-    if (other === el) continue;
-    if (elementsOverlap(el, other)) return true;
-  }
-  return false;
-}
 
 // Apply a mutation to an element, reverting if it causes overlap.
 // `mutate` is called with the element; `keys` lists the properties
@@ -1095,9 +1060,6 @@ export class UI {
     }
   }
 
-  // Check if an element overlaps any other element in the scene.
   // Exposed for main.js spin enforcement.
-  elementsOverlap(el, elements) {
-    return overlapsAny(el, elements);
-  }
+  elementsOverlap(el, elements) { return overlapsAny(el, elements); }
 }

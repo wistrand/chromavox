@@ -199,6 +199,39 @@ export function pointInPolygon(poly, x, y) {
   return inside;
 }
 
+// --- Overlap detection ---
+
+function edgesIntersect(e1, e2) {
+  const d1x = e1.p2.x - e1.p1.x, d1y = e1.p2.y - e1.p1.y;
+  const d2x = e2.p2.x - e2.p1.x, d2y = e2.p2.y - e2.p1.y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-9) return false;
+  const ex = e2.p1.x - e1.p1.x, ey = e2.p1.y - e1.p1.y;
+  const t = (ex * d2y - ey * d2x) / denom;
+  const u = (ex * d1y - ey * d1x) / denom;
+  return t > 0 && t < 1 && u > 0 && u < 1;
+}
+
+export function elementsOverlap(elA, elB) {
+  const a = worldEdges(elA), b = worldEdges(elB);
+  for (const ea of a.edges) {
+    for (const eb of b.edges) {
+      if (edgesIntersect(ea, eb)) return true;
+    }
+  }
+  if (pointInPolygon(b.polygon, elA.x, elA.y)) return true;
+  if (pointInPolygon(a.polygon, elB.x, elB.y)) return true;
+  return false;
+}
+
+export function overlapsAny(el, elements) {
+  for (const other of elements) {
+    if (other === el) continue;
+    if (elementsOverlap(el, other)) return true;
+  }
+  return false;
+}
+
 export function materialOptics(matKey) {
   const m = MATERIALS[matKey];
   if (!m) return null;
