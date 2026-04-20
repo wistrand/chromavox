@@ -688,7 +688,7 @@ export class UI {
     };
 
     const title = document.createElement('div');
-    title.innerHTML = `<strong>${el.kind}</strong> #${el.id}`;
+    title.innerHTML = `<strong>${el.kind}</strong>`;
     panel.appendChild(title);
 
     // Rotation
