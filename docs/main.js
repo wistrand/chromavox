@@ -65,7 +65,7 @@ const UI_CONTROL_IDS = [
   'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier', 'synth-partials',
   'acid-res', 'acid-env', 'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
-  'midi-gain', 'sim-rate', 'distort-toggle',
+  'midi-gain', 'sim-rate', 'distort-toggle', 'no-overlap',
 ];
 function saveUiState() {
   const state = {};
@@ -1382,7 +1382,18 @@ function frame() {
   const dt = Math.min(now - lastFrameTime, 0.25);
   lastFrameTime = now;
   for (const el of scene.elements) {
-    if (el.spin) { el.rot += el.spin * dt; dirty = true; }
+    if (el.spin) {
+      const prevRot = el.rot;
+      el.rot += el.spin * dt;
+      // If no-overlap is on, revert spin-induced rotation that causes overlap.
+      if (document.getElementById('no-overlap').checked) {
+        if (ui.elementsOverlap && ui.elementsOverlap(el, scene.elements)) {
+          el.rot = prevRot;
+          el.spin = 0; // stop spinning — it hit something
+        }
+      }
+      dirty = true;
+    }
   }
 
   // Auto-switch GPU↔CPU tracer based on delay elements.

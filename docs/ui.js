@@ -3,6 +3,56 @@
 import { makeElement, worldEdges, pointInPolygon, serializeScene, deserializeScene, createScene } from './scene.js';
 import { MATERIALS } from './spectrum.js';
 
+// --- Overlap detection ---
+function edgesIntersect(e1, e2) {
+  // Test if two line segments (p1→p2) cross.
+  const d1x = e1.p2.x - e1.p1.x, d1y = e1.p2.y - e1.p1.y;
+  const d2x = e2.p2.x - e2.p1.x, d2y = e2.p2.y - e2.p1.y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-9) return false;
+  const ex = e2.p1.x - e1.p1.x, ey = e2.p1.y - e1.p1.y;
+  const t = (ex * d2y - ey * d2x) / denom;
+  const u = (ex * d1y - ey * d1x) / denom;
+  return t > 0 && t < 1 && u > 0 && u < 1;
+}
+
+function elementsOverlap(elA, elB) {
+  const a = worldEdges(elA), b = worldEdges(elB);
+  // Edge crossing test.
+  for (const ea of a.edges) {
+    for (const eb of b.edges) {
+      if (edgesIntersect(ea, eb)) return true;
+    }
+  }
+  // Containment test: either center inside the other's polygon.
+  if (pointInPolygon(b.polygon, elA.x, elA.y)) return true;
+  if (pointInPolygon(a.polygon, elB.x, elB.y)) return true;
+  return false;
+}
+
+function overlapsAny(el, elements) {
+  for (const other of elements) {
+    if (other === el) continue;
+    if (elementsOverlap(el, other)) return true;
+  }
+  return false;
+}
+
+// Apply a mutation to an element, reverting if it causes overlap.
+// `mutate` is called with the element; `keys` lists the properties
+// that may change (saved/restored on overlap). Returns true if applied.
+function tryMutate(el, elements, keys, mutate) {
+  if (!document.getElementById('no-overlap').checked) { mutate(el); return true; }
+  const saved = {};
+  for (const k of keys) saved[k] = el[k];
+  mutate(el);
+  if (overlapsAny(el, elements)) {
+    for (const k of keys) el[k] = saved[k];
+    return false;
+  }
+  return true;
+}
+
 // Undo/redo. Snapshots the mutable scene state (elements, emitter settings,
 // sensor count, bench) as a JSON string. Rapid drags and slider scrubs are
 // batched: `beginEdit` captures the pre-state lazily, `endEdit` commits if
@@ -232,15 +282,18 @@ export class UI {
         return;
       }
 
+      const el = this.selected;
+      const els = this.scene.elements;
+      const sizeKeys = ['size', 'w', 'h', 'radius'];
       let handled = true;
-      if (e.shiftKey && e.key === 'ArrowLeft')       { this.beginEdit(); this.selected.rot -= ROT_STEP; this.selected.spin = 0; }
-      else if (e.shiftKey && e.key === 'ArrowRight') { this.beginEdit(); this.selected.rot += ROT_STEP; this.selected.spin = 0; }
-      else if (e.shiftKey && e.key === 'ArrowUp')    { this.beginEdit(); bumpSize(this.selected,  SIZE_STEP); }
-      else if (e.shiftKey && e.key === 'ArrowDown')  { this.beginEdit(); bumpSize(this.selected, -SIZE_STEP); }
-      else if (e.key === 'ArrowLeft')  { this.beginEdit(); this.selected.x -= STEP; }
-      else if (e.key === 'ArrowRight') { this.beginEdit(); this.selected.x += STEP; }
-      else if (e.key === 'ArrowUp')    { this.beginEdit(); this.selected.y -= STEP; }
-      else if (e.key === 'ArrowDown')  { this.beginEdit(); this.selected.y += STEP; }
+      if (e.shiftKey && e.key === 'ArrowLeft')       { this.beginEdit(); tryMutate(el, els, ['rot','spin'], e => { e.rot -= ROT_STEP; e.spin = 0; }); }
+      else if (e.shiftKey && e.key === 'ArrowRight') { this.beginEdit(); tryMutate(el, els, ['rot','spin'], e => { e.rot += ROT_STEP; e.spin = 0; }); }
+      else if (e.shiftKey && e.key === 'ArrowUp')    { this.beginEdit(); tryMutate(el, els, sizeKeys, e => bumpSize(e,  SIZE_STEP)); }
+      else if (e.shiftKey && e.key === 'ArrowDown')  { this.beginEdit(); tryMutate(el, els, sizeKeys, e => bumpSize(e, -SIZE_STEP)); }
+      else if (e.key === 'ArrowLeft')  { this.beginEdit(); tryMutate(el, els, ['x'], e => { e.x -= STEP; }); }
+      else if (e.key === 'ArrowRight') { this.beginEdit(); tryMutate(el, els, ['x'], e => { e.x += STEP; }); }
+      else if (e.key === 'ArrowUp')    { this.beginEdit(); tryMutate(el, els, ['y'], e => { e.y -= STEP; }); }
+      else if (e.key === 'ArrowDown')  { this.beginEdit(); tryMutate(el, els, ['y'], e => { e.y += STEP; }); }
       else handled = false;
 
       if (handled) {
@@ -366,10 +419,35 @@ export class UI {
   bindTools() {
     const place = kind => {
       this.beginEdit();
-      const cx = this.scene.bench.w / 2;
-      const cy = this.scene.bench.h / 2;
+      let cx = this.scene.bench.w / 2;
+      let cy = this.scene.bench.h / 2;
       const el = makeElement(kind, cx, cy);
-      this.scene.elements.push(el);
+      // No-overlap: spiral outward from center to find a free position.
+      if (document.getElementById('no-overlap').checked) {
+        this.scene.elements.push(el);
+        const step = 40;
+        let found = !overlapsAny(el, this.scene.elements);
+        if (!found) {
+          for (let r = 1; r < 20 && !found; r++) {
+            for (let dx = -r; dx <= r && !found; dx++) {
+              for (let dy = -r; dy <= r && !found; dy++) {
+                if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // ring only
+                el.x = cx + dx * step;
+                el.y = cy + dy * step;
+                if (el.x > 60 && el.x < this.scene.bench.w - 20 &&
+                    el.y > 20 && el.y < this.scene.bench.h - 20 &&
+                    !overlapsAny(el, this.scene.elements)) {
+                  found = true;
+                }
+              }
+            }
+          }
+        }
+        if (!found) { el.x = cx; el.y = cy; } // fallback to center
+        // Element already pushed above.
+      } else {
+        this.scene.elements.push(el);
+      }
       this.select(el);
       this.endEdit();
       this.onChange();
@@ -621,19 +699,37 @@ export class UI {
       const dist = Math.hypot(dx, dy) || 1;
       const angle = Math.atan2(dy, dx);
       const scale = dist / this.dragging.startDist;
+      const prevRot = this.selected.rot;
+      const prevSize = this._captureBaseSize(this.selected);
       this.selected.rot = this.dragging.startRot + (angle - this.dragging.startAngle);
       this.selected.spin = 0;
       this._applyPinchScale(this.selected, this.dragging.baseSize, scale);
+      if (document.getElementById('no-overlap').checked &&
+          overlapsAny(this.selected, this.scene.elements)) {
+        this.selected.rot = prevRot;
+        Object.assign(this.selected, prevSize);
+      }
       this.renderPropPanel();
       this.onChange();
     } else if (this.dragging.type === 'move') {
+      const prevX = this.selected.x, prevY = this.selected.y;
       this.selected.x = x + this.dragging.dx;
       this.selected.y = y + this.dragging.dy;
+      if (document.getElementById('no-overlap').checked &&
+          overlapsAny(this.selected, this.scene.elements)) {
+        this.selected.x = prevX;
+        this.selected.y = prevY;
+      }
       this.onChange();
     } else if (this.dragging.type === 'rotate') {
+      const prevRot = this.selected.rot;
       const a = Math.atan2(y - this.selected.y, x - this.selected.x);
       this.selected.rot = this.dragging.startRot + (a - this.dragging.startAngle);
       this.selected.spin = 0;
+      if (document.getElementById('no-overlap').checked &&
+          overlapsAny(this.selected, this.scene.elements)) {
+        this.selected.rot = prevRot;
+      }
       this.renderPropPanel();
       this.onChange();
     }
@@ -697,8 +793,10 @@ export class UI {
     rot.value = Math.round(el.rot * 180 / Math.PI);
     rot.addEventListener('input', () => {
       this.beginEdit();
-      el.rot = parseFloat(rot.value) * Math.PI / 180;
-      el.spin = 0;
+      const newRot = parseFloat(rot.value) * Math.PI / 180;
+      if (!tryMutate(el, this.scene.elements, ['rot', 'spin'], e => { e.rot = newRot; e.spin = 0; })) {
+        rot.value = Math.round(el.rot * 180 / Math.PI);
+      }
       this.onChange();
     });
     rot.addEventListener('change', () => this.endEdit());
@@ -721,7 +819,10 @@ export class UI {
     addRow('Spin', spinRow);
     spinInput.addEventListener('input', () => {
       this.beginEdit();
-      el.spin = parseFloat(spinInput.value) * Math.PI / 180;
+      const newSpin = parseFloat(spinInput.value) * Math.PI / 180;
+      if (!tryMutate(el, this.scene.elements, ['spin'], e => { e.spin = newSpin; })) {
+        spinInput.value = Math.round((el.spin || 0) * 180 / Math.PI);
+      }
       this.onChange();
     });
     spinInput.addEventListener('change', () => this.endEdit());
@@ -861,7 +962,10 @@ export class UI {
       inp.value = el[key];
       inp.addEventListener('input', () => {
         this.beginEdit();
-        el[key] = parseFloat(inp.value);
+        const newVal = parseFloat(inp.value);
+        if (!tryMutate(el, this.scene.elements, [key], e => { e[key] = newVal; })) {
+          inp.value = el[key];
+        }
         this.onChange();
       });
       inp.addEventListener('change', () => this.endEdit());
@@ -989,5 +1093,11 @@ export class UI {
       bar.appendChild(c);
       host.appendChild(bar);
     }
+  }
+
+  // Check if an element overlaps any other element in the scene.
+  // Exposed for main.js spin enforcement.
+  elementsOverlap(el, elements) {
+    return overlapsAny(el, elements);
   }
 }
