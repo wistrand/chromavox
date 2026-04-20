@@ -65,10 +65,11 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         targetGains.push(0);
       }
       // Bandpass IIR state for noise carrier (single 2-pole resonator).
-      // Acid carrier: PolyBLEP saw phase + 3-pole TPT ladder filter state.
+      // Acid carrier: PolyBLEP saw phase + 3-pole TPT ladder filter state
+      // + smoothed cutoff to avoid clicks from abrupt sweeps.
       this.voices.push({ freq: f, phases, gains, targetGains,
         bp1: 0, bp2: 0,
-        sawPhase: 0, lp1: 0, lp2: 0, lp3: 0 });
+        sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: 0 });
     }
   }
   process(inputs, outputs) {
@@ -139,31 +140,30 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         const k = acidRes * 4.5;
         let phase = v.sawPhase;
         let s1 = v.lp1, s2 = v.lp2, s3 = v.lp3;
+        let sCutoff = v.smoothCutoff;
+        // Cutoff smoothing: ~8ms time constant (slower than gain's 60ms
+        // would sweep, fast enough for the 303 squelch character, smooth
+        // enough to avoid clicks from abrupt cutoff jumps).
+        const cutoffSmooth = 1 - Math.exp(-1 / (0.008 * sampleRate));
         for (let i = 0; i < len; i++) {
           voiceGain += (voiceTarget - voiceGain) * smooth;
           // No early-continue for silent voices: the filter must keep
-          // running on zero input so its state decays naturally. Skipping
-          // would freeze s1/s2/s3 and cause a click on re-onset.
-          // PolyBLEP sawtooth: naive saw + correction at discontinuity.
+          // running on zero input so its state decays naturally.
+          // PolyBLEP sawtooth
           phase += dt;
-          let saw = 2 * phase - 1; // naive
-          if (phase >= 1) {
-            phase -= 1;
-            saw = 2 * phase - 1;
-          }
-          // PolyBLEP correction at wrap (t in [0, dt])
-          const t1 = phase / dt; // how far past the wrap (0..1 in one sample)
+          let saw = 2 * phase - 1;
+          if (phase >= 1) { phase -= 1; saw = 2 * phase - 1; }
+          const t1 = phase / dt;
           if (t1 < 1) { saw -= t1 + t1 - t1 * t1 - 1; }
-          // Correction at 1-sample before wrap
           const t2 = (1 - phase) / dt;
           if (t2 < 1) { saw += t2 * t2 - t2 - t2 + 1; }
-          // Filter cutoff from sensor energy: sweep 5 octaves above base.
-          // The 303's squelch comes from the VCF envelope sweeping cutoff
-          // from a low base up to ~4-5 octaves above on accent/attack.
-          const cutoff = Math.min(sampleRate * 0.45,
+          // Target cutoff from sensor energy.
+          const targetCutoff = Math.min(sampleRate * 0.45,
             baseFreq * Math.pow(2, 1 + voiceGain * acidEnv * 5));
+          // Smooth cutoff to prevent clicks from abrupt sweeps.
+          sCutoff += (targetCutoff - sCutoff) * cutoffSmooth;
           // TPT/ZDF one-pole coefficient
-          const g = Math.tan(Math.PI * cutoff * invSr);
+          const g = Math.tan(Math.PI * sCutoff * invSr);
           const g1 = g / (1 + g);
           // Input with resonance feedback (tanh for stability).
           // Scale saw by 1.5 for hotter filter drive — the 303 runs
@@ -179,6 +179,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         }
         v.sawPhase = phase;
         v.lp1 = s1; v.lp2 = s2; v.lp3 = s3;
+        v.smoothCutoff = sCutoff;
         v.gains[0] = voiceGain;
       } else if (isNoise) {
         // Unity-gain bandpass noise carrier (Csound resonz topology).
