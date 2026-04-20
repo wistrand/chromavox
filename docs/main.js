@@ -103,6 +103,9 @@ function restoreUiState() {
 const markDirty = () => {
   dirty = true;
   if (cv.hideWelcome) cv.hideWelcome();
+  // Any scene edit during song playback pauses keyframe lerps —
+  // the user has taken ownership of element positions.
+  if (songPlayer.playing) songPlayer.keyframesPaused = true;
   try { localStorage.setItem(STORAGE_KEY, serializeScene(scene)); } catch {}
   saveUiState();
 };
@@ -1328,7 +1331,6 @@ function frame() {
   // Notes and automation continue playing.
   if (songPlayer.playing) {
     if (cv.hideWelcome) cv.hideWelcome();
-    if (ui.dragging) songPlayer.keyframesPaused = true;
     const now = performance.now() / 1000;
     const dt = Math.min(now - lastFrameTime, 0.25);
     songPlayer.update(scene, dt);
