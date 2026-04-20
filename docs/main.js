@@ -29,6 +29,11 @@ const gpuTracer = forceCPU ? null : new GPUTracer(renderer.gl);
 const cpuTracer = new Tracer();
 let tracer = (gpuTracer && gpuTracer._ready) ? gpuTracer : cpuTracer;
 
+// Highlight tracer: visualizes rays from one emitter on hover.
+// Separate CPU tracer instance — never fed to synth.
+const highlightTracer = new Tracer();
+let highlightEmitter = -1; // -1 = none
+
 // Auto-switch: use CPU tracer when delay elements are present (GPU
 // tracer doesn't support particle simulation / secondary rays).
 const _tracerLabel = document.getElementById('tracer-indicator');
@@ -538,6 +543,24 @@ document.getElementById('midi-gain').addEventListener('input', e => {
   document.getElementById('midi-gain-val').textContent = v.toFixed(2);
   mic.midiGain = v;
 });
+
+// --- Emitter highlight on hover ---
+// When the mouse hovers near the left-wall emitter ticks, highlight
+// that emitter's rays by running a lightweight CPU trace.
+{
+  const HOVER_ZONE = 40; // bench pixels from left wall
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const benchX = (e.clientX - rect.left) / rect.width * scene.bench.w;
+    const benchY = (e.clientY - rect.top) / rect.height * scene.bench.h;
+    if (benchX > HOVER_ZONE) { highlightEmitter = -1; return; }
+    const nSrc = scene.emitter.count;
+    const stripH = scene.bench.h / nSrc;
+    highlightEmitter = Math.max(0, Math.min(nSrc - 1,
+      nSrc - 1 - Math.floor(benchY / stripH)));
+  });
+  canvas.addEventListener('mouseleave', () => { highlightEmitter = -1; });
+}
 
 // --- Touch input: pointer events on stage → emitter levels ---
 // Listen on #stage (not canvas) so touches in the letterbox black
@@ -1178,8 +1201,6 @@ function frame() {
       // causing spectral leakage into neighboring buckets.
       scene.runtime.micLevels = mic.directLevels(scene.emitter.count, micMode, baseHz, stepSemi)
         || micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
-      // Touch mode: override disabled emitters so all ticks respond.
-      if (mic.source === 'touch') scene.emitter.disabled.clear();
       if (baseHz !== lastBaseHz) {
         if (!synthIndep()) synth.setBase(baseHz);
         rebuildEmitterLabels();
@@ -1219,6 +1240,8 @@ function frame() {
   // frame, so we must re-trace whenever the scene is dirty *or* any
   // pool holds in-flight particles. Outside those conditions RAF idles.
   const particlesInFlight = tracer.activeParticleCount() > 0;
+  const highlightChanged = highlightEmitter !== (renderer.highlightSegments ? renderer._lastHighlightEmitter : -1);
+  if (highlightChanged) { renderer._lastHighlightEmitter = highlightEmitter; dirty = true; }
   if (dirty || particlesInFlight) {
     dirty = false;
     tracer.trace(scene);
@@ -1227,6 +1250,32 @@ function frame() {
     renderer.onPreOverlay = (push.output && push.displayConnected)
       ? () => push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas)
       : null;
+    // Highlight trace: single emitter, CPU, overlay only.
+    if (highlightEmitter >= 0) {
+      const hlScene = {
+        bench: scene.bench,
+        emitter: {
+          ...scene.emitter,
+          disabled: new Set(),
+        },
+        sensorCount: scene.sensorCount,
+        elements: scene.elements,
+        runtime: {
+          micLevels: (() => {
+            const l = new Float32Array(scene.emitter.count);
+            l[highlightEmitter] = 1;
+            return l;
+          })(),
+          wlPerSource: null,
+        },
+        generation: scene.generation,
+      };
+      highlightTracer.trace(hlScene);
+      renderer.highlightSegments = highlightTracer;
+    } else {
+      renderer.highlightSegments = null;
+    }
+
     renderer.draw(scene, tracer);
     renderer.onPreOverlay = null;
     renderer.updateReadout(scene, tracer);

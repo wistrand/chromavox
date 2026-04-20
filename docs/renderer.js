@@ -572,6 +572,7 @@ export class Renderer {
     // Per-sensor mini-spectrum is 64 bins × 6 stacked lines × 2 verts per line.
     let estimate = 8 + scene.emitter.count * 2 + scene.sensorCount * (2 + binCount * 6);
     for (const el of scene.elements) estimate += 100;
+    if (this.highlightSegments) estimate += this.highlightSegments.segmentCount * 2;
     this.ensureOverlayCapacity(estimate * 2);
 
     const { bench } = scene;
@@ -674,6 +675,26 @@ export class Renderer {
             cx + Math.cos(a2) * arcR, cy + Math.sin(a2) * arcR,
             1, 0.8, 0.3, 0.6);
         }
+      }
+    }
+
+    // Highlight segments: draw rays from the hovered emitter as bright
+    // overlay lines so the user can see where that emitter's rays go.
+    if (this.highlightSegments) {
+      const ht = this.highlightSegments;
+      for (let i = 0; i < ht.segmentCount; i++) {
+        const off = i * 12;
+        const I1 = ht.segmentData[off + 7];
+        const I2 = ht.segmentData[off + 11];
+        if (I1 < 1e-6 && I2 < 1e-6) continue;
+        const r = ht.segmentData[off + 4] / (I1 || 1);
+        const g = ht.segmentData[off + 5] / (I1 || 1);
+        const b = ht.segmentData[off + 6] / (I1 || 1);
+        const a = Math.min(1, Math.max(0.3, (I1 + I2) * 3));
+        this.line(
+          ht.segmentData[off], ht.segmentData[off + 1],
+          ht.segmentData[off + 2], ht.segmentData[off + 3],
+          r * 0.6 + 0.4, g * 0.6 + 0.4, b * 0.6 + 0.4, a);
       }
     }
 

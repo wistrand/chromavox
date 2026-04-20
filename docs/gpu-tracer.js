@@ -652,6 +652,17 @@ export class GPUTracer {
     } else {
       this._micData.fill(1);
     }
+    // Apply disabled set — zero gain for disabled emitters unless
+    // micLevels explicitly set them (e.g. touch mode activating a
+    // disabled emitter). GPU shader doesn't know about the disabled set.
+    const disabled = emitter.disabled;
+    if (disabled && disabled.size > 0) {
+      for (const s of disabled) {
+        if (s >= 0 && s < nSrc && !(runtime.micLevels && runtime.micLevels[s] > 0)) {
+          this._micData[s] = 0;
+        }
+      }
+    }
     gl.bindTexture(gl.TEXTURE_2D, this._micTex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
       this._micData.subarray(0, Math.min(nSrc, 64)));

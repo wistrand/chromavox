@@ -290,7 +290,9 @@ export class Tracer {
     const PSI = 0.7548776662466927;
     const disabled = emitter.disabled;
     for (let s = 0; s < nSrc; s++) {
-      if (disabled && disabled.has(s)) continue;
+      // Skip disabled emitters unless micLevels explicitly activates
+      // them (e.g. touch mode setting a specific emitter to 1.0).
+      if (disabled && disabled.has(s) && !(runtime.micLevels && runtime.micLevels[s] > 0)) continue;
       const ey0 = (nSrc - 1 - s) * srcStripH;
       const apertureH = srcStripH * (emitter.apertureFactor ?? 0.01);
       const wlMinS = wlPer ? wlPer.min[s] : wlMin;
