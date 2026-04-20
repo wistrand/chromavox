@@ -132,7 +132,6 @@ export class UI {
     this.canvas = canvas;
     this.onChange = onChange;
     this.onSceneReset = onSceneReset || (() => {});
-    this.tool = 'select';
     this.selected = null;
     this.dragging = null;
     this.history = new History();
@@ -214,12 +213,7 @@ export class UI {
 
       if (e.key === 'Backspace' || e.key === 'Delete') {
         e.preventDefault();
-        this.beginEdit();
-        const dead = this.selected;
-        this.scene.elements = this.scene.elements.filter(el => el !== dead);
-        this.select(null);
-        this.endEdit();
-        this.onChange();
+        if (this._deleteBtn) this._deleteBtn.click();
         return;
       }
 
@@ -355,9 +349,6 @@ export class UI {
 
   // --- Tool palette ---
   bindTools() {
-    const btns = document.querySelectorAll('.tools > button');
-    const placeable = new Set(['prism', 'block', 'lens-convex', 'lens-concave', 'mirror', 'rabbit', 'circle']);
-
     const place = kind => {
       this.beginEdit();
       const cx = this.scene.bench.w / 2;
@@ -367,20 +358,21 @@ export class UI {
       this.select(el);
       this.endEdit();
       this.onChange();
-      btns.forEach(x => x.classList.toggle('active', x.dataset.tool === 'select'));
-      this.tool = 'select';
     };
 
-    btns.forEach(b => b.addEventListener('click', () => {
-      const kind = b.dataset.tool;
-      if (placeable.has(kind)) {
-        place(kind);
-      } else {
-        btns.forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
-        this.tool = kind;
-      }
-    }));
+    // Delete action button (not a mode — acts immediately on selected).
+    this._deleteBtn = document.getElementById('delete-btn');
+    this._deleteBtn.addEventListener('click', () => {
+      if (!this.selected) return;
+      this.beginEdit();
+      const idx = this.scene.elements.indexOf(this.selected);
+      this.scene.elements = this.scene.elements.filter(e => e !== this.selected);
+      // Select next element if any, preferring the one after the deleted.
+      const next = this.scene.elements[Math.min(idx, this.scene.elements.length - 1)];
+      this.select(next || null);
+      this.endEdit();
+      this.onChange();
+    });
 
     // Add split-button: left = place last-used kind, right (▾) = dropdown.
     const LABEL_BY_KIND = {
@@ -533,10 +525,28 @@ export class UI {
     const { x, y } = this.canvasToBench(e.clientX, e.clientY);
     this.pointers.set(e.pointerId, { x, y });
 
-    // Second simultaneous pointer on a selected element starts a pinch
-    // (scale + rotate) gesture, superseding any single-pointer drag.
-    if (this.pointers.size === 2 && this.selected) {
-      this._startPinchIfTwoPointers();
+    // Second simultaneous pointer: start pinch (scale + rotate).
+    // If nothing is selected yet, find the element whose center is
+    // closest to the midpoint of the two fingers — users typically
+    // place fingers *around* a small object, not on it.
+    if (this.pointers.size === 2) {
+      if (!this.selected) {
+        const pts = [...this.pointers.values()];
+        const mx = (pts[0].x + pts[1].x) / 2;
+        const my = (pts[0].y + pts[1].y) / 2;
+        const span = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        let bestEl = null, bestDist = Infinity;
+        for (const el of this.scene.elements) {
+          const d = Math.hypot(mx - el.x, my - el.y);
+          // Element center must be within half the finger span of the midpoint.
+          if (d < span * 0.6 && d < bestDist) { bestDist = d; bestEl = el; }
+        }
+        if (bestEl) {
+          this.beginEdit();
+          this.select(bestEl);
+        }
+      }
+      if (this.selected) this._startPinchIfTwoPointers();
       return;
     }
 
@@ -563,39 +573,17 @@ export class UI {
     }
 
     const hit = this.hitTestElement(x, y);
-    if (this.tool === 'select') {
-      if (hit) {
-        this.beginEdit();
-        this.select(hit);
-        if (e.shiftKey || e.button === 2) {
-          const a = Math.atan2(y - hit.y, x - hit.x);
-          this.dragging = { type: 'rotate', startAngle: a, startRot: hit.rot };
-        } else {
-          this.dragging = { type: 'move', dx: hit.x - x, dy: hit.y - y };
-        }
+    if (hit) {
+      this.beginEdit();
+      this.select(hit);
+      if (e.shiftKey || e.button === 2) {
+        const a = Math.atan2(y - hit.y, x - hit.x);
+        this.dragging = { type: 'rotate', startAngle: a, startRot: hit.rot };
       } else {
-        this.select(null);
-      }
-    } else if (this.tool === 'delete') {
-      if (hit) {
-        this.beginEdit();
-        this.scene.elements = this.scene.elements.filter(e => e !== hit);
-        this.select(null);
-        this.endEdit();
-        this.onChange();
+        this.dragging = { type: 'move', dx: hit.x - x, dy: hit.y - y };
       }
     } else {
-      // Place a new element of this kind.
-      this.beginEdit();
-      const el = makeElement(this.tool, x, y);
-      this.scene.elements.push(el);
-      this.select(el);
-      this.dragging = { type: 'move', dx: 0, dy: 0 };
-      document.querySelectorAll('.tools button').forEach(b => {
-        b.classList.toggle('active', b.dataset.tool === 'select');
-      });
-      this.tool = 'select';
-      this.onChange();
+      this.select(null);
     }
   }
 
@@ -662,6 +650,7 @@ export class UI {
     if (this.selected) this.selected._selected = false;
     this.selected = el;
     if (el) el._selected = true;
+    if (this._deleteBtn) this._deleteBtn.disabled = !el;
     this.renderPropPanel();
     this.onChange();
   }
