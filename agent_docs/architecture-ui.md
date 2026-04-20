@@ -18,14 +18,14 @@ labels live inside the viewport so they track the canvas, not the full
 stage.
 
 - **Header (`#toolbar`)** holds (left to right): Help (`?`), the Add
-  split-button, Select, Delete, Audio in / Audio out **split-button
-  dropdowns** (toggle + options `▾`), Save / Load / Clear, and the
-  Preset dropdown (styled via `#preset-select`, placeholder
-  `[preset]`). Fixed height, `z-index` above the drawers,
-  `overflow-x: auto` with `white-space: nowrap` so it stays on screen
-  regardless of viewport width, and `overflow-y: hidden` to prevent a
-  vertical scrollbar. Children have `flex-shrink: 0` so nothing
-  compresses below its natural width.
+  split-button, Delete (action button, disabled when no selection),
+  Audio in / Audio out **split-button dropdowns** (toggle + options
+  `▾`), Save / Load / Clear, and the Preset dropdown (styled via
+  `#preset-select`, placeholder `[preset]`). Fixed height, `z-index`
+  above the drawers, `overflow-x: auto` with `white-space: nowrap` so
+  it stays on screen regardless of viewport width, and `overflow-y:
+  hidden` to prevent a vertical scrollbar. Children have `flex-shrink:
+  0` so nothing compresses below its natural width.
 - **Left panel** carries the parameter sliders the toolbar dropdowns
   don't own: Emitters (count/wavelength range/rays/spread/aperture),
   Sensors (count/sync/factor), the Selected property panel, the
@@ -46,14 +46,20 @@ absolute-positioned overlays starting below the header.
 - **Tool palette**: the Add button is a split button — left side places
   the last-used element type (shows SVG icon + label), right side (`▾`)
   opens the full dropdown. Picking from the dropdown updates the
-  default. Fixed 140 px width to avoid layout shift. Delete and Select
-  are modal.
-- **Select tool**: click to pick, drag to move, Shift-drag (or
-  right-button drag) rotates around the element's centre.
-- **Two-finger touch (pinch)**: while an element is selected, a second
-  pointer starts a combined scale + rotate gesture. Scale applies to
-  each kind's primary size fields; rotation updates `rot`. Ends when
-  fewer than two pointers remain.
+  default. Fixed 140 px width to avoid layout shift. Delete is an
+  action button (not a mode) — disabled when nothing is selected,
+  click deletes the selected element and selects the next one.
+  No separate Select button; selection is always the default behavior.
+- **Selection**: click/tap an element to select it, drag to move,
+  Shift-drag (or right-button drag) rotates around the element's
+  centre. Click/tap empty space to deselect. Hit test has a 15px
+  proximity fallback for small/thin elements on touch screens.
+- **Two-finger touch (pinch)**: if nothing is selected, the element
+  whose center is nearest to the midpoint of the two fingers (within
+  60% of the finger span) is auto-selected. Then the standard pinch
+  gesture starts: scale + rotate. Scale applies to each kind's primary
+  size fields; rotation updates `rot`. Ends when fewer than two
+  pointers remain.
 - **Left-wall emitter tick**: short tap toggles on/off. Shift-click or
   long-press solos. The long-press delay, drift cancel distance, and
   solo logic are in `UI.onDown` / `UI._applyEmitterToggle`. Long-press
@@ -75,7 +81,8 @@ key bindings — they include:
 - Shift + Arrow Left/Right to rotate.
 - Ctrl + Arrow Left/Right to adjust spin by 10 deg/s.
 - Shift + Arrow Up/Down to resize the primary dimension.
-- Backspace / Delete to remove.
+- Backspace / Delete to remove (triggers the Delete action button,
+  which selects the next element after deletion).
 - Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y for undo / redo.
 - A to toggle audio in.
 - Q to toggle audio out.

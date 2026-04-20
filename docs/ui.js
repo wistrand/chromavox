@@ -209,6 +209,24 @@ export class UI {
         }
       }
 
+      // Tab / Shift+Tab: cycle selection through elements.
+      if (e.key === 'Tab' && this.scene.elements.length > 0) {
+        e.preventDefault();
+        const els = this.scene.elements;
+        const idx = this.selected ? els.indexOf(this.selected) : -1;
+        const next = e.shiftKey
+          ? (idx <= 0 ? els.length - 1 : idx - 1)
+          : (idx < 0 || idx >= els.length - 1 ? 0 : idx + 1);
+        this.select(els[next]);
+        return;
+      }
+
+      // Escape: deselect.
+      if (e.key === 'Escape') {
+        this.select(null);
+        return;
+      }
+
       if (!this.selected) return;
 
       if (e.key === 'Backspace' || e.key === 'Delete') {
@@ -218,8 +236,8 @@ export class UI {
       }
 
       let handled = true;
-      if (e.shiftKey && e.key === 'ArrowLeft')       { this.beginEdit(); this.selected.rot -= ROT_STEP; }
-      else if (e.shiftKey && e.key === 'ArrowRight') { this.beginEdit(); this.selected.rot += ROT_STEP; }
+      if (e.shiftKey && e.key === 'ArrowLeft')       { this.beginEdit(); this.selected.rot -= ROT_STEP; this.selected.spin = 0; }
+      else if (e.shiftKey && e.key === 'ArrowRight') { this.beginEdit(); this.selected.rot += ROT_STEP; this.selected.spin = 0; }
       else if (e.shiftKey && e.key === 'ArrowUp')    { this.beginEdit(); bumpSize(this.selected,  SIZE_STEP); }
       else if (e.shiftKey && e.key === 'ArrowDown')  { this.beginEdit(); bumpSize(this.selected, -SIZE_STEP); }
       else if (e.key === 'ArrowLeft')  { this.beginEdit(); this.selected.x -= STEP; }
@@ -609,6 +627,7 @@ export class UI {
       const angle = Math.atan2(dy, dx);
       const scale = dist / this.dragging.startDist;
       this.selected.rot = this.dragging.startRot + (angle - this.dragging.startAngle);
+      this.selected.spin = 0;
       this._applyPinchScale(this.selected, this.dragging.baseSize, scale);
       this.renderPropPanel();
       this.onChange();
@@ -619,6 +638,7 @@ export class UI {
     } else if (this.dragging.type === 'rotate') {
       const a = Math.atan2(y - this.selected.y, x - this.selected.x);
       this.selected.rot = this.dragging.startRot + (a - this.dragging.startAngle);
+      this.selected.spin = 0;
       this.renderPropPanel();
       this.onChange();
     }
@@ -683,6 +703,7 @@ export class UI {
     rot.addEventListener('input', () => {
       this.beginEdit();
       el.rot = parseFloat(rot.value) * Math.PI / 180;
+      el.spin = 0;
       this.onChange();
     });
     rot.addEventListener('change', () => this.endEdit());

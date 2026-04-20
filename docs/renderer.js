@@ -645,7 +645,56 @@ export class Renderer {
       const col = elementOutlineColor(el);
       this.polyOutline(polygon, col[0], col[1], col[2], col[3]);
       if (el._selected) {
-        this.rect(el.x - 8, el.y - 8, 16, 16, 1, 1, 1, 0.8);
+        this._selectedForLabel = el;
+        // Center dot (small diamond).
+        const cx = el.x, cy = el.y, d = 4;
+        this.line(cx - d, cy, cx, cy - d, 1, 1, 1, 0.8);
+        this.line(cx, cy - d, cx + d, cy, 1, 1, 1, 0.8);
+        this.line(cx + d, cy, cx, cy + d, 1, 1, 1, 0.8);
+        this.line(cx, cy + d, cx - d, cy, 1, 1, 1, 0.8);
+        // Rotation indicator: line from center in the rotation direction.
+        const rot = el.rot || 0;
+        const len = 20;
+        const rx = cx + Math.cos(rot) * len;
+        const ry = cy + Math.sin(rot) * len;
+        this.line(cx, cy, rx, ry, 1, 0.8, 0.3, 0.9);
+        // Small arc showing rotation angle, normalized to (-π, π].
+        const arcR = 14;
+        const steps = 8;
+        let arcAngle = rot % (2 * Math.PI);
+        if (arcAngle > Math.PI) arcAngle -= 2 * Math.PI;
+        if (arcAngle < -Math.PI) arcAngle += 2 * Math.PI;
+        const startA = 0;
+        const endA = arcAngle;
+        for (let i = 0; i < steps; i++) {
+          const a1 = startA + (endA - startA) * (i / steps);
+          const a2 = startA + (endA - startA) * ((i + 1) / steps);
+          this.line(
+            cx + Math.cos(a1) * arcR, cy + Math.sin(a1) * arcR,
+            cx + Math.cos(a2) * arcR, cy + Math.sin(a2) * arcR,
+            1, 0.8, 0.3, 0.6);
+        }
+      }
+    }
+
+    // Position the rotation label over the selected element.
+    const rotLabel = document.getElementById('rotation-label');
+    if (rotLabel) {
+      const sel = this._selectedForLabel;
+      this._selectedForLabel = null;
+      if (sel) {
+        const deg = ((sel.rot || 0) * 180 / Math.PI) % 360;
+        const vp = this.canvas.parentElement;
+        if (vp) {
+          const sx = vp.clientWidth / scene.bench.w;
+          const sy = vp.clientHeight / scene.bench.h;
+          rotLabel.textContent = `${deg >= 0 ? '+' : ''}${deg.toFixed(1)}°`;
+          rotLabel.style.left = (sel.x * sx + 24) + 'px';
+          rotLabel.style.top = (sel.y * sy - 6) + 'px';
+          rotLabel.hidden = false;
+        }
+      } else {
+        rotLabel.hidden = true;
       }
     }
   }

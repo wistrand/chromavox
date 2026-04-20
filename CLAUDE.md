@@ -216,6 +216,13 @@ Detailed notes are split into topic files under `agent_docs/`:
   the full dropdown. Picking from the dropdown updates the default.
   Fixed 140 px width to avoid layout shift. Each menu item shows an SVG
   thumbnail rendered from the element's own `localPolygon`.
+- Delete is an action button (not a mode). Disabled when no element is
+  selected; click deletes the selected element and selects the next one
+  (or previous if last). Backspace/Delete key triggers the same action.
+  No separate Select button — selection is always the default behavior
+  (tap/click an element to select, tap empty space to deselect).
+  Two-finger pinch selects the element nearest the midpoint of the
+  fingers (within 60% of the finger span) if nothing is selected.
 - Audio in / Audio out are split-button dropdowns: the main button
   toggles the audio state on/off; the `▾` opens an options menu
   (`#mic-menu`, `#synth-menu`) containing all the related selects /
