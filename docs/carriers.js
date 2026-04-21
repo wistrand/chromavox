@@ -55,6 +55,17 @@ export const CARRIERS = {
         display: v => v.toFixed(2) },
     ],
   },
+  vocoder: {
+    label: 'vocoder',
+    params: [
+      { id: 'vocExcite', label: 'Excite', min: 0, max: 1, default: 0.5,
+        display: v => v < 0.33 ? 'noise' : v < 0.66 ? 'mix' : 'pulse' },
+      { id: 'vocAttack', label: 'Attack', min: 1, max: 50, default: 5, step: 1,
+        display: v => v.toFixed(0) + 'ms' },
+      { id: 'vocRelease', label: 'Release', min: 5, max: 200, default: 20, step: 1,
+        display: v => v.toFixed(0) + 'ms' },
+    ],
+  },
   karplus: {
     label: 'karplus',
     params: [

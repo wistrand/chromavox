@@ -113,14 +113,22 @@ getting it wrong flips refraction direction and everything breaks subtly.
 
 ## Render loop
 
-`main.js` uses a dirty flag. `markDirty()` is passed to `UI` as `onChange`
-and called on every interaction. `markDirty` also auto-saves the scene
-to `localStorage` (key `'chromavox-scene'`) via `serializeScene`. On
-page load, `main.js` restores from localStorage if present, otherwise
-calls `createScene()`. Don't run the tracer on every RAF
-unconditionally — it's pure JS and expensive at high ray counts. When
-audio in is active the loop marks dirty each frame so buckets animate;
-when audio out is active the synth update also runs every frame.
+`main.js` uses a dirty flag and an **idle RAF loop** — the loop stops
+when nothing needs updating and wakes on demand. Three-tier scheduling:
+
+- `scheduleFrame()` — wake the RAF loop (display-only, e.g. stats)
+- `setDirty()` — also retrace rays on the next frame
+- `markDirty()` — also save to localStorage and pause song keyframes
+
+`markDirty()` is passed to `UI` as `onChange` and called on every
+interaction. On page load, `main.js` restores from localStorage if
+present, otherwise calls `createScene()`. At the end of each frame the
+idle check decides whether to request another:
+`needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
+|| songPlayer.playing || (mic.active && source !== 'touch') || synth.active`.
+All state-changing event handlers (mic enable/disable, file transport,
+song play/stop/seek, synth enable, visibility resume, keyboard shortcuts)
+call `scheduleFrame()` or `setDirty()` as appropriate.
 
 Elements with `el.spin` (rad/s) get `el.rot += el.spin * dt` applied
 each frame, which also marks dirty so the loop stays active while any

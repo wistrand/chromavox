@@ -121,6 +121,16 @@ test('worklet: supersaw carrier produces non-zero output', () => {
   assert(max > 0.001, `supersaw output too quiet: ${max}`);
 });
 
+test('worklet: vocoder carrier produces non-zero output', () => {
+  const s = makeSynth('vocoder', 4, 440);
+  feedBins(s, 4, 0.5);
+  let buf;
+  for (let i = 0; i < 20; i++) buf = processBlock(s);
+  let max = 0;
+  for (let i = 0; i < buf.length; i++) max = Math.max(max, Math.abs(buf[i]));
+  assert(max > 0.001, `vocoder output too quiet: ${max}`);
+});
+
 test('worklet: pulse carrier produces non-zero output', () => {
   const s = makeSynth('pulse', 4, 440);
   feedBins(s, 4, 0.5);
@@ -335,6 +345,14 @@ test('click: pulse onset — no discontinuity', () => {
   const bufs = processBlocks(s, 10);
   const bd = maxBoundaryDelta(bufs);
   assert(bd < 0.25, `pulse onset boundary delta too large: ${bd.toFixed(4)}`);
+});
+
+test('click: vocoder onset — no discontinuity', () => {
+  const s = makeSynth('vocoder', 8, 300);
+  feedBins(s, 8, 0.5);
+  const bufs = processBlocks(s, 10);
+  const bd = maxBoundaryDelta(bufs);
+  assert(bd < 0.15, `vocoder onset boundary delta too large: ${bd.toFixed(4)}`);
 });
 
 test('click: karplus onset — fast but bounded', () => {

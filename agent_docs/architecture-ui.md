@@ -100,6 +100,7 @@ key bindings — they include:
   shift octave.
 - 1/2/3/4 toggle floating windows: 1=mic spectrum, 2=synth spectrum,
   3=synth waveform, 4=stats.
+- F to toggle fullscreen mode.
 
 Shortcuts are ignored when focus is in a form control so typing into
 inputs isn't hijacked. They are also short-circuited while a mouse
@@ -278,3 +279,44 @@ These gestures are only active when independent scale is on.
   'show-right')`. Visible only on the mobile breakpoint.
 - Drawer panels start below the header; DPR cap is set in
   `Renderer.resize`.
+
+## Fullscreen mode
+
+`F` key or the `⛶` button toggles fullscreen. Adds `.fullscreen-mode`
+to `#app`, which switches the CSS grid to a two-column layout
+(`stage + right`), hiding the toolbar, left panel, transport, and
+panel toggles. Scale labels fade to 25% opacity. On mobile (≤600 px)
+the right panel is also hidden — only the bench is shown.
+
+Uses the Fullscreen API (`requestFullscreen` / `exitFullscreen`).
+A `fullscreenchange` listener removes `.fullscreen-mode` when the
+browser exits fullscreen (e.g. via Escape). Resize + setDirty are
+called on both enter and exit.
+
+## Idle RAF loop
+
+The frame loop stops when idle — no dirty flag, no particles in flight,
+no spinning elements, no audio active, no song playing, and no touch
+levels ramping. `scheduleFrame()` wakes it; called from `setDirty()`,
+`markDirty()`, and all state-changing event handlers (mic enable/
+disable, file play/pause/restart, song play/stop/seek, synth enable,
+visibility resume, keyboard shortcuts).
+
+Three-tier scheduling:
+- `scheduleFrame()` — wake the RAF loop (display-only updates)
+- `setDirty()` — also retrace rays on the next frame
+- `markDirty()` — also save to localStorage and pause song keyframes
+
+The idle check at the end of each frame:
+`needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
+|| songPlayer.playing || (mic.active && source !== 'touch') || synth.active`
+
+## Touch level ramping
+
+`setTouchLevel` writes to `_touchTargets`, not `_touchLevels` directly.
+`smoothTouchLevels()` is called once per frame in the main loop, ramping
+actual levels toward targets (attack 0.2/frame, release 0.15/frame).
+Prevents clicks from instant 0→1 steps into vocoder or other carriers.
+`mic.onTouchChange` callback calls `setDirty()` in `main.js` to wake
+the frame loop on keyboard note on/off. The idle check keeps the loop
+running while any touch level differs from its target (`touchRamping`).

@@ -94,9 +94,10 @@ restore.
 - `carrier`: synth carrier mode (applied to `synth-carrier`)
 - `partials`, `volume`: synth settings
 
-The `global` section is applied once on load (first play frame) via
-the `onGlobal` callback. It does not re-apply on restart, only on
-new load.
+The `global` section is applied once on load via the `onGlobal`
+callback, guarded by the `_globalApplied` flag. The flag is set to
+`true` on first application and only reset to `false` in `load()` —
+so global settings apply once per song load, not on restart or seek.
 
 ### `keyframes`
 

@@ -400,6 +400,7 @@ export class MicModulator {
       if (idx >= 0 && idx < 64) {
         this._touchLevels[idx] = 1;
         this._kbdActiveDegs.add(e.code);
+        if (this.onTouchChange) this.onTouchChange();
       }
     };
     const onUp = e => {
@@ -409,7 +410,10 @@ export class MicModulator {
       const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
       const idx = scale.length * this.keyboardOctave + deg;
       if (!this._touchLevels) return;
-      if (idx >= 0 && idx < 64) this._touchLevels[idx] = 0;
+      if (idx >= 0 && idx < 64) {
+        this._touchLevels[idx] = 0;
+        if (this.onTouchChange) this.onTouchChange();
+      }
     };
     window.addEventListener('keydown', onDown);
     window.addEventListener('keyup', onUp);
@@ -422,9 +426,28 @@ export class MicModulator {
 
   setTouchLevel(emitterIdx, level) {
     // Touch input is always available regardless of source.
+    // Store targets; actual levels ramp toward targets in smoothTouchLevels().
     if (!this._touchLevels) this._touchLevels = new Float32Array(64);
-    if (emitterIdx >= 0 && emitterIdx < this._touchLevels.length) {
-      this._touchLevels[emitterIdx] = level;
+    if (!this._touchTargets) this._touchTargets = new Float32Array(64);
+    if (emitterIdx >= 0 && emitterIdx < this._touchTargets.length) {
+      this._touchTargets[emitterIdx] = level;
+    }
+  }
+
+  // Ramp _touchLevels toward _touchTargets. Called once per frame from
+  // the main loop. ~3ms attack, ~5ms release at 60fps (~16ms per frame).
+  smoothTouchLevels() {
+    if (!this._touchLevels || !this._touchTargets) return;
+    const atkRate = 0.2;  // per-frame: reaches 87% in 3 frames (~50ms)
+    const relRate = 0.15; // per-frame: reaches 87% in 4 frames (~66ms)
+    for (let i = 0; i < this._touchLevels.length; i++) {
+      const t = this._touchTargets[i];
+      const c = this._touchLevels[i];
+      if (Math.abs(t - c) < 0.001) {
+        this._touchLevels[i] = t;
+      } else {
+        this._touchLevels[i] += (t - c) * (t > c ? atkRate : relRate);
+      }
     }
   }
 

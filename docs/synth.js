@@ -109,7 +109,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         centroid: 0.5, targetCentroid: 0.5,
         pulsePhase: 0,
         kpBuf: new Float32Array(kpLen), kpIdx: 0, kpPrev: 0, kpGainPrev: 0,
-        kpExLp: 0 });
+        kpExLp: 0,
+        // Vocoder: 4th-order bandpass = two cascaded biquads.
+        voc1: new Float32Array(4), voc2: new Float32Array(4), // [x1,x2,y1,y2] per biquad
+        vocEnv: 0, vocPulsePhase: 0 });
     }
   }
   process(inputs, outputs) {
@@ -128,6 +131,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const isSupersaw = this.carrier === 'supersaw';
     const isPulse = this.carrier === 'pulse';
     const isKarplus = this.carrier === 'karplus';
+    const isVocoder = this.carrier === 'vocoder';
     // Compute target gains from latest bins snapshot.
     // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
     // the 0-1 micGain scale, then apply floor + gamma. This matches the
@@ -135,7 +139,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // Noise and acid carriers use K=1 (single band per voice).
     if (bins && bins.length >= sc * bc) {
       const fs = this.fullScale;
-      const gainK = (isNoise || isAcid || isFM || isSupersaw || isPulse || isKarplus) ? 1 : K;
+      const gainK = (isNoise || isAcid || isFM || isSupersaw || isPulse || isKarplus || isVocoder) ? 1 : K;
       const partialFS = fs / gainK;
       const voiceScale = 1 / Math.sqrt(sc * gainK);
       const singleBand = gainK === 1;
@@ -200,6 +204,37 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const voices = this.voices;
     const voiceCount = voices.length;
     let _activeCount = 0;
+
+    // Vocoder shared excitation: one broadband signal for all voices.
+    // Pulse is a PolyBLEP saw at a fixed low pitch (100 Hz) so all
+    // bandpass filters extract harmonics from the same rich spectrum.
+    let _vocExc = null;
+    if (isVocoder) {
+      const excite = this.P.vocExcite ?? 0.5;
+      const useNoise = excite < 0.66;
+      const usePulse = excite > 0.33;
+      const noiseMix = useNoise ? Math.min(1, (0.66 - excite) / 0.33) : 0;
+      const pulseMix = usePulse ? Math.min(1, (excite - 0.33) / 0.33) : 0;
+      const basePitch = 100; // fixed excitation pitch
+      const pdt = basePitch * invSr;
+      if (!this._vocPhase) this._vocPhase = 0;
+      _vocExc = new Float32Array(len);
+      for (let i = 0; i < len; i++) {
+        let exc = 0;
+        if (useNoise) exc += (Math.random() * 2 - 1) * noiseMix;
+        if (usePulse) {
+          this._vocPhase += pdt;
+          if (this._vocPhase >= 1) this._vocPhase -= 1;
+          let saw = 2 * this._vocPhase - 1;
+          const t1 = this._vocPhase / pdt;
+          if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
+          const t2 = (1 - this._vocPhase) / pdt;
+          if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
+          exc += saw * pulseMix;
+        }
+        _vocExc[i] = exc;
+      }
+    }
     // Constant-power pan per voice: sensor 0 (bottom) → left,
     // sensor N-1 (top) → right. PI/2 sweep.
     const _halfPi = Math.PI * 0.5;
@@ -213,7 +248,14 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       for (let k = 0; k < v.gains.length; k++) {
         if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
       }
-      if (!anyActive) { v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = -1; continue; }
+      if (!anyActive) {
+        v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = -1;
+        // Clear vocoder biquad states so reactivation doesn't ring.
+        if (v.voc1) { v.voc1[0] = v.voc1[1] = v.voc1[2] = v.voc1[3] = 0; }
+        if (v.voc2) { v.voc2[0] = v.voc2[1] = v.voc2[2] = v.voc2[3] = 0; }
+        v.vocEnv = 0;
+        continue;
+      }
       _activeCount++;
 
       if (isAcid) {
@@ -418,6 +460,53 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         }
         v.pulsePhase = phase;
         v.gains[0] = voiceGain;
+      } else if (isVocoder) {
+        // Classic vocoder: shared broadband excitation → 4th-order
+        // bandpass (two cascaded biquads) → envelope-modulated output.
+        // Q is auto-computed from voice spacing for non-overlapping bands.
+        const voiceTarget = v.targetGains[0];
+        const freq = v.freq;
+        // Auto-Q: bandwidth = gap to next voice. For N log-spaced voices,
+        // ratio = (hiHz/loHz)^(1/N). BW = freq × (ratio-1). Q = 1/(ratio-1).
+        const ratio = sc > 1 ? Math.pow(6000 / 80, 1 / sc) : 2;
+        const bw = freq * (ratio - 1);
+        const Q = Math.max(1, freq / bw);
+        // Biquad BPF coefficients (Audio EQ Cookbook, Robert Bristow-Johnson).
+        const w0 = twoPi * freq * invSr;
+        const sinW = Math.sin(w0), cosW = Math.cos(w0);
+        const alpha = sinW / (2 * Q);
+        const a0inv = 1 / (1 + alpha);
+        const b0 =  (sinW / 2) * a0inv;
+        const b1 =  0;
+        const b2 = -(sinW / 2) * a0inv;
+        const a1 = (-2 * cosW) * a0inv;
+        const a2 = (1 - alpha) * a0inv;
+        // Envelope: fast attack/release in ms → per-sample coefficients.
+        const atkMs = this.P.vocAttack ?? 5;
+        const relMs = this.P.vocRelease ?? 20;
+        const atkCoeff = 1 - Math.exp(-1 / (atkMs * 0.001 * sampleRate));
+        const relCoeff = 1 - Math.exp(-1 / (relMs * 0.001 * sampleRate));
+        let env = v.vocEnv;
+        const s1 = v.voc1, s2 = v.voc2; // biquad states [x1,x2,y1,y2]
+        // Gain normalization: at Q=10, peak gain ≈ Q. Compensate.
+        const gainNorm = 1 / Math.max(1, Q * 0.5);
+        for (let i = 0; i < len; i++) {
+          // Envelope follower: fast attack, slower release.
+          env += (voiceTarget - env) * (voiceTarget > env ? atkCoeff : relCoeff);
+          // Apply envelope to excitation BEFORE filtering — prevents
+          // biquad state buildup during silence that clicks on onset.
+          const exc = _vocExc[i] * env;
+          // First biquad.
+          let y = b0 * exc + b1 * s1[0] + b2 * s1[1] - a1 * s1[2] - a2 * s1[3];
+          s1[1] = s1[0]; s1[0] = exc; s1[3] = s1[2]; s1[2] = y;
+          // Second biquad (cascade for 4th order / 24 dB/oct).
+          const y2 = b0 * y + b1 * s2[0] + b2 * s2[1] - a1 * s2[2] - a2 * s2[3];
+          s2[1] = s2[0]; s2[0] = y; s2[3] = s2[2]; s2[2] = y2;
+          const _s = y2 * gainNorm * 4;
+          bufL[i] += _s * panL; bufR[i] += _s * panR;
+        }
+        v.vocEnv = env;
+        v.gains[0] = voiceTarget;
       } else if (isKarplus) {
         // Karplus-Strong plucked string. Delay line with lowpass feedback.
         // Sensor energy re-excites the string; spectral centroid modulates

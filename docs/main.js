@@ -202,6 +202,8 @@ const encoderCC = (cc, val) => {
 push.onCC = encoderCC;
 mpc.onCC = encoderCC;
 apc.onCC = encoderCC;
+// Keyboard note on/off in mic.js needs to wake the frame loop.
+mic.onTouchChange = () => setDirty();
 // Route mic CC events: transport buttons handled here, encoders to controller.
 mic.onCC = (cc, val) => {
   // Play button (CC 85) toggles audio out. Only on press (val > 0).
@@ -1766,6 +1768,15 @@ function frame() {
   // Reset per-frame — rebuilt below by bucket-color, MPE, or bend.
   scene.runtime.wlPerSource = null;
 
+  // Ramp touch levels toward targets (prevents clicks from instant 0→1 steps).
+  mic.smoothTouchLevels();
+  // Keep retracing while levels are ramping.
+  if (mic._touchLevels && mic._touchTargets) {
+    for (let i = 0; i < mic._touchLevels.length; i++) {
+      if (Math.abs(mic._touchLevels[i] - mic._touchTargets[i]) > 0.001) { dirty = true; break; }
+    }
+  }
+
   // Overlay touch/keys and MIDI input on top of song levels during playback.
   if (songPlayer.playing) {
     const n = scene.emitter.count;
@@ -1997,7 +2008,14 @@ function frame() {
   // When idle, the loop stops — scheduleFrame() restarts it.
   _rafId = 0;
   const hasSpinning = scene.elements.some(e => e.spin);
-  const needsFrame = dirty || particlesInFlight || hasSpinning
+  // Touch levels still ramping toward targets?
+  let touchRamping = false;
+  if (mic._touchLevels && mic._touchTargets) {
+    for (let i = 0; i < mic._touchLevels.length; i++) {
+      if (Math.abs(mic._touchLevels[i] - mic._touchTargets[i]) > 0.001) { touchRamping = true; break; }
+    }
+  }
+  const needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
     || songPlayer.playing || (mic.active && mic.source !== 'touch')
     || (mic._filePlaying);
   if (needsFrame) scheduleFrame();

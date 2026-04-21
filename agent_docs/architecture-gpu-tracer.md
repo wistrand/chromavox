@@ -15,11 +15,13 @@ per vertex (O(B²)), this runs one TF dispatch per bounce with
 `totalRays` vertices. Each dispatch reads the previous bounce's ray
 state and advances one step. Total work: `totalRays × actualBounces`.
 
-**Effective bounce count**: `min(MAX_BOUNCES, edges.length * 3 + 2)`.
-The `* 3` factor accounts for TIR bounces with fewer arc edges (analytic
-arcs replace many polygon segments, but rays can still TIR multiple times
-inside a curved element). Empty scene: 2 dispatches. Single prism: 5.
-This directly controls dispatch count, segment buffer size, and memory.
+**Effective bounce count**: `min(MAX_BOUNCES, segCount + arcCount * 3 + 2)`.
+Arc edges get a 3× multiplier (rays can TIR multiple times inside a
+curved element); segment edges get 1× (a segment is typically only
+hit once). The `+2` covers the final wall hit. Empty scene: 2 dispatches.
+Single prism: 5 (was 11 with the old uniform `edges * 3` formula —
+55% reduction). Mirror: 6 (was 14, 57% reduction). This directly
+controls dispatch count, segment buffer size, and memory.
 
 **Buffer layout**:
 - Two ping-pong buffers (`_ppBufs[0]`, `_ppBufs[1]`): each sized
@@ -132,7 +134,8 @@ GPU tracer is faster than CPU in all scenarios:
 
 GPU time is dominated by dispatch overhead (~15μs per bounce), not
 computation. The `effectiveBounces` optimization reduces dispatch
-count from 32 to `edges + 1`, making simple scenes near-free.
+count from 32 to `segCount + arcCount * 3 + 2`, making simple scenes
+near-free.
 
 ## Limitations vs CPU tracer
 

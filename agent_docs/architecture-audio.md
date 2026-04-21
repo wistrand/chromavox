@@ -24,12 +24,17 @@ generator:
   AudioContext. Pointer events on the left edge of the bench (within
   60 bench pixels of the emitter ticks) set emitter levels directly
   by position. Keyboard claviature (same ZXCVBNM/SDGHJ layout)
-  sets levels by scale degree. Both write to `_touchLevels`. Multi-
-  touch supported. All emitters are force-enabled (disabled set
-  cleared each frame). Context menu suppressed on the stage element.
-  Touch events listen on `#stage` (not canvas) so the letterbox
-  black bars also respond. `stopPropagation` on touch-zone pointers
-  prevents UI element-toggle/drag interference.
+  sets levels by scale degree. Both write to `_touchTargets` (not
+  `_touchLevels` directly); actual levels ramp toward targets each
+  frame via `smoothTouchLevels()` — attack 0.2/frame (~50 ms),
+  release 0.15/frame (~66 ms). This prevents clicks from instant
+  0→1 steps into the vocoder or other carriers. `mic.onTouchChange`
+  callback wakes the frame loop on keyboard note on/off so the ramp
+  runs immediately. Multi-touch supported. All emitters are force-
+  enabled (disabled set cleared each frame). Context menu suppressed
+  on the stage element. Touch events listen on `#stage` (not canvas)
+  so the letterbox black bars also respond. `stopPropagation` on
+  touch-zone pointers prevents UI element-toggle/drag interference.
 
 - `file` — audio file decoded via `decodeAudioData`, looped via a
   `BufferSource`. Transport controls (play/pause/restart/time) exposed
@@ -133,7 +138,7 @@ no separate `.js` file, no build step. `synth.enable()` is async
 - **Carrier mode**: selectable via the Carrier dropdown in the Audio
   out options menu. Carrier parameters are defined in `docs/carriers.js`
   (single source of truth for UI, persistence, automation, and worklet
-  defaults). Seven modes:
+  defaults). Eight modes:
   - `sine` (default): harmonic partials with 1/k rolloff for
     neutral sawtooth-like timbre from white light. Bin-to-partial
     mapping is **inverted**: blue light (low wavelength bins) drives
@@ -160,6 +165,19 @@ no separate `.js` file, no build step. `synth.enable()` is async
     (0.05-0.95, default 0.5) sets the base duty cycle. Two PolyBLEP
     corrections (at 0 and at the duty cycle crossing) give clean
     anti-aliased edges.
+  - `vocoder`: classic vocoder topology — shared broadband excitation
+    → 4th-order bandpass (two cascaded biquads, 24 dB/oct) →
+    envelope-modulated output per voice. Shared excitation computed
+    once per block at fixed 100 Hz (PolyBLEP saw); all voices filter
+    the same signal. Auto-Q from voice spacing:
+    `Q = 1/(ratio - 1)` where `ratio = (6000/80)^(1/N)` (~10.4 for
+    48 voices). Gain normalization `1/(Q*0.5)` compensates for filter
+    peak gain. Fast per-sample envelope (default 5 ms attack / 20 ms
+    release) applied PRE-filter to prevent biquad state buildup
+    clicks. Biquad states and `vocEnv` cleared in the `!anyActive`
+    branch to prevent reactivation clicks. Three sliders: **Excite**
+    (noise 0 / mix 0.5 / pulse 1), **Attack** (1–50 ms), **Release**
+    (5–200 ms).
   - `karplus`: Karplus-Strong physical string model. Per-voice delay
     line (length = `ceil(sampleRate / freq)`). **Damping** slider
     (0-1, default 0.4) controls feedback lowpass coefficient (higher

@@ -192,7 +192,7 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   `cos/sin(pan * PI/2)` pan law). Sine wavetable (`fsin`): 2048-entry
   LUT with linear interpolation for sine partials and FM; noise and
   karplus use `Math.random()` (Mulberry32 PRNG reverted due to
-  inter-voice correlation). Seven carrier modes: `sine`
+  inter-voice correlation). Eight carrier modes: `sine`
   (harmonic partials, inverted bin-to-partial mapping: blue→high
   partials, red→fundamental), `noise` (unity-gain Csound `resonz`
   bandpass; `bp = (y0-y2)*(1-r²)/2`, variable Q via slider, default
@@ -201,7 +201,10 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   squelch; Resonance + Env Amount + Cutoff + Decay + Drive sliders),
   `fm` (FM synthesis, ratio + depth), `supersaw` (7 detuned saws,
   detune slider), `pulse` (PolyBLEP variable-width pulse, Width
-  slider 0.05-0.95), `karplus` (Karplus-Strong delay line per voice,
+  slider 0.05-0.95), `vocoder` (classic vocoder: shared broadband
+  excitation at 100 Hz → 4th-order bandpass per voice, 24 dB/oct;
+  auto-Q from spacing, envelope applied PRE-filter; Excite/Attack/
+  Release sliders), `karplus` (Karplus-Strong delay line per voice,
   Damping + Excite sliders, continuous + transient excitation).
   Spectral centroid (inverted: blue→1.0, red→0.0) modulates per-
   carrier parameters (acid→cutoff, noise→freq, fm→ratio,
@@ -227,7 +230,10 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   of the bench (≤60px from emitter ticks, including letterbox black
   bars) sets emitter levels by Y position. Keyboard claviature
   (ZXCVBNM layout) sets by scale degree. Both write to
-  `_touchLevels`. Multi-touch supported. All emitters force-enabled.
+  `_touchTargets`; actual `_touchLevels` ramp toward targets each
+  frame via `smoothTouchLevels()` (attack 0.2/frame, release
+  0.15/frame). `mic.onTouchChange` callback wakes the frame loop.
+  Multi-touch supported. All emitters force-enabled.
   `stopPropagation` on touch-zone pointers prevents UI drag
   interference. Element hit-test has a 15px proximity fallback for
   easier touch selection.
@@ -363,8 +369,8 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   ping-pong bounce architecture. Default tracer; auto-switches to CPU
   when delay elements are added (`pickTracer()`). One TF dispatch per
   bounce, reading previous bounce's ray state from a ping-pong buffer
-  pair. `effectiveBounces = min(32, edges * 3 + 2)` bounds dispatch
-  count (the `* 3` factor handles TIR with fewer arc edges). Segment
+  pair. `effectiveBounces = min(32, segCount + arcCount * 3 + 2)` bounds
+  dispatch count (arc edges get 3× for TIR; segment edges get 1×). Segment
   buffer populated via `copyBufferSubData` per bounce; renderer binds
   directly (zero-copy, stride 96, offset `SEG_P_OFF`). Inside-element
   stack: depth-3 packed into one fp32 (`stkLen*262144 + stk[0]*4096 +
@@ -376,6 +382,16 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   on buffer resize). 33-870x faster than CPU. `trace()` postcondition:
   FBO unbound, blend/viewport/program left dirty. `?cpu` forces CPU.
   Test page: `docs/gpu-test.html`.
+- Idle RAF loop: frame loop stops when nothing needs updating.
+  `scheduleFrame()` wakes it; `setDirty()` wakes + retraces;
+  `markDirty()` wakes + retraces + saves to localStorage. Idle check:
+  `needsFrame = dirty || particlesInFlight || hasSpinning ||
+  touchRamping || songPlayer.playing || mic.active || synth.active`.
+  All state-changing handlers call `scheduleFrame`/`setDirty`.
+- Fullscreen mode: `F` key or `⛶` button toggles. Hides toolbar, left
+  panel, transport, panel toggles. Shows bench + right panel (sensor
+  spectrograms). Scale labels fade to 25% opacity. Mobile (≤600 px):
+  right panel hidden too. Uses Fullscreen API; exits on Escape.
 - Responsive layout: three tiers — full 220px panels above 960px,
   slim 160px panels from 601–960px (foldables/small tablets), drawer
   mode below 600px (phones). `#stage` has `touch-action: none`.
