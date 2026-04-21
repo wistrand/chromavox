@@ -94,8 +94,8 @@ const float PHI = 0.6180339887498949;
 const float PSI = 0.7548776662466927;
 const float GLASS_LOSS = 0.998;
 
-vec4 edgeEndpoints(int i) { return texelFetch(u_edges, ivec2(i, 0), 0); }
-vec3 edgeNormalAndEl(int i) { return texelFetch(u_edges, ivec2(i, 1), 0).xyz; }
+vec4 edgeRow0(int i) { return texelFetch(u_edges, ivec2(i, 0), 0); }
+vec4 edgeRow1(int i) { return texelFetch(u_edges, ivec2(i, 1), 0); }
 vec4 elRow(int i, int row) { return texelFetch(u_elements, ivec2(i, row), 0); }
 
 // Inside-element stack: packed into one float as an integer.
@@ -146,6 +146,37 @@ float raySeg(vec2 o, vec2 d, vec2 a, vec2 b) {
   float u = (e.x * d.y - e.y * d.x) / denom;
   if (t <= ${EPS.toExponential()} || u < 0.0 || u > 1.0) return -1.0;
   return t;
+}
+
+bool angleInRange(float a, float a0, float span) {
+  float da = mod(a - a0, 6.2831853);
+  return da <= span + 1e-4;
+}
+
+float rayArc(vec2 o, vec2 d, vec2 c, float R, float a0, float a1) {
+  vec2 oc = o - c;
+  float A = dot(d, d);
+  float B = dot(oc, d);
+  float C = dot(oc, oc) - R * R;
+  float disc = B * B - A * C;
+  if (disc < 0.0) return -1.0;
+  float sq = sqrt(disc);
+  float invA = 1.0 / A;
+  float span = mod(a1 - a0, 6.2831853);
+  if (span <= 0.0) span += 6.2831853;
+  float t1 = (-B - sq) * invA;
+  float t2 = (-B + sq) * invA;
+  if (t1 > ${EPS.toExponential()}) {
+    vec2 hp = o + d * t1;
+    float ang = atan(hp.y - c.y, hp.x - c.x);
+    if (angleInRange(ang, a0, span)) return t1;
+  }
+  if (t2 > ${EPS.toExponential()}) {
+    vec2 hp = o + d * t2;
+    float ang = atan(hp.y - c.y, hp.x - c.x);
+    if (angleInRange(ang, a0, span)) return t2;
+  }
+  return -1.0;
 }
 
 vec3 wlToRGB(float wl) {
@@ -255,8 +286,17 @@ void main() {
   int hitWallKind = -1;
 
   for (int i = 0; i < u_edgeCount; i++) {
-    vec4 ep = edgeEndpoints(i);
-    float t = raySeg(pos, dir, ep.xy, ep.zw);
+    vec4 r0 = edgeRow0(i);
+    vec4 r1 = edgeRow1(i);
+    float edgeType = r1.w;
+    float t;
+    if (edgeType > 0.5) {
+      // Arc: r0 = (cx, cy, R, convex), r1 = (a0, a1, elIdx, 1.0)
+      t = rayArc(pos, dir, r0.xy, r0.z, r1.x, r1.y);
+    } else {
+      // Segment: r0 = (p1.x, p1.y, p2.x, p2.y)
+      t = raySeg(pos, dir, r0.xy, r0.zw);
+    }
     if (t > 0.0 && t < tBest) { tBest = t; hitEdgeIdx = i; hitWallKind = -1; }
   }
   float t;
@@ -305,10 +345,22 @@ void main() {
     return;
   }
 
-  // Element hit: refract or reflect
-  vec3 edgeInfo = edgeNormalAndEl(hitEdgeIdx);
-  vec2 n = edgeInfo.xy;
-  int elIdx = int(edgeInfo.z);
+  // Element hit: refract or reflect.
+  // Read both edge rows for normal + element index.
+  vec4 hitR0 = edgeRow0(hitEdgeIdx);
+  vec4 hitR1 = edgeRow1(hitEdgeIdx);
+  float hitEdgeType = hitR1.w;
+  vec2 n;
+  int elIdx;
+  if (hitEdgeType > 0.5) {
+    // Arc: normal = normalize(hit - center), flip if concave.
+    n = normalize(hit - hitR0.xy);
+    if (hitR0.w < 0.5) n = -n;  // concave
+    elIdx = int(hitR1.z);
+  } else {
+    n = hitR1.xy;
+    elIdx = int(hitR1.z);
+  }
   vec4 elType = elRow(elIdx, 0);
   float type = elType.x;
   vec4 elDelay = elRow(elIdx, 3);
@@ -570,14 +622,24 @@ export class GPUTracer {
     }
     const d = this._edgeData;
     gl.bindTexture(gl.TEXTURE_2D, this._edgeTex);
+    // Row 0: segment = (p1.x, p1.y, p2.x, p2.y); arc = (cx, cy, R, convex)
     for (let i = 0; i < n; i++) {
       const e = edges[i];
-      d[i*4] = e.p1.x; d[i*4+1] = e.p1.y; d[i*4+2] = e.p2.x; d[i*4+3] = e.p2.y;
+      if (e.type === 'arc') {
+        d[i*4] = e.cx; d[i*4+1] = e.cy; d[i*4+2] = e.R; d[i*4+3] = e.convex ? 1 : 0;
+      } else {
+        d[i*4] = e.p1.x; d[i*4+1] = e.p1.y; d[i*4+2] = e.p2.x; d[i*4+3] = e.p2.y;
+      }
     }
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, 1, gl.RGBA, gl.FLOAT, d.subarray(0, n*4));
+    // Row 1: segment = (nx, ny, elIdx, 0); arc = (a0, a1, elIdx, 1)
     for (let i = 0; i < n; i++) {
       const e = edges[i];
-      d[i*4] = e.nx; d[i*4+1] = e.ny; d[i*4+2] = e._gpuElIdx ?? 0; d[i*4+3] = 0;
+      if (e.type === 'arc') {
+        d[i*4] = e.a0; d[i*4+1] = e.a1; d[i*4+2] = e._gpuElIdx ?? 0; d[i*4+3] = 1;
+      } else {
+        d[i*4] = e.nx; d[i*4+1] = e.ny; d[i*4+2] = e._gpuElIdx ?? 0; d[i*4+3] = 0;
+      }
     }
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 1, n, 1, gl.RGBA, gl.FLOAT, d.subarray(0, n*4));
   }
@@ -671,7 +733,11 @@ export class GPUTracer {
     // A ray can cross at most one edge per bounce, so it can't bounce
     // more times than there are edges. Reduces dispatch count and
     // segment buffer size dramatically for simple scenes.
-    const effectiveBounces = Math.min(MAX_BOUNCES, edges.length + 1);
+    // Each edge can be hit multiple times (TIR, re-entry). With polygon
+    // facets, edge count far exceeded actual hits; with analytic arcs the
+    // count matches physical surfaces. Use 3× edges + 2 as headroom for
+    // TIR bounces plus the final wall hit.
+    const effectiveBounces = Math.min(MAX_BOUNCES, edges.length * 3 + 2);
 
     // Ping-pong: two ray-state buffers (read from one, TF writes to
     // the other). Separate segment buffer for renderer output.

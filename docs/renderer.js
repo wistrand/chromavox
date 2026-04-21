@@ -334,21 +334,24 @@ export class Renderer {
     this._peakMax = 1e-6;
     this._blurBuf = new Float32Array(0);
 
+    this._benchW = 556;
+    this._benchH = 900;
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
 
+  setBenchSize(bw, bh) {
+    this._benchW = bw;
+    this._benchH = bh;
+    this.resize();
+  }
+
   resize() {
-    // Size the bench-viewport to the largest 556:900 box that fits the
-    // stage, enforcing both width and height constraints.  Pure CSS
-    // aspect-ratio + max-* can't handle both axes simultaneously on
-    // narrow mobile screens (height: 100% wins, max-width clamps
-    // width, and the aspect ratio breaks).
     const vp = this.canvas.parentElement;
     const stage = vp.parentElement;
     const stageW = stage.clientWidth;
     const stageH = stage.clientHeight;
-    const ASPECT = 556 / 900;
+    const ASPECT = this._benchW / this._benchH;
     let w = stageH * ASPECT;
     let h = stageH;
     if (w > stageW) { w = stageW; h = stageW / ASPECT; }
@@ -376,10 +379,7 @@ export class Renderer {
   }
 
   benchSize() {
-    // Letterbox: bench is locked to the canonical aspect (portrait, golden
-    // ratio). CSS handles the actual letterbox by pinning the canvas's
-    // display aspect; the renderer just trusts the canvas size it was given.
-    return { w: 556, h: 900 };
+    return { w: this._benchW, h: this._benchH };
   }
 
   draw(scene, tracer) {

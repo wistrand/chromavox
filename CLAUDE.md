@@ -65,6 +65,14 @@ Detailed notes are split into topic files under `agent_docs/`:
 
 - Coordinates are bench pixels; y is **down**. Polygon winding and
   outward-normal sign in `worldEdges` depend on it.
+- `worldEdges()` returns mixed edge types: segments
+  (`{type:'seg', p1, p2, nx, ny, elementId}`) and arcs
+  (`{type:'arc', cx, cy, R, a0, a1, convex, elementId}`). Arc-bearing
+  elements (lens-convex, lens-concave, circle, mirror-concave,
+  mirror-convex) emit analytic arcs; others emit segments.
+  `localPolygon()` still returns dense vertex lists for rendering,
+  hit-testing, and particle exit — only the physics edge list changed.
+  Arc normal is `(hit - center) / R`, flipped for concave surfaces.
 - Tracer never branches rays (no Fresnel split). TIR reflects; dichroic
   mirror absorbs the non-reflected fraction. Keeps the vertex buffer
   size predictable.
@@ -100,8 +108,8 @@ Detailed notes are split into topic files under `agent_docs/`:
   magnitude, falloff, edge glow, and opacity. Sharp vs soft edges come
   from `edgeWidth`; refractive distortion comes from `magnitude` and
   `falloff`. Distortion itself is opt-in via the Distort checkbox in
-  the left panel (below Selected, above Stats; defaults off); rim glint
-  and tint stay on regardless.
+  the Bench toolbar dropdown (defaults off); rim glint and tint stay
+  on regardless.
 - HDR rendering: ray FBO is `RGBA16F` (via `EXT_color_buffer_float`)
   so additive ray sums accumulate past 1.0 in linear space. Both blit
   and element fragment shaders apply Reinhard tone-map
@@ -117,14 +125,15 @@ Detailed notes are split into topic files under `agent_docs/`:
   (raised z-index over the drawer overlays, fixed height, horizontal
   scroll on narrow widths, `overflow-y: hidden` to prevent vertical
   scrollbar).
-- Bench is **letterboxed** at the canonical portrait golden-ratio aspect
-  (`CANONICAL_BENCH` in `scene.js`). `Renderer.benchSize` returns the
-  constant; `renderer.resize()` computes the largest 556:900 box that
-  fits the stage in JS (pure CSS `aspect-ratio` + `max-width` broke on
+- Bench aspect is **variable**: `scene.bench` is the source of truth
+  (not `CANONICAL_BENCH`). Three presets via a toolbar Bench dropdown:
+  portrait (556x900), landscape (900x556), square (900x900).
+  `renderer.setBenchSize(w, h)` updates the letterbox aspect;
+  `renderer.resize()` computes the largest box at that aspect that fits
+  the stage in JS (pure CSS `aspect-ratio` + `max-width` broke on
   narrow mobile portrait screens). Resize never rescales elements.
-  `deserializeScene`
-  rescales loaded preset coords + sizes to the canonical bench so older
-  presets keep composing correctly.
+  `deserializeScene` preserves saved bench size as-is; only legacy
+  1600x900 scenes are rescaled.
 - Touch: single pointer drags/rotates (shift-drag rotates); two
   simultaneous pointers on a selected element pinch-scale + rotate.
 - Emitter ticks: short tap toggles, long-press or shift-click solos.
@@ -219,13 +228,15 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Toolbar's element placement is a split button — left side places the
   last-used element (shows SVG icon + label), right side (`▾`) opens
   the full dropdown. Picking from the dropdown updates the default.
-  Fixed 140 px width to avoid layout shift. Each menu item shows an SVG
+  Fixed 140 px width to avoid layout shift. Label hidden on mobile
+  (<=960px), shows only SVG icon. Each menu item shows an SVG
   thumbnail rendered from the element's own `localPolygon`.
-- Delete is an action button (not a mode). Disabled when no element is
-  selected; click deletes the selected element and selects the next one
-  (or previous if last). Backspace/Delete key triggers the same action.
-  No separate Select button — selection is always the default behavior
-  (tap/click an element to select, tap empty space to deselect).
+- Delete is an action button (trashcan icon) — not a mode. Disabled
+  when no element is selected; click deletes the selected element and
+  selects the next one (or previous if last). Backspace/Delete key
+  triggers the same action. No separate Select button — selection is
+  always the default behavior (tap/click an element to select, tap
+  empty space to deselect).
   Two-finger pinch selects the element nearest the midpoint of the
   fingers (within 60% of the finger span) if nothing is selected.
 - Audio in / Audio out are split-button dropdowns: the main button
@@ -278,8 +289,12 @@ Detailed notes are split into topic files under `agent_docs/`:
   tapped between the worklet and master gain. Log-frequency axis
   80–6000 Hz. Reflects real output including partials, carrier mode,
   and any clipping/limiting.
+- Global settings (bench aspect, no-overlap, distort, stats, spectrum
+  toggles, tracer indicator) live in a "Bench" toolbar dropdown menu,
+  positioned left of Audio in. Left panel now only has: Emitters,
+  Sensors, Selected.
 - Stats window: floating draggable window toggled via a checkbox in the
-  left panel (below Distort). Shows elements, sources, sensors,
+  Bench dropdown. Shows elements, sources, sensors,
   rays/src, segments, particles, pools, and spinning count. Close button
   in titlebar (pointerdown handler skips `.fw-close` to avoid drag
   capture). Updates every frame when visible, skips DOM writes when
@@ -314,8 +329,8 @@ Detailed notes are split into topic files under `agent_docs/`:
   ping-pong bounce architecture. Default tracer; auto-switches to CPU
   when delay elements are added (`pickTracer()`). One TF dispatch per
   bounce, reading previous bounce's ray state from a ping-pong buffer
-  pair. `effectiveBounces = min(32, edges+1)` bounds dispatch count
-  analytically — empty scene: 1 dispatch, single prism: 4. Segment
+  pair. `effectiveBounces = min(32, edges * 3 + 2)` bounds dispatch
+  count (the `* 3` factor handles TIR with fewer arc edges). Segment
   buffer populated via `copyBufferSubData` per bounce; renderer binds
   directly (zero-copy, stride 96, offset `SEG_P_OFF`). Inside-element
   stack: depth-3 packed into one fp32 (`stkLen*262144 + stk[0]*4096 +

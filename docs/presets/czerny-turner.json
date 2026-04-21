@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "bench": { "w": 556, "h": 900 },
+  "emitter": {
+    "count": 12,
+    "wlMin": 400,
+    "wlMax": 700,
+    "raysPerSource": 300,
+    "spreadDeg": 0,
+    "apertureFactor": 0.005,
+    "disabled": []
+  },
+  "sensorCount": 48,
+  "elements": [
+    { "kind": "mirror-concave", "x": 380, "y": 660, "rot": -1.90, "h": 220, "radius": 400, "material": "mirror" },
+    { "kind": "prism", "x": 200, "y": 400, "rot": 0.80, "size": 130, "material": "flint" },
+    { "kind": "mirror-concave", "x": 380, "y": 180, "rot": 1.90, "h": 220, "radius": 400, "material": "mirror" }
+  ]
+}

@@ -86,7 +86,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       // + smoothed cutoff to avoid clicks from abrupt sweeps.
       this.voices.push({ freq: f, phases, gains, targetGains,
         bp1: 0, bp2: 0,
-        sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: 0,
+        sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: -1,
         modPhase: 0,
         ssPhases: new Float32Array(7) });
     }
@@ -147,7 +147,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       for (let k = 0; k < v.gains.length; k++) {
         if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
       }
-      if (!anyActive) { v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = 0; continue; }
+      if (!anyActive) { v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = -1; continue; }
 
       if (isAcid) {
         // 303-style acid carrier: PolyBLEP sawtooth → 3-pole TPT/ZDF
@@ -160,6 +160,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         const acidEnv = this.P.acidEnv;
         // Base cutoff: 80-8000 Hz log-mapped from the knob [0,1].
         const baseCutoffHz = 80 * Math.pow(100, this.P.acidCutoff);
+        // Seed smoothCutoff on first activation so the filter doesn't
+        // start with g=tan(0)=0 (silent first block).
+        if (v.smoothCutoff < 0) v.smoothCutoff = baseCutoffHz;
         // Decay: per-sample smoothing constant. Maps [0,1] → 30ms-2s.
         // Lower values = longer decay = slower squelch = more 303.
         const decayMs = 0.03 + this.P.acidDecay * 1.97; // 30ms to 2s

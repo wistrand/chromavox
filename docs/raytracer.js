@@ -132,6 +132,7 @@ export class Tracer {
     //   [ox, oy, dx, dy, wl, r, g, b, I, skipElId]
     // Avoids per-exit object allocation.
     this._secondary = new Float32Array(0);
+    this._secondarySkipIds = [];
     this._secondaryCount = 0;
     // Local-polygon cache keyed by element id so the advance pass
     // doesn't keep re-allocating polygon arrays.
@@ -320,14 +321,14 @@ export class Tracer {
     // `_isSecondary` so the spectrum readout and synth don't flicker.
     const secStart = this.segmentCount;
     this._isSecondary = true;
-    const SEC_FLOATS = 10;
+    const SEC_FLOATS = 9;
     const _secRgb = [0, 0, 0];
     for (let i = 0; i < this._secondaryCount; i++) {
       const off = i * SEC_FLOATS;
       const s = this._secondary;
       _secRgb[0] = s[off + 5]; _secRgb[1] = s[off + 6]; _secRgb[2] = s[off + 7];
       this.castRay(s[off], s[off+1], s[off+2], s[off+3], s[off+4], _secRgb, s[off+8],
-                   edges, elementMap, elementInfos, W, sensorStripH, s[off+9]);
+                   edges, elementMap, elementInfos, W, sensorStripH, this._secondarySkipIds[i]);
     }
     this._isSecondary = false;
     // Cache the segments scaled by (1-D), then remove them from the
@@ -527,7 +528,7 @@ export class Tracer {
   }
 
   _pushSecondary(ox, oy, dx, dy, wl, r, g, b, I, skipElId) {
-    const SEC_FLOATS = 10;
+    const SEC_FLOATS = 9;
     const needed = (this._secondaryCount + 1) * SEC_FLOATS;
     if (this._secondary.length < needed) {
       const next = new Float32Array(Math.max(needed, this._secondary.length * 2 || 128));
@@ -538,7 +539,10 @@ export class Tracer {
     const s = this._secondary;
     s[i] = ox; s[i+1] = oy; s[i+2] = dx; s[i+3] = dy;
     s[i+4] = wl; s[i+5] = r; s[i+6] = g; s[i+7] = b;
-    s[i+8] = I; s[i+9] = skipElId;
+    s[i+8] = I;
+    // skipElId is a UUID string — can't store in Float32Array.
+    if (!this._secondarySkipIds) this._secondarySkipIds = [];
+    this._secondarySkipIds[this._secondaryCount] = skipElId;
     this._secondaryCount++;
   }
 
@@ -638,7 +642,9 @@ export class Tracer {
       for (let i = 0; i < edges.length; i++) {
         const e = edges[i];
         if (e.elementId === skipElId) continue;
-        const t = raySeg(x, y, vx, vy, e.p1.x, e.p1.y, e.p2.x, e.p2.y);
+        const t = e.type === 'arc'
+          ? rayArc(x, y, vx, vy, e.cx, e.cy, e.R, e.a0, e.a1)
+          : raySeg(x, y, vx, vy, e.p1.x, e.p1.y, e.p2.x, e.p2.y);
         if (t !== null && t < tBest) { tBest = t; hitEdge = e; hitWall = null; }
       }
       // After the very first intersection test, skipElId has served
@@ -659,6 +665,18 @@ export class Tracer {
       }
 
       const hx = x + vx * tBest, hy = y + vy * tBest;
+
+      // Compute edge normal. For arcs, derive from hit point and center.
+      let hitNx, hitNy;
+      if (hitEdge && hitEdge.type === 'arc') {
+        const invR = 1 / hitEdge.R;
+        hitNx = (hx - hitEdge.cx) * invR;
+        hitNy = (hy - hitEdge.cy) * invR;
+        if (!hitEdge.convex) { hitNx = -hitNx; hitNy = -hitNy; }
+      } else if (hitEdge) {
+        hitNx = hitEdge.nx;
+        hitNy = hitEdge.ny;
+      }
 
       // Beer-Lambert absorption along the segment if it was inside a
       // medium (primary rays never travel *inside* a delay element —
@@ -698,7 +716,7 @@ export class Tracer {
       // re-emitted only after its transit time has elapsed (handled by
       // the advance pass on subsequent frames).
       if (matObj.type === 'dielectric' && elInfo.delayK >= DELAY_MIN) {
-        const nx = hitEdge.nx, ny = hitEdge.ny;
+        const nx = hitNx, ny = hitNy;
         const vdotn_out = vx * nx + vy * ny;
         if (vdotn_out < 0) {
           // Genuine entry: refract once to get the inward direction,
@@ -747,7 +765,7 @@ export class Tracer {
       }
 
       if (matObj.type === 'mirror') {
-        const nx = hitEdge.nx, ny = hitEdge.ny;
+        const nx = hitNx, ny = hitNy;
         const vdotn = vx * nx + vy * ny;
         vx = vx - 2 * vdotn * nx;
         vy = vy - 2 * vdotn * ny;
@@ -756,7 +774,7 @@ export class Tracer {
         // Non-delay dielectric.  Normal Snell refraction with the
         // inside-stack for nested / overlapping dielectrics.
         const nGlass = materialN(matObj, wl);
-        let nx = hitEdge.nx, ny = hitEdge.ny;
+        let nx = hitNx, ny = hitNy;
         const vdotn_out = vx * nx + vy * ny;
         const entering = vdotn_out < 0;
         let n1, n2, snx, sny;
@@ -843,6 +861,40 @@ function raySeg(ox, oy, dx, dy, ax, ay, bx, by) {
   if (t <= EPS) return null;
   if (u < 0 || u > 1) return null;
   return t;
+}
+
+// Analytic ray vs circular arc intersection.
+// Arc defined by center (cx,cy), radius R, angular extent a0→a1
+// (always swept in the positive direction, handling wrap).
+function rayArc(ox, oy, dx, dy, cx, cy, R, a0, a1) {
+  const ocx = ox - cx, ocy = oy - cy;
+  const a = dx * dx + dy * dy;      // 1 if normalized, but be safe
+  const b = ocx * dx + ocy * dy;
+  const c = ocx * ocx + ocy * ocy - R * R;
+  const disc = b * b - a * c;
+  if (disc < 0) return null;
+  const sq = Math.sqrt(disc);
+  const invA = 1 / a;
+  // Try both roots, smallest positive first.
+  const t1 = (-b - sq) * invA;
+  const t2 = (-b + sq) * invA;
+  for (const t of [t1, t2]) {
+    if (t <= EPS) continue;
+    const hx = ox + dx * t - cx;
+    const hy = oy + dy * t - cy;
+    if (_angleInRange(Math.atan2(hy, hx), a0, a1)) return t;
+  }
+  return null;
+}
+
+const TWO_PI = 2 * Math.PI;
+function _angleInRange(a, a0, a1) {
+  // Normalize (a - a0) and span (a1 - a0) into [0, 2π).
+  let da = (a - a0) % TWO_PI;
+  if (da < 0) da += TWO_PI;
+  let span = (a1 - a0) % TWO_PI;
+  if (span <= 0) span += TWO_PI;
+  return da <= span + 1e-4;
 }
 
 // Seg-seg intersection parameter (0..1) along the first segment, or

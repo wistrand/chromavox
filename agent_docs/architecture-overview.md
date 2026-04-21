@@ -74,12 +74,16 @@ No dependencies.
 ## Coordinate system
 
 Scene coordinates are "bench pixels" in a logical space with `bench.w`,
-`bench.h`. The bench is **letterboxed** at the canonical portrait
-golden-ratio aspect (`CANONICAL_BENCH` in `scene.js`); `renderer.resize()`
-computes the largest 556:900 box that fits the stage in JS and sizes the
-`#bench-viewport` div explicitly (pure CSS `aspect-ratio` + `max-width`
-broke on narrow mobile portrait screens). `Renderer.benchSize` returns
-the constant. All UI input is converted via `UI.canvasToBench`.
+`bench.h`. The bench aspect is **variable**: `scene.bench` is the source
+of truth (not a fixed constant). Three presets are available via a toolbar
+dropdown: portrait (556x900), landscape (900x556), square (900x900).
+`renderer.setBenchSize(w, h)` updates the letterbox aspect;
+`renderer.resize()` computes the largest box at the current aspect that
+fits the stage and sizes `#bench-viewport` explicitly (pure CSS
+`aspect-ratio` + `max-width` broke on narrow mobile portrait screens).
+`deserializeScene` preserves saved bench size as-is; only legacy
+1600x900 scenes are rescaled. All UI input is converted via
+`UI.canvasToBench`.
 
 Y is **down** (screen convention). Polygon winding and outward-normal sign
 in `worldEdges` depend on this — see the shoelace / `cw` logic. If you

@@ -188,6 +188,10 @@ export class UI {
         case 'circle':
           el.radius = Math.max(15, el.radius + d);
           break;
+        case 'mirror-concave':
+        case 'mirror-convex':
+          el.h = Math.max(30, el.h + d);
+          break;
       }
     };
 
@@ -436,6 +440,7 @@ export class UI {
     const LABEL_BY_KIND = {
       prism: 'Prism', block: 'Block', 'lens-convex': 'Convex Lens',
       'lens-concave': 'Concave Lens', mirror: 'Mirror',
+      'mirror-concave': 'Concave Mirror', 'mirror-convex': 'Convex Mirror',
       circle: 'Circle', rabbit: 'Rabbit',
     };
     const addBtn = document.getElementById('add-btn');
@@ -444,7 +449,7 @@ export class UI {
     let lastAddKind = 'prism';
     const setLastKind = kind => {
       lastAddKind = kind;
-      addBtn.innerHTML = buildElementIcon(kind) + ' ' + (LABEL_BY_KIND[kind] || kind);
+      addBtn.innerHTML = buildElementIcon(kind) + '<span class="add-label"> ' + (LABEL_BY_KIND[kind] || kind) + '</span>';
     };
     setLastKind('prism');
     addBtn.addEventListener('click', () => { place(lastAddKind); });
@@ -514,6 +519,11 @@ export class UI {
         break;
       case 'circle':
         el.radius = Math.max(15, base.radius * s);
+        break;
+      case 'mirror-concave':
+      case 'mirror-convex':
+        el.h = Math.max(30, base.h * s);
+        el.radius = Math.max(80, base.radius * s);
         break;
     }
   }
@@ -919,7 +929,9 @@ export class UI {
       'block':        [['w', 40, 400], ['h', 20, 300]],
       'lens-convex':  [['h', 40, 300], ['radius', 80, 1200]],
       'lens-concave': [['w', 20, 200], ['h', 40, 300], ['radius', 80, 800]],
-      'mirror':       [['w', 30, 400], ['h', 2, 20]],
+      'mirror':         [['w', 30, 400], ['h', 2, 20]],
+      'mirror-concave': [['h', 30, 200], ['radius', 80, 800]],
+      'mirror-convex':  [['h', 30, 200], ['radius', 80, 800]],
     };
     for (const [key, min, max] of sizeFields[el.kind] || []) {
       const inp = document.createElement('input');
@@ -937,17 +949,6 @@ export class UI {
       addRow(key, inp);
     }
 
-    // Delete
-    const del = document.createElement('button');
-    del.textContent = 'Delete';
-    del.addEventListener('click', () => {
-      this.beginEdit();
-      this.scene.elements = this.scene.elements.filter(e => e !== el);
-      this.select(null);
-      this.endEdit();
-      this.onChange();
-    });
-    panel.appendChild(del);
   }
 
   // --- Save / load / clear ---

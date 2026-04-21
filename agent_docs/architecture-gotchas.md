@@ -78,6 +78,21 @@
 
 ## Audio
 
+- `synth.js`: acid voice `smoothCutoff` initialized to `-1` sentinel,
+  seeded to `baseCutoffHz` on first activation. Previously was 0,
+  causing `tan(0)=0` and a silent first block.
+- `main.js`: `synth.setBase(NaN)` guard when source is touch/file
+  (missing from `baseBySource` map).
+- `mic.js`: `_peakHold` reset to 0 in `enable()` to avoid stale
+  values across source switches.
+- `mic.js`: `_decodedFile` persists across `disable()` cycles so file
+  audio can resume without re-picking.
+- `raytracer.js`: secondary ray `skipElId` stored in separate
+  `_secondarySkipIds[]` array (UUID strings can't go in Float32Array).
+- Visibility change handler now suspends AND resumes both mic and synth
+  AudioContexts.
+- Concave lens arc angle fix: `a0 = pi-alpha, a1 = pi+alpha` (was
+  swapped, giving ~300 degree span).
 - `synth.setBase()` rebuilds voices for all modes. Previously it
   only rebuilt for chromatic, so changing Base in major/minor/etc
   had no effect until a mode switch forced a rebuild.
@@ -110,14 +125,16 @@
 - The element material dropdown filters by element kind
   (`dielectric` / `mirror`); switching a mirror to a dielectric is
   not exposed in the UI — change via JSON edit if needed.
-- Bench is letterboxed at the canonical portrait golden-ratio aspect.
+- Bench aspect is variable (`scene.bench` is source of truth). Three
+  presets: portrait (556x900), landscape (900x556), square (900x900).
+  `renderer.setBenchSize(w, h)` updates the letterbox aspect.
   `renderer.resize()` computes the viewport size in JS — don't revert
   this to pure CSS `aspect-ratio` + `max-width`; the CSS approach
   breaks on narrow mobile portrait screens (height: 100% wins over
   the aspect ratio when max-width clamps). Resizing the window does
   not move any element; the stage just shows more or less black bar.
-  Preset loads with mismatched bench dimensions get rescaled to
-  canonical inside `deserializeScene`.
+  `deserializeScene` preserves saved bench size as-is; only legacy
+  1600x900 scenes are rescaled.
 - Toolbar has a fixed height with `box-sizing: border-box`,
   `overflow-x: auto`, and `overflow-y: hidden`; on narrow viewports
   the horizontal scrollbar appears inside the bar rather than

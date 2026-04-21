@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "bench": { "w": 556, "h": 900 },
+  "emitter": {
+    "count": 8,
+    "wlMin": 400,
+    "wlMax": 700,
+    "raysPerSource": 64,
+    "spreadDeg": 0,
+    "apertureFactor": 0.01,
+    "disabled": []
+  },
+  "sensorCount": 16,
+  "elements": [
+    { "kind": "mirror-concave", "x": 380, "y": 450, "rot": 3.14159, "h": 120, "radius": 200, "material": "mirror" }
+  ]
+}

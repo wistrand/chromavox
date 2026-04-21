@@ -10,28 +10,34 @@ Two-row, three-column grid defined in `docs/style.css`:
 ```
 
 The stage flex-centers a `#bench-viewport` div sized by
-`renderer.resize()` to the largest 556:900 box that fits the stage
-(computed in JS; pure CSS `aspect-ratio` + `max-width` broke on narrow
-mobile portrait screens). The canvas fills that viewport exactly, so
-the rest of the stage is the letterbox black bar. Emitter
-labels live inside the viewport so they track the canvas, not the full
-stage.
+`renderer.resize()` to the largest box at the current bench aspect that
+fits the stage (computed in JS; pure CSS `aspect-ratio` + `max-width`
+broke on narrow mobile portrait screens). Bench aspect is variable:
+`scene.bench` is the source of truth. Three presets via a toolbar
+Bench dropdown: portrait (556x900), landscape (900x556), square
+(900x900). `renderer.setBenchSize(w, h)` updates the letterbox
+aspect. The canvas fills the viewport exactly; the rest of the stage
+is the letterbox black bar. Emitter labels live inside the viewport so
+they track the canvas, not the full stage.
 
 - **Header (`#toolbar`)** holds (left to right): Help (`?`), the Add
-  split-button, Delete (action button, disabled when no selection),
-  Audio in / Audio out **split-button dropdowns** (toggle + options
-  `▾`), Save / Load / Clear, and the Preset dropdown (styled via
-  `#preset-select`, placeholder `[preset]`). Fixed height, `z-index`
-  above the drawers, `overflow-x: auto` with `white-space: nowrap` so
-  it stays on screen regardless of viewport width, and `overflow-y:
-  hidden` to prevent a vertical scrollbar. Children have `flex-shrink:
-  0` so nothing compresses below its natural width.
-- **Left panel** carries the parameter sliders the toolbar dropdowns
-  don't own: Emitters (count/wavelength range/rays/spread/aperture),
-  Sensors (count/sync/factor), the Selected property panel, the
-  Distort checkbox, and the Stats checkbox (toggles a floating stats
-  window). Audio in/out controls live entirely in the toolbar `▾`
-  dropdowns. Scrolls internally.
+  split-button, Delete (trashcan icon, disabled when no selection),
+  Bench dropdown (aspect presets, no-overlap, distort, stats, spectrum
+  toggles, tracer indicator), Audio in / Audio out **split-button
+  dropdowns** (toggle + options `▾`), Save / Load / Clear, and the
+  Preset dropdown (styled via `#preset-select`, placeholder `[preset]`).
+  Add button label hidden on mobile (<=960px), shows only SVG icon.
+  Fixed height, `z-index` above the drawers, `overflow-x: auto` with
+  `white-space: nowrap` so it stays on screen regardless of viewport
+  width, and `overflow-y: hidden` to prevent a vertical scrollbar.
+  Children have `flex-shrink: 0` so nothing compresses below its
+  natural width.
+- **Left panel** carries: Emitters (count/wavelength range/rays/spread/
+  aperture), Sensors (count/sync/factor), and the Selected property
+  panel. Global settings (aspect, no-overlap, distort, stats, spectrum
+  toggles, tracer indicator) moved to the Bench toolbar dropdown.
+  Audio in/out controls live entirely in the toolbar `▾` dropdowns.
+  Scrolls internally.
 - **Stage** hosts the canvas.
 - **Right panel** is the sensor-readout stack. `min-height: 100%` on
   the readout and `min-height` per bar (see `.sensor-bar` CSS) mean
@@ -182,12 +188,11 @@ stretch polygons.
 
 ## Resize behaviour
 
-Bench is letterboxed at the canonical aspect, so element coordinates
-are stable across viewport sizes — the resize handler just calls
-`renderer.resize()` (re-allocates the FBO etc.) and marks dirty. No
-element rescaling. Loading a preset that was authored at a different
-bench size triggers `deserializeScene` to rescale element coords +
-sizes onto the canonical bench.
+Bench is letterboxed at the current `scene.bench` aspect, so element
+coordinates are stable across viewport sizes — the resize handler just
+calls `renderer.resize()` (re-allocates the FBO etc.) and marks dirty.
+No element rescaling. `deserializeScene` preserves saved bench size
+as-is; only legacy 1600x900 scenes are rescaled to the current bench.
 
 ## Presets
 

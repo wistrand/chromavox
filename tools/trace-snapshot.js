@@ -109,6 +109,7 @@ if (presetArg) {
   const testPresets = [
     'test-nested', 'test-tir', 'test-grazing', 'test-multibounce',
     'test-hyper-refract', 'test-dichroic-chain', 'test-mixed',
+    'test-concave-mirror', 'test-convex-mirror',
   ];
   const all = index.map(e => e.file.replace('.json', '')).concat(testPresets);
   for (const name of all) {

@@ -15,12 +15,11 @@ per vertex (O(B²)), this runs one TF dispatch per bounce with
 `totalRays` vertices. Each dispatch reads the previous bounce's ray
 state and advances one step. Total work: `totalRays × actualBounces`.
 
-**Effective bounce count**: `min(MAX_BOUNCES, edges.length + 1)`.
-A ray can cross at most one edge per bounce, so the maximum bounces
-is bounded by the number of element edges in the scene. Empty scene:
-1 bounce (1 dispatch). Single prism: 4. Complex (5 elements, 18
-edges): 19. This directly controls dispatch count, segment buffer
-size, and memory.
+**Effective bounce count**: `min(MAX_BOUNCES, edges.length * 3 + 2)`.
+The `* 3` factor accounts for TIR bounces with fewer arc edges (analytic
+arcs replace many polygon segments, but rays can still TIR multiple times
+inside a curved element). Empty scene: 2 dispatches. Single prism: 5.
+This directly controls dispatch count, segment buffer size, and memory.
 
 **Buffer layout**:
 - Two ping-pong buffers (`_ppBufs[0]`, `_ppBufs[1]`): each sized
@@ -78,12 +77,30 @@ Sensor pass leaves blend/viewport/program dirty. The renderer's
 `draw()` sets its own state before drawing (documented as a
 postcondition of `trace()` at the class level).
 
+## Tagged union edge texture
+
+`_uploadEdges()` packs both segment and arc edges into the same 2-row
+RGBA32F edge texture. The type flag lives in row 1, float w:
+
+- **Segment** (type flag = 0.0): row 0 `(p1x, p1y, p2x, p2y)`,
+  row 1 `(nx, ny, elIdx, 0.0)`.
+- **Arc** (type flag = 1.0): row 0 `(cx, cy, R, convex)`,
+  row 1 `(a0, a1, elIdx, 1.0)`.
+
+The main intersection loop in GLSL branches on `edgeType > 0.5`.
+`rayArc()` solves the quadratic ray-circle intersection and calls
+`angleInRange()` for the angular bounds check (handles wrap-around).
+Post-hit normal reads the edge type: arcs derive normal from
+`(hit - center) / R`, flipped for concave; segments use the stored
+`(nx, ny)`.
+
 ## GLSL physics
 
 The vertex shader implements the same physics as `castRay` in
 `raytracer.js`:
 
 - Ray-segment intersection (`raySeg`)
+- Ray-arc intersection (`rayArc`) with angular range check
 - Snell's law refraction with TIR detection
 - Beer-Lambert absorption inside dielectrics
 - Wavelength-to-RGB (piecewise, matches `spectrum.js`)
@@ -122,8 +139,10 @@ count from 32 to `edges + 1`, making simple scenes near-free.
 ## Debug / test
 
 - `docs/gpu-test.html`: browser-based comparison page. Runs both
-  tracers on 17 scenes, shows segment overlays (CPU blue, GPU orange).
-  Click rows to expand to full bench-size canvases.
+  tracers on multiple scenes (including lens and mirror presets), shows
+  segment overlays (CPU blue, GPU orange). Bench dimensions are dynamic
+  (read from each scene, not hardcoded). Click rows to expand to full
+  bench-size canvases.
 - `_debugReadback` flag: enables synchronous `getBufferSubData` to
   populate `segmentData` for the test page. Off in production.
 - `npm run snapshot` / `npm run verify`: CPU tracer reference snapshots.

@@ -9,5 +9,6 @@
   { "label": "Dichroic mirrors","file": "dichroic.json" },
   { "label": "Tinted glass",    "file": "tinted-glass.json" },
   { "label": "Slow glass",      "file": "slow-glass.json" },
-  { "label": "Arpeggio",        "file": "arpeggio.json" }
+  { "label": "Arpeggio",        "file": "arpeggio.json" },
+  { "label": "Czerny-Turner",   "file": "czerny-turner.json" }
 ]

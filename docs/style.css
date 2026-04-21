@@ -245,6 +245,10 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 }
 
 /* Narrow (phones): panels become slide-out drawers. */
+@media (max-width: 960px) {
+  #add-btn .add-label { display: none; }
+  #add-btn { width: auto; min-width: 0; }
+}
 @media (max-width: 600px) {
   #app {
     grid-template-columns: 1fr;

@@ -35,10 +35,11 @@ generator:
   `BufferSource`. Transport controls (play/pause/restart/time) exposed
   via `filePause()`, `fileResume()`, `fileRestart()`, `fileTime()`,
   `fileDuration()`. `disable()` clears `_fileBuffer`, `_filePlaying`,
-  and `_fileOffset` so no stale transport state persists. Switching
-  source in the dropdown resets the file transport buttons/time display.
-  The file `<input>` resets `e.target.value` on change so the same file
-  can be re-selected.
+  and `_fileOffset` so no stale transport state persists, but
+  `_decodedFile` persists across `disable()` cycles so file audio can
+  resume without re-picking. Switching source in the dropdown resets
+  the file transport buttons/time display. The file `<input>` resets
+  `e.target.value` on change so the same file can be re-selected.
 
 Mic, sine, harmonics, white, pink, keyboard, and file sources feed a
 single `AnalyserNode` with `fftSize = 8192` and
@@ -92,8 +93,9 @@ All modes use `getFloatFrequencyData` (dB values). Normalization is
   stays quiet.
 
 Peak per bucket (not mean) gives sharper vocoder-like channel
-separation in both paths. Result is written to
-`scene.runtime.micLevels`. The renderer draws an amber bar extending
+separation in both paths. `_peakHold` is reset to 0 in `enable()` so
+stale values don't persist across source switches. Result is written
+to `scene.runtime.micLevels`. The renderer draws an amber bar extending
 from each emitter tick proportional to its bucket.
 
 **Bucket color** additionally assigns each source a narrow wavelength

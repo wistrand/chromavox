@@ -30,8 +30,8 @@ try {
 } catch {
   scene = createScene();
 }
-// Sync bench size to canvas aspect so content fills the viewport.
-Object.assign(scene.bench, renderer.benchSize());
+// Sync renderer to the scene's bench size.
+renderer.setBenchSize(scene.bench.w, scene.bench.h);
 const forceCPU = new URLSearchParams(location.search).has('cpu');
 const gpuTracer = forceCPU ? null : new GPUTracer(renderer.gl);
 const cpuTracer = new Tracer();
@@ -69,7 +69,7 @@ const UI_CONTROL_IDS = [
   ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
   'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
-  'midi-gain', 'sim-rate', 'distort-toggle', 'no-overlap',
+  'midi-gain', 'sim-rate', 'distort-toggle', 'no-overlap', 'bench-aspect',
 ];
 function saveUiState() {
   const state = {};
@@ -114,6 +114,8 @@ const markDirty = () => {
   saveUiState();
 };
 function resetDisplay() {
+  renderer.setBenchSize(scene.bench.w, scene.bench.h);
+  syncBenchAspectDropdown();
   renderer.resetReadout();
   tracer.resetPersistence();
   songPlayer.stop();
@@ -367,6 +369,34 @@ function applySimRate() {
 applySimRate();
 simRateSlider.addEventListener('input', applySimRate);
 
+// Bench aspect ratio.
+const BENCH_SIZES = {
+  portrait:  { w: 556, h: 900 },
+  landscape: { w: 900, h: 556 },
+  square:    { w: 900, h: 900 },
+};
+const benchAspectSel = document.getElementById('bench-aspect');
+function applyBenchAspect() {
+  const sz = BENCH_SIZES[benchAspectSel.value];
+  if (!sz) return;
+  scene.bench.w = sz.w;
+  scene.bench.h = sz.h;
+  renderer.setBenchSize(sz.w, sz.h);
+  markDirty();
+}
+// Set dropdown to match the current scene bench on load.
+function syncBenchAspectDropdown() {
+  for (const [key, sz] of Object.entries(BENCH_SIZES)) {
+    if (scene.bench.w === sz.w && scene.bench.h === sz.h) {
+      benchAspectSel.value = key;
+      return;
+    }
+  }
+  // Non-standard bench size — leave dropdown as-is.
+}
+syncBenchAspectDropdown();
+benchAspectSel.addEventListener('change', applyBenchAspect);
+
 const smoothingSlider = document.getElementById('mic-smoothing');
 const smoothingLabel = document.getElementById('mic-smoothing-val');
 const applySmoothing = () => {
@@ -486,6 +516,8 @@ function bindOptionsMenu(toggleId, menuId) {
 }
 bindOptionsMenu('mic-options', 'mic-menu');
 bindOptionsMenu('synth-options', 'synth-menu');
+bindOptionsMenu('bench-options', 'bench-menu');
+bindOptionsMenu('bench-toggle', 'bench-menu');
 
 window.addEventListener('keydown', e => {
   if (e.target.matches('input, select, textarea')) return;
@@ -753,7 +785,7 @@ document.getElementById('mic-source').addEventListener('change', async e => {
   if (e.target.value === 'keyboard') {
     syncKeyboardScale();
   }
-  if (!synthIndep()) synth.setBase(parseFloat(nextBase));
+  if (nextBase && !synthIndep()) synth.setBase(parseFloat(nextBase));
 
   if (e.target.value === 'midi') populateMidiDevices();
 
@@ -892,10 +924,16 @@ micBtn.addEventListener('click', async () => {
       const src = document.getElementById('mic-source').value;
       let dev;
       if (src === 'midi') dev = document.getElementById('midi-device').value || null;
-      else if (src === 'file') dev = mic._pendingFileBuffer || null;
+      else if (src === 'file') dev = null; // re-uses mic._decodedFile
       else dev = document.getElementById('mic-device').value || null;
       await mic.enable(src, dev);
       if (src === 'midi') { populateMidiDevices(); attachPush(); }
+      if (src === 'file' && mic._fileBuffer) {
+        filePlayBtn.disabled = false;
+        fileRestartBtn.disabled = false;
+        filePlayBtn.textContent = '❚❚';
+        document.getElementById('file-transport-row').style.display = '';
+      }
       micBtn.textContent = 'Audio in: on';
       micBtn.classList.add('active');
       populateMicDevices();
@@ -1598,6 +1636,10 @@ requestAnimationFrame(frame);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     if (synth.ctx && synth.ctx.state === 'running') synth.ctx.suspend();
+    if (mic.ctx && mic.ctx.state === 'running') mic.ctx.suspend();
     if (songPlayer.playing) songPlayer.pause();
+  } else {
+    if (synth.ctx && synth.ctx.state === 'suspended') synth.ctx.resume();
+    if (mic.ctx && mic.ctx.state === 'suspended') mic.ctx.resume();
   }
 });

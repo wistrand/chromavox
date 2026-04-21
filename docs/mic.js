@@ -35,6 +35,7 @@ export class MicModulator {
 
   async enable(source = 'mic', deviceId = null) {
     if (this.active) return;
+    _peakHold = 0;
 
     // Sources that don't need an AudioContext — handle setup and
     // return early. The AudioContext is created below for audio sources.
@@ -288,9 +289,18 @@ export class MicModulator {
       nodes.push(bn);
       srcNode = bn;
     } else if (source === 'file') {
-      // Audio file input. The file ArrayBuffer is passed as deviceId.
-      if (!deviceId) throw new Error('No audio file provided');
-      const audioData = await ctx.decodeAudioData(deviceId);
+      // Audio file input. deviceId is an ArrayBuffer (first time) or
+      // omitted (re-enable after disable). _decodedFile survives
+      // disable() so the file can be resumed without re-picking.
+      let audioData;
+      if (deviceId) {
+        audioData = await ctx.decodeAudioData(deviceId);
+        this._decodedFile = audioData;
+      } else if (this._decodedFile) {
+        audioData = this._decodedFile;
+      } else {
+        throw new Error('No audio file provided');
+      }
       this._fileBuffer = audioData;
       this._fileStartTime = ctx.currentTime;
       this._fileOffset = 0;

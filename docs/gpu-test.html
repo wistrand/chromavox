@@ -48,7 +48,7 @@ const gl = canvas.getContext('webgl2', { antialias: false });
 if (!gl) { logEl.innerHTML = '<span class="fail">WebGL2 not available</span>'; throw new Error(); }
 gl.getExtension('EXT_color_buffer_float');
 
-const BENCH_W = 556, BENCH_H = 900;
+let BENCH_W = 556, BENCH_H = 900;
 const POS_TOL = 0.5, COLOR_TOL = 0.05, INTENSITY_TOL = 0.05, SENSOR_TOL = 0.1;
 
 // --- Draw segments onto a 2D canvas ---
@@ -267,8 +267,10 @@ async function run() {
   ];
   const presets = [
     'prism-rainbow', 'double-prism', 'mirror-bounce', 'dichroic', 'tinted-glass',
+    'converging-lens', 'diverging-lens',
     'test-nested', 'test-tir', 'test-grazing', 'test-multibounce',
     'test-hyper-refract', 'test-dichroic-chain', 'test-mixed',
+    'test-concave-mirror', 'test-convex-mirror',
   ];
   for (const name of presets) {
     try { scenes.push([name, await loadPreset(name)]); }
@@ -280,6 +282,8 @@ async function run() {
 
   for (const [name, scene] of scenes) {
     try {
+      BENCH_W = scene.bench.w;
+      BENCH_H = scene.bench.h;
       cpu.resetPersistence();
       cpu.trace(scene);
       gpu.trace(scene);

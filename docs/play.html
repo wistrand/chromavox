@@ -13,7 +13,7 @@
     <button id="help-toggle" aria-label="Help">?</button>
     <div class="tools">
       <div class="tool-menu-wrap">
-        <button id="add-btn" type="button">Add: Prism</button>
+        <button id="add-btn" type="button">Prism</button>
         <button id="add-options" type="button" class="opts-toggle" aria-label="Choose element type">▾</button>
         <div id="add-menu" class="tool-menu">
           <div class="tool-menu-item" data-tool="prism">       <span class="tmi-label">Prism</span></div>
@@ -21,13 +21,34 @@
           <div class="tool-menu-item" data-tool="lens-convex"> <span class="tmi-label">Convex Lens</span></div>
           <div class="tool-menu-item" data-tool="lens-concave"><span class="tmi-label">Concave Lens</span></div>
           <div class="tool-menu-item" data-tool="mirror">      <span class="tmi-label">Mirror</span></div>
+          <div class="tool-menu-item" data-tool="mirror-concave"><span class="tmi-label">Concave Mirror</span></div>
+          <div class="tool-menu-item" data-tool="mirror-convex"> <span class="tmi-label">Convex Mirror</span></div>
           <div class="tool-menu-item" data-tool="circle">      <span class="tmi-label">Circle</span></div>
           <div class="tool-menu-item" data-tool="rabbit">      <span class="tmi-label">Rabbit</span></div>
         </div>
       </div>
-      <button id="delete-btn" disabled>Delete</button>
+      <span class="tb-sep"></span>
+      <button id="delete-btn" disabled aria-label="Delete">🗑</button>
     </div>
     <span class="tb-sep"></span>
+    <div class="tool-menu-wrap">
+      <button id="bench-toggle" type="button">Bench</button>
+      <button id="bench-options" type="button" class="opts-toggle" aria-label="Bench options">▾</button>
+      <div id="bench-menu" class="options-menu">
+        <div class="row"><label>Aspect <select id="bench-aspect">
+          <option value="portrait" selected>portrait</option>
+          <option value="landscape">landscape</option>
+          <option value="square">square</option>
+        </select></label></div>
+        <div class="row"><label><input id="no-overlap" type="checkbox"> No overlap</label></div>
+        <div class="row"><label><input id="distort-toggle" type="checkbox"> Distort</label></div>
+        <div class="row"><label><input id="stats-toggle" type="checkbox"> Stats</label></div>
+        <div class="row"><label><input id="mic-spectrum-toggle" type="checkbox"> Mic spectrum</label></div>
+        <div class="row"><label><input id="synth-spectrum-toggle" type="checkbox"> Synth spectrum</label></div>
+        <div class="row"><label><input id="synth-waveform-toggle" type="checkbox"> Synth waveform</label></div>
+        <div class="row"><span id="tracer-indicator" style="font-size:11px;color:var(--muted)">Tracer: —</span></div>
+      </div>
+    </div>
     <div class="tool-menu-wrap">
       <button id="mic-toggle">Audio in: off</button>
       <button id="mic-options" type="button" class="opts-toggle" aria-label="Audio in options">▾</button>
@@ -168,15 +189,6 @@
 
     <h2>Selected</h2>
     <div id="prop-panel"><em>No selection</em></div>
-
-    <div class="row"><label><input id="no-overlap" type="checkbox"> No overlap</label></div>
-    <div class="row"><label><input id="distort-toggle" type="checkbox"> Distort</label></div>
-    <div class="row"><label><input id="stats-toggle" type="checkbox"> Stats</label></div>
-    <div class="row"><label><input id="mic-spectrum-toggle" type="checkbox"> Mic spectrum</label></div>
-    <div class="row"><label><input id="synth-spectrum-toggle" type="checkbox"> Synth spectrum</label></div>
-    <div class="row"><label><input id="synth-waveform-toggle" type="checkbox"> Synth waveform</label></div>
-
-    <div class="row" style="margin-top:10px"><span id="tracer-indicator" style="font-size:11px;color:var(--muted)">Tracer: —</span></div>
 
   </aside>
 

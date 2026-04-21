@@ -35,6 +35,40 @@ the mic input that emitted it has stopped. Moving or rotating the
 element carries the held wavefront with it — particles are stored in
 the element's *local* frame.
 
+## Arc intersection
+
+`worldEdges()` returns a mixed list of segment and arc edges. Arc-bearing
+elements (lens-convex, lens-concave, circle, mirror-concave, mirror-convex)
+emit analytic arc edges instead of polygon facets. `elementsOverlap` uses
+`_polySegs()` from polygon vertices (not arc edges) so overlap detection
+stays simple. Edge shapes:
+
+- Segment: `{type:'seg', p1, p2, nx, ny, elementId}`
+- Arc: `{type:'arc', cx, cy, R, a0, a1, convex, elementId}`
+
+`castRay` branches on `e.type === 'arc'`. The `rayArc()` function solves
+the quadratic ray-circle intersection and checks whether each candidate
+hit lies within the arc's angular range (`a0..a1`), using `_angleInRange()`
+to handle wrap-around. Post-hit normal for arcs is `(hit - center) / R`,
+flipped for concave surfaces.
+
+`localPolygon()` still returns dense vertex lists (unchanged) — used for
+rendering, hit-testing, overlap detection, and particle exit in the delay
+path. Only the physics edge list changed.
+
+Edge count reductions from analytic arcs:
+
+| Element | Before | After | Reduction |
+|---------|--------|-------|-----------|
+| Convex lens | 48 segments | 2 arcs | 24x |
+| Concave lens | 42 segments | 2 arcs + 2 segments | 10.5x |
+| Circle | 128 segments | 1 arc | 128x |
+| Curved mirrors | N/A | 1 arc + 3 segments | — |
+
+This dramatically reduces `effectiveBounces` in the GPU tracer (which is
+`min(MAX_BOUNCES, edges * 3 + 2)` to account for TIR with fewer arc
+edges), cutting dispatch count for curved-element scenes.
+
 ## Notes
 
 - Max bounces, per-surface glass loss, and absorption cutoff are module
@@ -130,7 +164,9 @@ the element's *local* frame.
 - Secondary emissions are stored in a flat `Float32Array`, 10 floats
   per entry (world position, direction, intensity, wavelength, RGB,
   source element id). Not an object array — avoids per-emission
-  allocation in the hot loop.
+  allocation in the hot loop. The `skipElId` for each secondary ray
+  is stored in a separate `_secondarySkipIds[]` array (UUID strings
+  can't go in a Float32Array).
 - **Exit segment persistence cache** (`PERSIST_DECAY = 0.80`): exit
   segments from secondary rays are cached and decayed each frame.
   New entries are scaled by `(1 - DECAY) = 0.20` so steady-state
