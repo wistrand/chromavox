@@ -728,10 +728,11 @@ export function pitchToWavelength(hz) {
 // Uses getFloatFrequencyData (dB) → linear magnitude → peak per bucket
 // → steep gamma for sharp vocoder-like channel separation.
 // mode: 'log' for 80–6000 Hz log-spaced; any other value is a scale name.
-// Peak-hold for file source normalization — rises instantly, decays at
-// ~0.95/frame (~1 s to half at 60 fps).
+// Peak-hold for file source normalization — rises instantly, decays
+// with a fixed ~230ms half-life regardless of frame rate.
 let _peakHold = 0;
-const PEAK_DECAY = 0.95;
+let _peakLastTime = 0;
+const PEAK_HALF_LIFE = 0.23; // seconds
 
 export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
   if (!mic.active || !mic.freqFloat) return null;
@@ -739,6 +740,12 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
   const nyquist = mic.ctx.sampleRate / 2;
   const binCount = fd.length;
   const out = new Float32Array(n);
+
+  // Time-based peak decay: same half-life regardless of frame rate.
+  const now = performance.now() * 0.001;
+  const dt = _peakLastTime > 0 ? Math.min(now - _peakLastTime, 0.25) : 1 / 60;
+  _peakLastTime = now;
+  const peakDecay = Math.pow(0.5, dt / PEAK_HALF_LIFE);
 
   // Work in linear amplitude so dynamic range is preserved.
   const minDb = mic.analyser.minDecibels;   // default -100
@@ -781,7 +788,7 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
     // Non-file (mic, noise generators): absolute dB-normalized values
     // with a noise gate — silence stays silent, no peak normalization.
     if (isFile) {
-      _peakHold = Math.max(framePeak, _peakHold * PEAK_DECAY);
+      _peakHold = Math.max(framePeak, _peakHold * peakDecay);
       if (_peakHold < NOISE_GATE_LIN) return out.fill(0), out;
       const inv = 1 / _peakHold;
       for (let i = 0; i < n; i++) out[i] = out[i] * inv;
@@ -812,7 +819,7 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
     if (peak > framePeak) framePeak = peak;
   }
   if (isFile) {
-    _peakHold = Math.max(framePeak, _peakHold * PEAK_DECAY);
+    _peakHold = Math.max(framePeak, _peakHold * peakDecay);
     if (_peakHold < NOISE_GATE_LIN) return out.fill(0), out;
     const inv = 1 / _peakHold;
     for (let i = 0; i < n; i++) out[i] = out[i] * inv;
