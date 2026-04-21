@@ -609,16 +609,19 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
       out[i] = peak;
       if (peak > framePeak) framePeak = peak;
     }
+    // File: peak-normalized linear (relative spectral shape).
+    // Non-file (mic, noise generators): absolute dB-normalized values
+    // with a noise gate — silence stays silent, no peak normalization.
     if (isFile) {
       _peakHold = Math.max(framePeak, _peakHold * PEAK_DECAY);
       if (_peakHold < NOISE_GATE_LIN) return out.fill(0), out;
       const inv = 1 / _peakHold;
-      for (let i = 0; i < n; i++) out[i] = Math.sqrt(out[i] * inv);
+      for (let i = 0; i < n; i++) out[i] = out[i] * inv;
     } else {
       if (framePeak < NOISE_GATE) return out.fill(0), out;
+      // Absolute values — floor at 0.20 to suppress ambient noise.
       for (let i = 0; i < n; i++) {
-        const v = Math.max(0, (out[i] - 0.15) / 0.85);
-        out[i] = Math.pow(v, 1.5);
+        out[i] = Math.max(0, (out[i] - 0.45) / 0.55);
       }
     }
     return out;
@@ -644,12 +647,11 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
     _peakHold = Math.max(framePeak, _peakHold * PEAK_DECAY);
     if (_peakHold < NOISE_GATE_LIN) return out.fill(0), out;
     const inv = 1 / _peakHold;
-    for (let i = 0; i < n; i++) out[i] = Math.sqrt(out[i] * inv);
+    for (let i = 0; i < n; i++) out[i] = out[i] * inv;
   } else {
     if (framePeak < NOISE_GATE) return out.fill(0), out;
     for (let i = 0; i < n; i++) {
-      const v = Math.max(0, (out[i] - 0.15) / 0.85);
-      out[i] = Math.pow(v, 1.5);
+      out[i] = Math.max(0, (out[i] - 0.20) / 0.80);
     }
   }
   return out;

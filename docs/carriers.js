@@ -19,7 +19,10 @@ export const CARRIERS = {
   },
   noise: {
     label: 'noise',
-    params: [],
+    params: [
+      { id: 'noiseQ', label: 'Q', min: 1, max: 50, default: 14, step: 1,
+        display: v => v.toFixed(0) },
+    ],
   },
   acid: {
     label: 'acid',

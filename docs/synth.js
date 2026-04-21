@@ -127,9 +127,11 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           let sum = 0;
           for (let b = b0; b < b1; b++) sum += bins[s * bc + b];
           // Normalize to 0-1 using the known full-scale deposit.
+          // Low floor (0.02) as noise gate; linear scaling preserves
+          // the spectral shape from micBands without double-compressing.
           const g = Math.min(1, sum / partialFS);
-          v.targetGains[k] = g < 0.15 ? 0
-            : Math.pow((g - 0.15) / 0.85, 1.5) * voiceScale / (k + 1);
+          v.targetGains[k] = g < 0.02 ? 0
+            : ((g - 0.02) / 0.98) * voiceScale / (k + 1);
         }
       }
     }
@@ -288,8 +290,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         // (1-r²)/2 makes peak gain exactly 1.0 at all frequencies.
         // No ampScale needed — voiceGain from sensor bins is the sole
         // amplitude control, same path as sine carrier.
+        const noiseQ = Math.max(1, this.P.noiseQ || 14);
         const w = twoPi * v.freq * invSr;
-        const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * v.freq / (25 * sampleRate)));
+        const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * v.freq / (noiseQ * sampleRate)));
         const c1 = 2 * r * Math.cos(w);
         const c2 = -(r * r);
         const norm = (1 - r * r) / 2;
