@@ -586,16 +586,11 @@ export class Renderer {
       const y = (scene.emitter.count - 1 - s + 0.5) * srcStripH;
       const off = disabled && disabled.has(s);
       const a = off ? 0.3 : 1.0;
-      for (let dy = -1; dy <= 1; dy++) {
-        this.line(0, y + dy, 14, y + dy, 1, 1, 0.7, a);
-      }
+      this.line(0, y, 14, y, 1, 1, 0.7, a);
       if (!off && levels && levels[s] > 0.02) {
         const v = Math.min(1, levels[s]);
-        const len = 24 + v * 140;
-        const x0 = 16;
-        for (let dy = -1; dy <= 1; dy++) {
-          this.line(x0, y + dy, x0 + len, y + dy, 1, 0.85, 0.4, 0.4 + 0.6 * v);
-        }
+        const len = 10 + v * 50;
+        this.line(16, y, 16 + len, y, 1, 0.85, 0.4, 0.4 + 0.6 * v);
       }
     }
     const senStripH = bench.h / scene.sensorCount;

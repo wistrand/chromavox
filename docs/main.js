@@ -62,6 +62,19 @@ function pickTracer() {
 }
 
 let dirty = true;
+let _rafId = 0;
+
+// Three-tier scheduling:
+//   scheduleFrame() — wake the RAF loop (display-only: stats, transport)
+//   setDirty()      — also retrace rays on the next frame
+//   markDirty()     — also save to localStorage, pause song keyframes
+function scheduleFrame() {
+  if (!_rafId) _rafId = requestAnimationFrame(frame);
+}
+function setDirty() {
+  dirty = true;
+  scheduleFrame();
+}
 
 const UI_STORAGE_KEY = 'chromavox-ui';
 const UI_CONTROL_IDS = [
@@ -107,7 +120,7 @@ function restoreUiState() {
 }
 
 const markDirty = () => {
-  dirty = true;
+  setDirty();
   if (cv.hideWelcome) cv.hideWelcome();
   // Any scene edit during song playback pauses keyframe lerps —
   // the user has taken ownership of element positions.
@@ -324,6 +337,7 @@ synthBtn.addEventListener('click', async () => {
       _applyInitialPartials();
       synthBtn.textContent = 'Audio out: on';
       synthBtn.classList.add('active');
+      scheduleFrame();
     } catch (err) {
       console.error('Audio out failed:', err);
       synthBtn.textContent = `Audio out: ${err.message || err}`;
@@ -421,7 +435,7 @@ wlBendSlider.addEventListener('input', () => {
   const v = parseInt(wlBendSlider.value, 10);
   mic._globalBend = v / 100;
   wlBendLabel.textContent = v;
-  dirty = true;
+  setDirty();
 });
 // Called from the frame loop to sync slider with MIDI pitch bend.
 function syncBendSlider() {
@@ -614,6 +628,7 @@ window.addEventListener('keydown', e => {
   if (e.key === '4') { document.getElementById('stats-toggle').click(); }
   // Fullscreen toggle.
   if (e.key === 'f' || e.key === 'F') { e.preventDefault(); cv.toggleFullscreen(); }
+  scheduleFrame(); // any key might affect display
 });
 
 document.getElementById('fullscreen-toggle').addEventListener('click', () => cv.toggleFullscreen());
@@ -631,14 +646,14 @@ cv.toggleFullscreen = () => {
   }
   // Resize the renderer to fill the new layout.
   renderer.resize();
-  dirty = true;
+  setDirty();
 };
 // Exit fullscreen mode when the browser exits fullscreen (Escape key).
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement) {
     document.getElementById('app').classList.remove('fullscreen-mode');
     renderer.resize();
-    dirty = true;
+    setDirty();
   }
 });
 
@@ -672,6 +687,7 @@ document.getElementById('mic-device').addEventListener('change', async () => {
   try {
     const dev = document.getElementById('mic-device').value || null;
     await mic.enable('mic', dev);
+    scheduleFrame();
   } catch (err) {
     alert('Microphone: ' + err.message);
     micBtn.textContent = 'Audio in: off';
@@ -719,11 +735,13 @@ filePlayBtn.addEventListener('click', () => {
   } else {
     mic.fileResume();
     filePlayBtn.textContent = '❚❚';
+    scheduleFrame();
   }
 });
 fileRestartBtn.addEventListener('click', () => {
   mic.fileRestart();
   filePlayBtn.textContent = '❚❚';
+  scheduleFrame();
 });
 
 // Audio file input: read file, store buffer, auto-enable.
@@ -745,6 +763,7 @@ document.getElementById('audio-file-input').addEventListener('change', async e =
     fileRestartBtn.disabled = false;
     filePlayBtn.textContent = '❚❚';
     fileTransportRow.style.display = '';
+    scheduleFrame();
   } catch (err) {
     alert('Audio file: ' + err.message);
   }
@@ -806,28 +825,28 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     _touchPointers.set(e.pointerId, idx);
     mic.setTouchLevel(idx, 1);
     if (cv.hideWelcome) cv.hideWelcome();
-    dirty = true;
+    setDirty();
   });
   stage.addEventListener('pointermove', e => {
     if (!_touchPointers.has(e.pointerId)) return;
-    e.stopPropagation(); // keep note pointer away from UI drag/pinch
+    e.stopPropagation();
     const oldIdx = _touchPointers.get(e.pointerId);
     const newIdx = touchEmitterIdx(e);
-    if (newIdx < 0) return; // moved out of touch zone — keep current
+    if (newIdx < 0) return;
     if (newIdx !== oldIdx) {
       mic.setTouchLevel(oldIdx, 0);
       mic.setTouchLevel(newIdx, 1);
       _touchPointers.set(e.pointerId, newIdx);
-      dirty = true;
+      setDirty();
     }
   });
   const touchUp = e => {
     if (!_touchPointers.has(e.pointerId)) return;
-    e.stopPropagation(); // prevent UI from processing note-pointer release
+    e.stopPropagation();
     const idx = _touchPointers.get(e.pointerId);
     mic.setTouchLevel(idx, 0);
     _touchPointers.delete(e.pointerId);
-    dirty = true;
+    setDirty();
   };
   stage.addEventListener('pointerup', touchUp);
   stage.addEventListener('pointercancel', touchUp);
@@ -887,7 +906,7 @@ document.getElementById('midi-gain').addEventListener('input', e => {
         synthBaseSelect.value = nb;
         synth.setBase(nb);
         rebuildSensorLabels();
-        dirty = true;
+        setDirty();
       }
     } else if (_rPointers.size === 2) {
       // Two pointers: pinch to zoom span.
@@ -916,7 +935,7 @@ document.getElementById('midi-gain').addEventListener('input', e => {
       document.getElementById('synth-span-val').textContent = newSpan;
       synth.setStep(newSpan);
       rebuildSensorLabels();
-      dirty = true;
+      setDirty();
     }
   });
 
@@ -963,6 +982,7 @@ document.getElementById('midi-device').addEventListener('change', async () => {
     await mic.enable('midi', document.getElementById('midi-device').value || null);
     populateMidiDevices();
     attachPush();
+    scheduleFrame();
   } catch (err) {
     alert('MIDI: ' + err.message);
     micBtn.textContent = 'Audio in: off';
@@ -1015,6 +1035,7 @@ document.getElementById('mic-source').addEventListener('change', async e => {
     else dev = document.getElementById('mic-device').value || null;
     await mic.enable(e.target.value, dev);
     if (e.target.value === 'midi') attachPush();
+    scheduleFrame();
   } catch (err) {
     alert('Audio input: ' + err.message);
     micBtn.textContent = 'Audio in: off';
@@ -1144,6 +1165,7 @@ micBtn.addEventListener('click', async () => {
       micBtn.classList.add('active');
       populateMicDevices();
       populateSynthDevices();
+      scheduleFrame();
     } catch (err) {
       alert('Microphone: ' + err.message);
     }
@@ -1167,6 +1189,7 @@ micBtn.addEventListener('click', async () => {
     mic.enable('touch').then(() => {
       micBtn.textContent = 'Audio in: on';
       micBtn.classList.add('active');
+      scheduleFrame();
     }).catch(() => {});
   }
 }
@@ -1620,7 +1643,7 @@ window.addEventListener('resize', () => {
 
   songSelect.addEventListener('change', async () => {
     const file = songSelect.value;
-    if (!file) { songPlayer.stop(); cv.hideWelcome(); return; }
+    if (!file) { songPlayer.stop(); cv.hideWelcome(); setDirty(); return; }
     try {
       const resp = await fetch('songs/' + file);
       const json = await resp.json();
@@ -1648,17 +1671,19 @@ window.addEventListener('resize', () => {
       // Resume AudioContext if it was suspended (e.g. by visibilitychange).
       if (synth.ctx && synth.ctx.state === 'suspended') synth.ctx.resume();
       songPlayer.play();
+      scheduleFrame();
     }
   });
 
   stopBtn.addEventListener('click', () => {
     cv.hideWelcome();
     songPlayer.stop();
+    setDirty();
   });
 
   seekSlider.addEventListener('input', () => {
     songPlayer.seek(parseFloat(seekSlider.value));
-    dirty = true;
+    setDirty();
   });
 
   songPlayer.onStateChange = state => {
@@ -1883,16 +1908,14 @@ function frame() {
   const now = performance.now() / 1000;
   const dt = Math.min(now - lastFrameTime, 0.25);
   lastFrameTime = now;
+  const _noOverlap = document.getElementById('no-overlap').checked;
   for (const el of scene.elements) {
     if (el.spin) {
       const prevRot = el.rot;
       el.rot += el.spin * dt;
-      // If no-overlap is on, revert spin-induced rotation that causes overlap.
-      if (document.getElementById('no-overlap').checked) {
-        if (ui.elementsOverlap && ui.elementsOverlap(el, scene.elements)) {
-          el.rot = prevRot;
-          el.spin = 0; // stop spinning — it hit something
-        }
+      if (_noOverlap && ui.elementsOverlap && ui.elementsOverlap(el, scene.elements)) {
+        el.rot = prevRot;
+        el.spin = 0;
       }
       dirty = true;
     }
@@ -1970,11 +1993,18 @@ function frame() {
     const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`;
     fileTimeLabel.textContent = `${fmt(t)} / ${fmt(d)}`;
   }
-  requestAnimationFrame(frame);
+  // Continue the loop only if there's work to do next frame.
+  // When idle, the loop stops — scheduleFrame() restarts it.
+  _rafId = 0;
+  const hasSpinning = scene.elements.some(e => e.spin);
+  const needsFrame = dirty || particlesInFlight || hasSpinning
+    || songPlayer.playing || (mic.active && mic.source !== 'touch')
+    || (mic._filePlaying);
+  if (needsFrame) scheduleFrame();
 }
 // Expose key objects for console debugging: chromavox.scene, chromavox.synth, etc.
-Object.assign(cv, { scene, renderer, tracer, cpuTracer, gpuTracer, ui, mic, synth, songPlayer });
-requestAnimationFrame(frame);
+Object.assign(cv, { scene, renderer, tracer, cpuTracer, gpuTracer, ui, mic, synth, songPlayer, scheduleFrame });
+scheduleFrame();
 
 // Pause audio when the page is hidden (tab switch, screen off).
 // The RAF loop stops automatically but the AudioWorklet keeps running
@@ -1992,5 +2022,6 @@ document.addEventListener('visibilitychange', () => {
   } else {
     if (synth.ctx && synth.ctx.state === 'suspended') synth.ctx.resume();
     if (mic.ctx && mic.ctx.state === 'suspended') mic.ctx.resume();
+    scheduleFrame();
   }
 });

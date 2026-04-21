@@ -797,9 +797,12 @@ export class GPUTracer {
     // segment buffer size dramatically for simple scenes.
     // Each edge can be hit multiple times (TIR, re-entry). With polygon
     // facets, edge count far exceeded actual hits; with analytic arcs the
-    // count matches physical surfaces. Use 3× edges + 2 as headroom for
-    // TIR bounces plus the final wall hit.
-    const effectiveBounces = Math.min(MAX_BOUNCES, edges.length * 3 + 2);
+    // count matches physical surfaces. Arc edges can be hit multiple
+    // times (TIR), so they get 3× headroom. Polygon segment edges are
+    // hit at most once, so they get 1×. +2 for the final wall hit.
+    let arcCount = 0, segCount_ = 0;
+    for (const e of edges) { if (e.type === 'arc') arcCount++; else segCount_++; }
+    const effectiveBounces = Math.min(MAX_BOUNCES, segCount_ + arcCount * 3 + 2);
 
     // Ping-pong: two ray-state buffers (read from one, TF writes to
     // the other). Separate segment buffer for renderer output.
