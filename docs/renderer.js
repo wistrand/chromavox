@@ -428,7 +428,8 @@ export class Renderer {
     gl.vertexAttribPointer(this.ray.aCorner, 2, gl.FLOAT, false, 0, 0);
     gl.vertexAttribDivisor(this.ray.aCorner, 0);
     if (segCount > 0) {
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, segCount);
+      // Cap instanced draw to prevent GPU timeout on complex scenes.
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, Math.min(segCount, 500000));
     }
     gl.vertexAttribDivisor(this.ray.aSeg, 0);
     gl.vertexAttribDivisor(this.ray.aCol1, 0);

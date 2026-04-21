@@ -113,6 +113,27 @@ test('worklet: supersaw carrier produces non-zero output', () => {
   assert(max > 0.001, `supersaw output too quiet: ${max}`);
 });
 
+test('worklet: pulse carrier produces non-zero output', () => {
+  const s = makeSynth('pulse', 4, 440);
+  feedBins(s, 4, 0.5);
+  let buf;
+  for (let i = 0; i < 20; i++) buf = processBlock(s);
+  let max = 0;
+  for (let i = 0; i < buf.length; i++) max = Math.max(max, Math.abs(buf[i]));
+  assert(max > 0.001, `pulse output too quiet: ${max}`);
+});
+
+test('worklet: karplus carrier produces non-zero output', () => {
+  const s = makeSynth('karplus', 4, 220);
+  feedBins(s, 4, 0.8);
+  let buf;
+  // Karplus needs excitation — first few blocks ramp gain past threshold.
+  for (let i = 0; i < 30; i++) buf = processBlock(s);
+  let max = 0;
+  for (let i = 0; i < buf.length; i++) max = Math.max(max, Math.abs(buf[i]));
+  assert(max > 0.001, `karplus output too quiet: ${max}`);
+});
+
 test('worklet: voice stealing (zero bins → silence)', () => {
   const s = makeSynth('sine', 4, 440);
   feedBins(s, 4, 0.5);
@@ -281,6 +302,22 @@ test('click: carrier switch sine → supersaw mid-playback', () => {
   s.port.onmessage({ data: { type: 'carrier', value: 'supersaw' } });
   const after = processBlocks(s, 10);
   assert(maxBoundaryDelta(after) < 0.3, `sine→supersaw boundary delta too large`);
+});
+
+test('click: pulse onset — no discontinuity', () => {
+  const s = makeSynth('pulse', 4, 440);
+  feedBins(s, 4, 0.5);
+  const bufs = processBlocks(s, 10);
+  const bd = maxBoundaryDelta(bufs);
+  assert(bd < 0.15, `pulse onset boundary delta too large: ${bd.toFixed(4)}`);
+});
+
+test('click: karplus onset — no discontinuity', () => {
+  const s = makeSynth('karplus', 4, 220);
+  feedBins(s, 4, 0.8);
+  const bufs = processBlocks(s, 10);
+  const bd = maxBoundaryDelta(bufs);
+  assert(bd < 0.3, `karplus onset boundary delta too large: ${bd.toFixed(4)}`);
 });
 
 test('click: steady-state continuity (8 voices, 50 blocks)', () => {

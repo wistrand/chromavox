@@ -48,6 +48,20 @@ export const CARRIERS = {
       { id: 'ssDetune', label: 'Detune', min: 0, max: 1, default: 0.30 },
     ],
   },
+  pulse: {
+    label: 'pulse',
+    params: [
+      { id: 'pulseWidth', label: 'Width', min: 0.05, max: 0.95, default: 0.50,
+        display: v => v.toFixed(2) },
+    ],
+  },
+  karplus: {
+    label: 'karplus',
+    params: [
+      { id: 'kpDamping', label: 'Damping', min: 0, max: 1, default: 0.40 },
+      { id: 'kpExcite',  label: 'Excite',  min: 0, max: 1, default: 0.50 },
+    ],
+  },
 };
 
 // All param IDs across all carriers (for persistence, automation).

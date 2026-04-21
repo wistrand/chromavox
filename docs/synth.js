@@ -84,12 +84,17 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       // Bandpass IIR state for noise carrier (single 2-pole resonator).
       // Acid carrier: PolyBLEP saw phase + 3-pole TPT ladder filter state
       // + smoothed cutoff to avoid clicks from abrupt sweeps.
+      // Karplus-Strong delay line: length = ceil(sampleRate / freq).
+      const kpLen = Math.max(2, Math.ceil(sampleRate / f));
       this.voices.push({ freq: f, phases, gains, targetGains,
         bp1: 0, bp2: 0,
         sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: -1,
         modPhase: 0,
         ssPhases: new Float32Array(7),
-        centroid: 0.5, targetCentroid: 0.5 });
+        centroid: 0.5, targetCentroid: 0.5,
+        pulsePhase: 0,
+        kpBuf: new Float32Array(kpLen), kpIdx: 0, kpPrev: 0, kpGainPrev: 0,
+        kpExLp: 0 });
     }
   }
   process(inputs, outputs) {
@@ -105,6 +110,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const isAcid = this.carrier === 'acid';
     const isFM = this.carrier === 'fm';
     const isSupersaw = this.carrier === 'supersaw';
+    const isPulse = this.carrier === 'pulse';
+    const isKarplus = this.carrier === 'karplus';
     // Compute target gains from latest bins snapshot.
     // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
     // the 0-1 micGain scale, then apply floor + gamma. This matches the
@@ -112,7 +119,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // Noise and acid carriers use K=1 (single band per voice).
     if (bins && bins.length >= sc * bc) {
       const fs = this.fullScale;
-      const gainK = (isNoise || isAcid || isFM || isSupersaw) ? 1 : K;
+      const gainK = (isNoise || isAcid || isFM || isSupersaw || isPulse || isKarplus) ? 1 : K;
       const partialFS = fs / gainK;
       const voiceScale = 1 / Math.sqrt(sc * gainK);
       const singleBand = gainK === 1;
@@ -346,6 +353,111 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           buf[i] += bp * voiceGain * 8;
         }
         v.bp1 = y1; v.bp2 = y2;
+        v.gains[0] = voiceGain;
+      } else if (isPulse) {
+        // PolyBLEP variable-width pulse wave. Spectral centroid modulates
+        // duty cycle: blue (1) → narrow (buzzy), red (0) → wide (warm).
+        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
+        let voiceGain = v.gains[0];
+        const voiceTarget = v.targetGains[0];
+        const baseWidth = this.P.pulseWidth || 0.5;
+        // Centroid modulates ±0.35 around the base width.
+        const duty = Math.max(0.05, Math.min(0.95,
+          baseWidth + (0.5 - v.centroid) * 0.7));
+        const baseFreq = v.freq;
+        const dt = baseFreq * invSr;
+        let phase = v.pulsePhase;
+        for (let i = 0; i < len; i++) {
+          voiceGain += (voiceTarget - voiceGain) * smooth;
+          phase += dt;
+          if (phase >= 1) phase -= 1;
+          // Raw pulse: +1 when phase < duty, -1 otherwise.
+          let pulse = phase < duty ? 1 : -1;
+          // PolyBLEP at the rising edge (phase ≈ 0).
+          const t1 = phase / dt;
+          if (t1 < 1) pulse += t1 + t1 - t1 * t1 - 1;
+          const t1b = (1 - phase) / dt;
+          if (t1b < 1) pulse -= t1b * t1b - t1b - t1b + 1;
+          // PolyBLEP at the duty-cycle crossing (phase ≈ duty).
+          const t2 = (phase - duty) / dt;
+          if (t2 > 0 && t2 < 1) pulse -= t2 + t2 - t2 * t2 - 1;
+          const t2b = (duty - phase) / dt;
+          if (t2b > 0 && t2b < 1) pulse += t2b * t2b - t2b - t2b + 1;
+          buf[i] += pulse * voiceGain;
+        }
+        v.pulsePhase = phase;
+        v.gains[0] = voiceGain;
+      } else if (isKarplus) {
+        // Karplus-Strong plucked string. Delay line with lowpass feedback.
+        // Sensor energy re-excites the string; spectral centroid modulates
+        // damping: blue (1) → bright/long ring, red (0) → dark/short thud.
+        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
+        let voiceGain = v.gains[0];
+        const voiceTarget = v.targetGains[0];
+        // Damping: 0 = heavy (short, dark), 1 = light (long, bright).
+        // Centroid adds ±0.3 to the base damping.
+        const baseDamp = this.P.kpDamping || 0.4;
+        const dampMod = Math.max(0, Math.min(1,
+          baseDamp + (v.centroid - 0.5) * 0.6));
+        // Feedback coefficient: higher = longer sustain.
+        const fb = 0.9 + dampMod * 0.099; // 0.9 – 0.999
+        // Lowpass blend in the feedback loop: 0 = full averaging (dark),
+        // 1 = no averaging (bright). Centroid/damping controls this so
+        // blue-shifted voices stay bright instead of converging to buzz.
+        const lpBlend = dampMod * 0.6; // 0 – 0.6
+        // Excite slider controls the balance between continuous
+        // excitation (sustained, bowed-string-like) and transient-only
+        // (plucked, re-excited on rising edges). Low = more continuous,
+        // high = more plucky.
+        const exciteAmt = this.P.kpExcite || 0.5;
+        const kpBuf = v.kpBuf;
+        const kpLen = kpBuf.length;
+        let idx = v.kpIdx;
+        let prev = v.kpPrev;
+        // Transient re-excitation on rising edge.
+        const gainRising = voiceTarget >= 0.05 && v.kpGainPrev < 0.05;
+        if (gainRising) {
+          for (let j = 0; j < kpLen; j++) {
+            kpBuf[j] += (Math.random() * 2 - 1) * voiceTarget * 0.5;
+          }
+        }
+        v.kpGainPrev = voiceTarget;
+        // Continuous excitation: inject noise proportional to sensor
+        // energy each sample. Scaled by (1 - exciteAmt) so at full
+        // Excite the string is purely plucked, at zero it's bowed.
+        const contExcite = (1 - exciteAmt) * 0.4;
+        // Excitation filter: one-pole lowpass on the injected noise.
+        // Blue centroid (1) → high cutoff (bright, shimmery excitation).
+        // Red centroid (0) → low cutoff (dark, woody excitation).
+        // Coefficient: 0 = fully filtered, 1 = unfiltered white noise.
+        const exFiltCoeff = 0.05 + v.centroid * 0.9; // 0.05 – 0.95
+        let exLp = v.kpExLp;
+        // Lowpass coefficients for feedback: blend between pure averaging
+        // (dark) and passthrough (bright) based on damping/centroid.
+        const lpA = 0.5 + lpBlend * 0.5; // weight of current sample: 0.5 – 0.8
+        const lpB = 1 - lpA;              // weight of previous sample: 0.5 – 0.2
+        for (let i = 0; i < len; i++) {
+          voiceGain += (voiceTarget - voiceGain) * smooth;
+          // Inject filtered noise into the delay line at the write head.
+          if (voiceGain > 0.01) {
+            const white = (Math.random() * 2 - 1);
+            exLp += (white - exLp) * exFiltCoeff;
+            kpBuf[idx] += exLp * voiceGain * contExcite;
+          }
+          // Read from delay line.
+          const out = kpBuf[idx];
+          // Variable lowpass in feedback: bright voices keep more highs.
+          const filtered = (out * lpA + prev * lpB) * fb;
+          prev = out;
+          // Write back.
+          kpBuf[idx] = filtered;
+          idx++;
+          if (idx >= kpLen) idx = 0;
+          buf[i] += out * Math.min(1, voiceGain * 3);
+        }
+        v.kpIdx = idx;
+        v.kpPrev = prev;
+        v.kpExLp = exLp;
         v.gains[0] = voiceGain;
       } else {
         // Sine / harmonic carrier.
