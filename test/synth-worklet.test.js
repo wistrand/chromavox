@@ -2,7 +2,8 @@
 // that provides AudioWorkletProcessor, registerProcessor, and sampleRate.
 
 import { test, assert, assertClose } from './run.js';
-import { _WORKLET_SRC } from '../docs/synth.js';
+import { readFileSync } from 'fs';
+import { PARAM_DEFAULTS } from '../docs/carriers.js';
 
 // --- Worklet shim ---
 const _registered = {};
@@ -16,7 +17,10 @@ globalThis.AudioWorkletProcessor = class {
 };
 globalThis.registerProcessor = (name, cls) => { _registered[name] = cls; };
 
-// Evaluate the worklet source (PARAM_DEFAULTS already interpolated).
+// Load worklet source from the external file, patch PARAM_DEFAULTS,
+// and eval — same as the browser path but using fs instead of fetch.
+const _raw = readFileSync('docs/synth-worklet.js', 'utf-8');
+const _WORKLET_SRC = _raw.replace('__PARAM_DEFAULTS__', JSON.stringify(PARAM_DEFAULTS));
 (0, eval)(_WORKLET_SRC);
 
 const SynthClass = _registered['chromavox-synth'];

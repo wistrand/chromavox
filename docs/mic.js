@@ -396,9 +396,8 @@ export class MicModulator {
       e.preventDefault();
       const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
       const idx = scale.length * this.keyboardOctave + deg;
-      if (!this._touchLevels) this._touchLevels = new Float32Array(64);
       if (idx >= 0 && idx < 64) {
-        this._touchLevels[idx] = 1;
+        this.setTouchLevel(idx, 1);
         this._kbdActiveDegs.add(e.code);
         if (this.onTouchChange) this.onTouchChange();
       }
@@ -409,9 +408,8 @@ export class MicModulator {
       this._kbdActiveDegs.delete(e.code);
       const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
       const idx = scale.length * this.keyboardOctave + deg;
-      if (!this._touchLevels) return;
       if (idx >= 0 && idx < 64) {
-        this._touchLevels[idx] = 0;
+        this.setTouchLevel(idx, 0);
         if (this.onTouchChange) this.onTouchChange();
       }
     };
@@ -603,6 +601,7 @@ export class MicModulator {
     this._midiSustainOn = false;
     this._midiSustained = null;
     this._touchLevels = null;
+    this._touchTargets = null;
     this._fileSource = null;
     this._fileBuffer = null;
     this._filePlaying = false;
