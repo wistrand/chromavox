@@ -88,7 +88,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         bp1: 0, bp2: 0,
         sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: -1,
         modPhase: 0,
-        ssPhases: new Float32Array(7) });
+        ssPhases: new Float32Array(7),
+        centroid: 0.5, targetCentroid: 0.5 });
     }
   }
   process(inputs, outputs) {
@@ -114,24 +115,50 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       const gainK = (isNoise || isAcid || isFM || isSupersaw) ? 1 : K;
       const partialFS = fs / gainK;
       const voiceScale = 1 / Math.sqrt(sc * gainK);
+      const singleBand = gainK === 1;
       for (let s = 0; s < sc; s++) {
         const v = this.voices[s];
         const nk = v.targetGains.length;
+        // For non-sine carriers (single band), compute spectral centroid
+        // from the wavelength bins: sum(val * idx) / sum(val), 0-1.
+        // Falls back to voice position (sensor index / count) when the
+        // sensor-side wavelength distribution is uniform (passthrough).
+        let centroidNum = 0, centroidDen = 0;
         for (let k = 0; k < nk; k++) {
-          // In noise mode (gainK=1), only k=0 is meaningful — it sums
-          // all bc bins for this sensor. k>0 would read past this
-          // sensor's bin range into the next sensor, so zero them.
           if (k >= gainK) { v.targetGains[k] = 0; continue; }
-          const b0 = (k * bc / gainK) | 0;
-          const b1 = ((k + 1) * bc / gainK) | 0;
+          // Invert bin mapping: blue (low bins, short wavelength) drives
+          // high partials; red (high bins, long wavelength) drives the
+          // fundamental. Reversed k index into the bin range.
+          const rk = gainK - 1 - k;
+          const b0 = (rk * bc / gainK) | 0;
+          const b1 = ((rk + 1) * bc / gainK) | 0;
           let sum = 0;
-          for (let b = b0; b < b1; b++) sum += bins[s * bc + b];
-          // Normalize to 0-1 using the known full-scale deposit.
-          // Low floor (0.02) as noise gate; linear scaling preserves
-          // the spectral shape from micBands without double-compressing.
+          for (let b = b0; b < b1; b++) {
+            const val = bins[s * bc + b];
+            sum += val;
+            if (singleBand) {
+              centroidNum += val * b;
+              centroidDen += val;
+            }
+          }
           const g = Math.min(1, sum / partialFS);
           v.targetGains[k] = g < 0.02 ? 0
             : ((g - 0.02) / 0.98) * voiceScale / (k + 1);
+        }
+        if (singleBand) {
+          // Spectral centroid from wavelength bins, inverted so that
+          // blue (short wavelength, low bins) → 1.0 (brighter/higher)
+          // and red (long wavelength, high bins) → 0.0 (duller/lower).
+          const rawCentroid = centroidDen > 1e-6
+            ? centroidNum / (centroidDen * (bc - 1)) : 0.5;
+          const wlCentroid = 1 - rawCentroid;
+          // Position centroid: sensor 0 = bottom = short wavelength = blue → 1.0.
+          const posCentroid = sc > 1 ? 1 - s / (sc - 1) : 0.5;
+          // Blend: use wavelength centroid when it deviates from the
+          // uniform baseline (~0.575 after inversion); otherwise position.
+          const wlDeviation = Math.abs(wlCentroid - 0.575);
+          const blend = Math.min(1, wlDeviation * 10);
+          v.targetCentroid = wlCentroid * blend + posCentroid * (1 - blend);
         }
       }
     }
@@ -139,6 +166,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const twoPi = 2 * Math.PI;
     const invSr = 1 / sampleRate;
     const smooth = 1 - Math.exp(-1 / (0.06 * sampleRate));
+    // Block-rate smoothing for centroid (applied once per block, not per sample).
+    const centroidSmooth = 1 - Math.pow(1 - smooth, len);
     for (let i = 0; i < len; i++) buf[i] = 0;
     const voices = this.voices;
     const voiceCount = voices.length;
@@ -154,14 +183,19 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       if (isAcid) {
         // 303-style acid carrier: PolyBLEP sawtooth → 3-pole TPT/ZDF
         // diode ladder filter with tanh feedback → drive.
+        // Spectral centroid shifts the base cutoff: blue light → brighter,
+        // red light → duller. ±2 octaves from center.
+        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
         const baseFreq = v.freq;
         const dt = baseFreq * invSr;
         const acidRes = this.P.acidRes;
         const acidEnv = this.P.acidEnv;
-        // Base cutoff: 80-8000 Hz log-mapped from the knob [0,1].
-        const baseCutoffHz = 80 * Math.pow(100, this.P.acidCutoff);
+        // Base cutoff: 80-8000 Hz log-mapped from the knob [0,1],
+        // then shifted ±2 octaves by spectral centroid.
+        const centroidShift = Math.pow(2, (v.centroid - 0.5) * 4);
+        const baseCutoffHz = 80 * Math.pow(100, this.P.acidCutoff) * centroidShift;
         // Seed smoothCutoff on first activation so the filter doesn't
         // start with g=tan(0)=0 (silent first block).
         if (v.smoothCutoff < 0) v.smoothCutoff = baseCutoffHz;
@@ -220,13 +254,15 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         v.smoothCutoff = sCutoff;
         v.gains[0] = voiceGain;
       } else if (isFM) {
-        // FM synthesis carrier. Modulator sine modulates carrier sine.
-        // Sensor energy (voiceGain) drives modulation index — low energy
-        // = clean sine, high energy = bright metallic harmonics.
+        // FM synthesis carrier. Spectral centroid modulates the FM ratio:
+        // blue → higher ratio (brighter harmonics), red → lower (purer).
+        // ±50% of the base ratio.
+        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
         const cFreq = v.freq;
-        const mFreq = cFreq * this.P.fmRatio;
+        const ratioMod = 1 + (v.centroid - 0.5);  // 0.5x – 1.5x
+        const mFreq = cFreq * this.P.fmRatio * ratioMod;
         const maxIndex = this.P.fmDepth * 8; // mod index 0-8
         const cInc = twoPi * cFreq * invSr;
         const mInc = twoPi * mFreq * invSr;
@@ -247,13 +283,15 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         v.modPhase = mPhase;
         v.gains[0] = voiceGain;
       } else if (isSupersaw) {
-        // Supersaw: 7 detuned saws (center + 3 pairs symmetrically spread).
-        // Detune in cents, spread across pairs: ±1/3, ±2/3, ±1 of max.
-        // PolyBLEP on each saw for antialiasing. Normalized by 1/7.
+        // Supersaw: 7 detuned saws. Spectral centroid modulates detune:
+        // blue → wider (thick chorus), red → tighter (clean unison).
+        // ±100% of the base detune.
+        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
         let voiceGain = v.gains[0];
         const voiceTarget = v.targetGains[0];
         const baseFreq = v.freq;
-        const maxCents = this.P.ssDetune * 50; // 0-50 cents
+        const detuneMod = v.centroid * 2;  // 0x–2x of base detune
+        const maxCents = this.P.ssDetune * 50 * detuneMod;
         const detuneRatios = [
           1,
           Math.pow(2, maxCents / 3 / 1200),
@@ -285,14 +323,14 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         v.gains[0] = voiceGain;
       } else if (isNoise) {
         // Unity-gain bandpass noise carrier (Csound resonz topology).
-        // Zeros at DC and Nyquist via (y0 - y2) cancel the all-pole
-        // resonator's 1/sin(w) frequency dependence. Gain normalization
-        // (1-r²)/2 makes peak gain exactly 1.0 at all frequencies.
-        // No ampScale needed — voiceGain from sensor bins is the sole
-        // amplitude control, same path as sine carrier.
+        // Spectral centroid shifts the bandpass center: blue → higher,
+        // red → lower. ±1 octave from the voice's base frequency.
+        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
+        const centroidShift = Math.pow(2, (v.centroid - 0.5) * 2);
         const noiseQ = Math.max(1, this.P.noiseQ || 14);
-        const w = twoPi * v.freq * invSr;
-        const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * v.freq / (noiseQ * sampleRate)));
+        const freqMod = Math.min(sampleRate * 0.45, v.freq * centroidShift);
+        const w = twoPi * freqMod * invSr;
+        const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * freqMod / (noiseQ * sampleRate)));
         const c1 = 2 * r * Math.cos(w);
         const c2 = -(r * r);
         const norm = (1 - r * r) / 2;
