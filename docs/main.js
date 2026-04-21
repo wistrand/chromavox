@@ -1862,8 +1862,8 @@ function frame() {
             const invM = 1 / bendMults[i];
             const center = (wp.min[i] + wp.max[i]) / 2;
             const halfRange = (wp.max[i] - wp.min[i]) / 2;
-            wp.min[i] = Math.max(380, center * invM - halfRange);
-            wp.max[i] = Math.min(780, center * invM + halfRange);
+            wp.min[i] = Math.max(scene.emitter.wlMin, Math.min(scene.emitter.wlMax, center * invM - halfRange));
+            wp.max[i] = Math.max(scene.emitter.wlMin, Math.min(scene.emitter.wlMax, center * invM + halfRange));
           }
         }
       } else if (bendMults) {
@@ -1876,8 +1876,8 @@ function frame() {
         const halfRange = (wlMax - wlMin) / 2;
         for (let i = 0; i < n; i++) {
           const invM = 1 / bendMults[i];
-          min[i] = Math.max(380, center * invM - halfRange);
-          max[i] = Math.min(780, center * invM + halfRange);
+          min[i] = Math.max(wlMin, Math.min(wlMax, center * invM - halfRange));
+          max[i] = Math.max(wlMin, Math.min(wlMax, center * invM + halfRange));
         }
         scene.runtime.wlPerSource = { min, max };
       }
@@ -1900,15 +1900,15 @@ function frame() {
     const wp = scene.runtime.wlPerSource;
     if (wp) {
       for (let i = 0; i < n; i++) {
-        wp.min[i] = Math.max(380, wp.min[i] + offset);
-        wp.max[i] = Math.min(780, wp.max[i] + offset);
+        wp.min[i] = Math.max(baseMin, Math.min(baseMax, wp.min[i] + offset));
+        wp.max[i] = Math.max(baseMin, Math.min(baseMax, wp.max[i] + offset));
       }
     } else {
       const min = new Float32Array(n);
       const max = new Float32Array(n);
       for (let i = 0; i < n; i++) {
-        min[i] = Math.max(380, baseMin + offset);
-        max[i] = Math.min(780, baseMax + offset);
+        min[i] = Math.max(baseMin, Math.min(baseMax, baseMin + offset));
+        max[i] = Math.max(baseMin, Math.min(baseMax, baseMax + offset));
       }
       scene.runtime.wlPerSource = { min, max };
     }
@@ -1977,8 +1977,10 @@ function frame() {
 
     renderer.draw(scene, tracer);
     renderer.onPreOverlay = null;
-    renderer.updateReadout(scene, tracer);
   }
+  // Readout uses IIR smoothing — needs to run every active frame
+  // (not just when dirty) so bars decay smoothly to zero after input stops.
+  renderer.updateReadout(scene, tracer);
 
   if (synth.active) {
     if (synth.raysPer !== scene.emitter.raysPerSource) {
@@ -2015,7 +2017,9 @@ function frame() {
       if (Math.abs(mic._touchLevels[i] - mic._touchTargets[i]) > 0.001) { touchRamping = true; break; }
     }
   }
+  const readoutDecaying = renderer._peakMax > 0.001;
   const needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
+    || readoutDecaying
     || songPlayer.playing || (mic.active && mic.source !== 'touch')
     || (mic._filePlaying);
   if (needsFrame) scheduleFrame();

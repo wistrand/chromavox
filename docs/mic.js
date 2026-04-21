@@ -472,8 +472,8 @@ export class MicModulator {
       if (idx < 0 || idx >= n) continue;
       // Slide 0.5 = no shift. Range: ±100 nm.
       const offset = (slide - 0.5) * 200;
-      min[idx] = Math.max(380, wlMin + offset);
-      max[idx] = Math.min(780, wlMax + offset);
+      min[idx] = Math.max(wlMin, Math.min(wlMax, wlMin + offset));
+      max[idx] = Math.max(wlMin, Math.min(wlMax, wlMax + offset));
       any = true;
     }
     return any ? { min, max } : null;
