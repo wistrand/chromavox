@@ -85,6 +85,10 @@
   (missing from `baseBySource` map).
 - `mic.js`: `_peakHold` reset to 0 in `enable()` to avoid stale
   values across source switches.
+- `mic.js`: `disable()` clears `_touchTargets` so stale touch state
+  doesn't persist across source switches.
+- `mic.js`: `_installKeyboard` uses `setTouchLevel()` not direct
+  `_touchLevels` write, so the touch smoothing ramp runs correctly.
 - `mic.js`: `_decodedFile` persists across `disable()` cycles so file
   audio can resume without re-picking.
 - `raytracer.js`: secondary ray `skipElId` stored in separate
@@ -131,6 +135,10 @@
 - Karplus excitation uses `>= 0.05` threshold for transient detection
   (not `>`). The Excite slider blends between continuous (bowed) and
   transient-only (plucked) modes.
+- `synth.js`: `enable()` has try/catch around fetch + addModule —
+  cleans up AudioContext on failure to prevent leaked contexts.
+- `synth-worklet.js`: vocoder stores `env` (not `voiceTarget`) in
+  `v.gains[0]` for correct envelope tracking.
 - Centroid smoothing uses block-rate coefficient
   (`1 - (1 - smooth)^blockLength`), not per-sample. This gives the
   correct smoothing time constant regardless of block size. Applying

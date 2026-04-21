@@ -175,12 +175,18 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   just chromatic). Changing the Base dropdown takes effect immediately
   in any scale.
 - Synth runs as a single `AudioWorkletProcessor` ("chromavox-synth")
-  loaded from an inline Blob URL — no separate file, no build step.
+  in `docs/synth-worklet.js`. `synth.js` fetches the file, patches
+  `__PARAM_DEFAULTS__` with carrier param JSON, creates a Blob URL,
+  calls `addModule`. Source cached in `_WORKLET_SRC` after first load.
+  `enable()` has try/catch — cleans up AudioContext on failure.
   Main thread posts `sensorBins` via `MessagePort` each frame; worklet
-  reads the latest snapshot in `process()`. Per-sample gain smoothing
-  (per-carrier time constants: karplus 5ms, pulse 30ms, acid 40ms,
-  noise/FM/supersaw 60ms, sine 80ms) inside the worklet replaces
-  the old `setTargetAtTime` calls. Fixed-range normalization: worklet receives
+  reads the latest snapshot in `process()`. Eight carrier functions
+  dispatched via `_CARRIERS` map (no if/else chain). Shared `ctx`
+  object cached on `this._ctx` — zero allocation per `process()` call.
+  Global constant maps `_SINGLE_BAND`, `_SMOOTH_SEC`, `_CARRIERS`
+  live outside `process()`. Per-carrier gain smoothing time constants
+  (karplus 5ms, pulse 30ms, acid 40ms, noise/FM/supersaw 60ms,
+  sine 80ms) from `_SMOOTH_SEC`. Fixed-range normalization: worklet receives
   `fullScale` (`BASE_INTENSITY * sqrt(raysPer)`) via rebuild; each
   partial's bin sum is divided by `fullScale/gainK` (`gainK` = `K`
   for sine, `1` for noise/acid) to recover 0–1 micGain, then floor

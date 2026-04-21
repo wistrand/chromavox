@@ -50,13 +50,21 @@ No dependencies.
 - `docs/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.
   Filters system-realtime messages (status >= 0xF0, e.g. Active Sensing)
   before processing/logging MIDI input.
-- `docs/synth.js` — additive sensor synth; single `AudioWorkletProcessor`
-  ("chromavox-synth") loaded from an inline Blob URL. Stereo output
-  with constant-power panning (sensor 0 → left, sensor N-1 → right).
-  Main thread posts `sensorBins` via `MessagePort`; worklet renders
-  6 harmonic partials per voice with per-carrier gain smoothing time
-  constants. Uses a 2048-entry sine wavetable (`fsin`) with linear
-  interpolation for sine partials and FM.
+- `docs/synth.js` — additive sensor synth (~190 lines); main-thread
+  API (enable, disable, rebuild, setCarrier, setBase, etc.) and
+  MessagePort plumbing. Fetches the worklet source from
+  `synth-worklet.js`, patches `__PARAM_DEFAULTS__` with carrier
+  parameter JSON, creates a Blob URL, and calls `addModule`. Cached
+  after first load (`_WORKLET_SRC`). Try/catch cleans up AudioContext
+  on fetch/addModule failure.
+- `docs/synth-worklet.js` — the `AudioWorkletProcessor`
+  ("chromavox-synth"). Eight standalone carrier functions dispatched
+  via `_CARRIERS` map. Shared `ctx` object (cached on `this._ctx`,
+  zero allocation per `process()` call). Global constant maps
+  `_SINGLE_BAND`, `_SMOOTH_SEC`, `_CARRIERS` outside `process()`.
+  Stereo output with constant-power panning. 2048-entry sine
+  wavetable (`fsin`) with linear interpolation for sine partials
+  and FM.
 - `docs/push.js` — Ableton Push 2/3 integration: 8x8 RGB pixel map,
   dynamic palette management, sensor-to-pad color mapping, encoder-to-
   element dispatch, in-key layout computation, and Push display bridge.

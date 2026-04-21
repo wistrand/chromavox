@@ -30,6 +30,259 @@ function fsin(x) {
   return _SIN_TBL[i % _SIN_N] + (_SIN_TBL[(i + 1) % _SIN_N] - _SIN_TBL[i % _SIN_N]) * f;
 }
 
+// --- Carrier functions. Each takes (v, ctx) where v is the voice
+// struct and ctx is the shared per-block context object. ---
+
+function _carrierAcid(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
+  let voiceGain = v.gains[0];
+  const voiceTarget = v.targetGains[0];
+  const dt = v.freq * ctx.invSr;
+  const centroidShift = Math.pow(2, (v.centroid - 0.5) * 4);
+  const baseCutoffHz = 80 * Math.pow(100, ctx.P.acidCutoff) * centroidShift;
+  if (v.smoothCutoff < 0) v.smoothCutoff = baseCutoffHz;
+  const decayMs = 0.03 + ctx.P.acidDecay * 1.97;
+  const envSmooth = 1 - Math.exp(-1 / (decayMs * sampleRate));
+  const driveAmt = 1 + ctx.P.acidDrive * 4;
+  const k = ctx.P.acidRes * 4.5;
+  let phase = v.sawPhase;
+  let s1 = v.lp1, s2 = v.lp2, s3 = v.lp3;
+  let sCutoff = v.smoothCutoff;
+  const envScale = ctx.P.acidEnv * 5;
+  const ln2 = 0.6931471805599453;
+  const piInvSr = Math.PI * ctx.invSr;
+  const cutoffCeil = sampleRate * 0.45;
+  let g = Math.tan(piInvSr * sCutoff);
+  let g1 = g / (1 + g);
+  for (let i = 0; i < ctx.len; i++) {
+    voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
+    phase += dt;
+    let saw = 2 * phase - 1;
+    if (phase >= 1) { phase -= 1; saw = 2 * phase - 1; }
+    const t1 = phase / dt;
+    if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
+    const t2 = (1 - phase) / dt;
+    if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
+    const targetCutoff = Math.min(cutoffCeil,
+      baseCutoffHz * Math.exp(voiceGain * envScale * ln2));
+    sCutoff += (targetCutoff - sCutoff) * envSmooth;
+    if ((i & 31) === 31) { g = Math.tan(piInvSr * sCutoff); g1 = g / (1 + g); }
+    const u = saw * 1.5 - k * ftanh(s3);
+    const v1 = (u - s1) * g1; s1 += 2 * v1;
+    const v2 = (s1 - s2) * g1; s2 += 2 * v2;
+    const v3 = (s2 - s3) * g1; s3 += 2 * v3;
+    const _s = ftanh(s3 * driveAmt) * voiceGain;
+    ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
+  }
+  v.sawPhase = phase; v.lp1 = s1; v.lp2 = s2; v.lp3 = s3;
+  v.smoothCutoff = sCutoff; v.gains[0] = voiceGain;
+}
+
+function _carrierFM(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
+  let voiceGain = v.gains[0];
+  const voiceTarget = v.targetGains[0];
+  const cFreq = v.freq;
+  const ratioMod = 1 + (v.centroid - 0.5);
+  const mFreq = cFreq * ctx.P.fmRatio * ratioMod;
+  const maxIndex = ctx.P.fmDepth * 8;
+  const cInc = ctx.twoPi * cFreq * ctx.invSr;
+  const mInc = ctx.twoPi * mFreq * ctx.invSr;
+  let cPhase = v.phases.length > 0 ? v.phases[0] : 0;
+  let mPhase = v.modPhase;
+  for (let i = 0; i < ctx.len; i++) {
+    voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
+    const sample = fsin(cPhase + fsin(mPhase) * voiceGain * maxIndex) * voiceGain;
+    ctx.bufL[i] += sample * ctx.panL; ctx.bufR[i] += sample * ctx.panR;
+    cPhase += cInc; mPhase += mInc;
+    if (cPhase > ctx.twoPi) cPhase -= ctx.twoPi;
+    if (mPhase > ctx.twoPi) mPhase -= ctx.twoPi;
+  }
+  if (v.phases.length > 0) v.phases[0] = cPhase;
+  v.modPhase = mPhase; v.gains[0] = voiceGain;
+}
+
+function _carrierSupersaw(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
+  let voiceGain = v.gains[0];
+  const voiceTarget = v.targetGains[0];
+  const baseFreq = v.freq;
+  const maxCents = ctx.P.ssDetune * 50 * v.centroid * 2;
+  const c3 = Math.pow(2, maxCents / 3 / 1200);
+  const c6 = Math.pow(2, maxCents * 2 / 3 / 1200);
+  const c9 = Math.pow(2, maxCents / 1200);
+  const bfi = baseFreq * ctx.invSr;
+  // Reuse voice's ssPhases array second half as scratch for dts (7 floats).
+  // ssPhases is Float32Array(7), dts needs 7 — but they're both in use.
+  // Use a scratch array on the voice instead.
+  if (!v._ssDts) v._ssDts = new Float32Array(7);
+  const dts = v._ssDts;
+  dts[0] = bfi; dts[1] = bfi * c3; dts[2] = bfi / c3;
+  dts[3] = bfi * c6; dts[4] = bfi / c6; dts[5] = bfi * c9; dts[6] = bfi / c9;
+  const ph = v.ssPhases;
+  for (let i = 0; i < ctx.len; i++) {
+    voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
+    let sum = 0;
+    for (let j = 0; j < 7; j++) {
+      ph[j] += dts[j];
+      let saw = 2 * ph[j] - 1;
+      if (ph[j] >= 1) { ph[j] -= 1; saw = 2 * ph[j] - 1; }
+      const t1 = ph[j] / dts[j];
+      if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
+      const t2 = (1 - ph[j]) / dts[j];
+      if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
+      sum += saw;
+    }
+    const _s = sum * (1/7) * voiceGain;
+    ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
+  }
+  v.gains[0] = voiceGain;
+}
+
+function _carrierNoise(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
+  const centroidShift = Math.pow(2, (v.centroid - 0.5) * 2);
+  const noiseQ = Math.max(1, ctx.P.noiseQ || 14);
+  const freqMod = Math.min(sampleRate * 0.45, v.freq * centroidShift);
+  const w = ctx.twoPi * freqMod * ctx.invSr;
+  const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * freqMod / (noiseQ * sampleRate)));
+  const c1 = 2 * r * Math.cos(w), c2 = -(r * r), norm = (1 - r * r) / 2;
+  let voiceGain = v.gains[0];
+  const voiceTarget = v.targetGains[0];
+  let y1 = v.bp1, y2 = v.bp2;
+  for (let i = 0; i < ctx.len; i++) {
+    voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
+    const noise = Math.random() * 2 - 1;
+    const y0 = noise + c1 * y1 + c2 * y2;
+    const bp = (y0 - y2) * norm;
+    y2 = y1; y1 = y0;
+    const _s = bp * voiceGain * 8;
+    ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
+  }
+  v.bp1 = y1; v.bp2 = y2; v.gains[0] = voiceGain;
+}
+
+function _carrierPulse(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
+  let voiceGain = v.gains[0];
+  const voiceTarget = v.targetGains[0];
+  const duty = Math.max(0.05, Math.min(0.95,
+    (ctx.P.pulseWidth || 0.5) + (0.5 - v.centroid) * 0.7));
+  const dt = v.freq * ctx.invSr;
+  let phase = v.pulsePhase;
+  for (let i = 0; i < ctx.len; i++) {
+    voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
+    phase += dt;
+    if (phase >= 1) phase -= 1;
+    let pulse = phase < duty ? 1 : -1;
+    const t1 = phase / dt;
+    if (t1 < 1) pulse += t1 + t1 - t1 * t1 - 1;
+    const t1b = (1 - phase) / dt;
+    if (t1b < 1) pulse -= t1b * t1b - t1b - t1b + 1;
+    const t2 = (phase - duty) / dt;
+    if (t2 > 0 && t2 < 1) pulse -= t2 + t2 - t2 * t2 - 1;
+    const t2b = (duty - phase) / dt;
+    if (t2b > 0 && t2b < 1) pulse += t2b * t2b - t2b - t2b + 1;
+    const _s = pulse * voiceGain;
+    ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
+  }
+  v.pulsePhase = phase; v.gains[0] = voiceGain;
+}
+
+function _carrierVocoder(v, ctx) {
+  const voiceTarget = v.targetGains[0];
+  const freq = v.freq;
+  const ratio = ctx.sc > 1 ? Math.pow(6000 / 80, 1 / ctx.sc) : 2;
+  const Q = Math.max(1, 1 / (ratio - 1));
+  const w0 = ctx.twoPi * freq * ctx.invSr;
+  const sinW = Math.sin(w0), cosW = Math.cos(w0);
+  const alpha = sinW / (2 * Q);
+  const a0inv = 1 / (1 + alpha);
+  const b0 = (sinW / 2) * a0inv, b2 = -(sinW / 2) * a0inv;
+  const a1 = (-2 * cosW) * a0inv, a2 = (1 - alpha) * a0inv;
+  const atkCoeff = 1 - Math.exp(-1 / ((ctx.P.vocAttack ?? 5) * 0.001 * sampleRate));
+  const relCoeff = 1 - Math.exp(-1 / ((ctx.P.vocRelease ?? 20) * 0.001 * sampleRate));
+  let env = v.vocEnv;
+  const s1 = v.voc1, s2 = v.voc2;
+  const gainNorm = 1 / Math.max(1, Q * 0.5);
+  for (let i = 0; i < ctx.len; i++) {
+    env += (voiceTarget - env) * (voiceTarget > env ? atkCoeff : relCoeff);
+    const exc = ctx.vocExc[i] * env;
+    let y = b0 * exc + b2 * s1[1] - a1 * s1[2] - a2 * s1[3];
+    s1[1] = s1[0]; s1[0] = exc; s1[3] = s1[2]; s1[2] = y;
+    const y2 = b0 * y + b2 * s2[1] - a1 * s2[2] - a2 * s2[3];
+    s2[1] = s2[0]; s2[0] = y; s2[3] = s2[2]; s2[2] = y2;
+    const _s = y2 * gainNorm * 4;
+    ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
+  }
+  v.vocEnv = env; v.gains[0] = env;
+}
+
+function _carrierKarplus(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
+  let voiceGain = v.gains[0];
+  const voiceTarget = v.targetGains[0];
+  const dampMod = Math.max(0, Math.min(1,
+    (ctx.P.kpDamping || 0.4) + (v.centroid - 0.5) * 0.6));
+  const fb = 0.9 + dampMod * 0.099;
+  const lpBlend = dampMod * 0.6;
+  const exciteAmt = ctx.P.kpExcite || 0.5;
+  const kpBuf = v.kpBuf, kpLen = kpBuf.length;
+  let idx = v.kpIdx, prev = v.kpPrev;
+  if (voiceTarget >= 0.05 && v.kpGainPrev < 0.05) {
+    for (let j = 0; j < kpLen; j++) kpBuf[j] += (Math.random() * 2 - 1) * voiceTarget * 0.5;
+  }
+  v.kpGainPrev = voiceTarget;
+  const contExcite = (1 - exciteAmt) * 0.4;
+  const exFiltCoeff = 0.05 + v.centroid * 0.9;
+  let exLp = v.kpExLp;
+  const lpA = 0.5 + lpBlend * 0.5, lpB = 1 - lpA;
+  for (let i = 0; i < ctx.len; i++) {
+    voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
+    if (voiceGain > 0.01) {
+      const white = Math.random() * 2 - 1;
+      exLp += (white - exLp) * exFiltCoeff;
+      kpBuf[idx] += exLp * voiceGain * contExcite;
+    }
+    const out = kpBuf[idx];
+    const filtered = (out * lpA + prev * lpB) * fb;
+    prev = out;
+    kpBuf[idx] = filtered;
+    idx++; if (idx >= kpLen) idx = 0;
+    const _s = out * Math.min(1, voiceGain * 3);
+    ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
+  }
+  v.kpIdx = idx; v.kpPrev = prev; v.kpExLp = exLp; v.gains[0] = voiceGain;
+}
+
+function _carrierSine(v, ctx) {
+  for (let i = 0; i < ctx.len; i++) {
+    let sample = 0;
+    for (let k = 0; k < v.phases.length; k++) {
+      v.gains[k] += (v.targetGains[k] - v.gains[k]) * ctx.smooth;
+      if (v.gains[k] < 1e-6 && v.targetGains[k] < 1e-6) continue;
+      sample += fsin(v.phases[k]) * v.gains[k];
+      v.phases[k] += ctx.twoPi * v.freq * (k + 1) * ctx.invSr;
+      if (v.phases[k] > ctx.twoPi) v.phases[k] -= ctx.twoPi;
+    }
+    ctx.bufL[i] += sample * ctx.panL; ctx.bufR[i] += sample * ctx.panR;
+  }
+}
+
+// Carrier dispatch table.
+const _CARRIERS = {
+  acid: _carrierAcid, fm: _carrierFM, supersaw: _carrierSupersaw,
+  noise: _carrierNoise, pulse: _carrierPulse, vocoder: _carrierVocoder,
+  karplus: _carrierKarplus, sine: _carrierSine,
+};
+
+// Carriers that use a single gain band (gainK=1) vs sine's multi-partial.
+const _SINGLE_BAND = { noise:1, acid:1, fm:1, supersaw:1, pulse:1, karplus:1, vocoder:1 };
+
+// Per-carrier gain smoothing time constants (seconds).
+const _SMOOTH_SEC = { karplus: 0.005, pulse: 0.03, acid: 0.04,
+  noise: 0.06, fm: 0.06, supersaw: 0.06, vocoder: 0.06 };
+
 class ChromavoxSynth extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -111,12 +364,6 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const K = this.partials;
     const bc = this.binCount;
     const sc = this.sensorCount;
-    const isNoise = this.carrier === 'noise';
-    const isAcid = this.carrier === 'acid';
-    const isFM = this.carrier === 'fm';
-    const isSupersaw = this.carrier === 'supersaw';
-    const isPulse = this.carrier === 'pulse';
-    const isKarplus = this.carrier === 'karplus';
     const isVocoder = this.carrier === 'vocoder';
     // Compute target gains from latest bins snapshot.
     // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
@@ -125,7 +372,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // Noise and acid carriers use K=1 (single band per voice).
     if (bins && bins.length >= sc * bc) {
       const fs = this.fullScale;
-      const gainK = (isNoise || isAcid || isFM || isSupersaw || isPulse || isKarplus || isVocoder) ? 1 : K;
+      const gainK = (this.carrier in _SINGLE_BAND) ? 1 : K;
       const partialFS = fs / gainK;
       const voiceScale = 1 / Math.sqrt(sc * gainK);
       const singleBand = gainK === 1;
@@ -178,11 +425,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // Synthesise.
     const twoPi = 2 * Math.PI;
     const invSr = 1 / sampleRate;
-    // Per-carrier gain smoothing time constants (seconds).
-    // Karplus needs fast attack for pluck transients; sine benefits
-    // from slower transitions to reduce intermodulation.
-    const smoothSec = isKarplus ? 0.005 : isPulse ? 0.03
-      : isAcid ? 0.04 : (isNoise || isFM || isSupersaw) ? 0.06 : 0.08;
+    const smoothSec = _SMOOTH_SEC[this.carrier] ?? 0.08;
     const smooth = 1 - Math.exp(-1 / (smoothSec * sampleRate));
     // Block-rate smoothing for centroid (applied once per block, not per sample).
     const centroidSmooth = 1 - Math.pow(1 - smooth, len);
@@ -201,10 +444,11 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       const usePulse = excite > 0.33;
       const noiseMix = useNoise ? Math.min(1, (0.66 - excite) / 0.33) : 0;
       const pulseMix = usePulse ? Math.min(1, (excite - 0.33) / 0.33) : 0;
-      const basePitch = 100; // fixed excitation pitch
+      const basePitch = 100;
       const pdt = basePitch * invSr;
       if (!this._vocPhase) this._vocPhase = 0;
-      _vocExc = new Float32Array(len);
+      if (!this._vocExcBuf || this._vocExcBuf.length < len) this._vocExcBuf = new Float32Array(len);
+      _vocExc = this._vocExcBuf;
       for (let i = 0; i < len; i++) {
         let exc = 0;
         if (useNoise) exc += (Math.random() * 2 - 1) * noiseMix;
@@ -221,22 +465,27 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         _vocExc[i] = exc;
       }
     }
-    // Constant-power pan per voice: sensor 0 (bottom) → left,
-    // sensor N-1 (top) → right. PI/2 sweep.
+    // Shared context object passed to all carrier functions. Built once
+    // per process() call; panL/panR updated per voice.
+    // Reuse ctx object across calls — update properties, no allocation.
+    if (!this._ctx) this._ctx = { bufL: null, bufR: null, len: 0, smooth: 0,
+      centroidSmooth: 0, twoPi: 0, invSr: 0, sc: 0, P: null, vocExc: null, panL: 0, panR: 0 };
+    const ctx = this._ctx;
+    ctx.bufL = bufL; ctx.bufR = bufR; ctx.len = len; ctx.smooth = smooth;
+    ctx.centroidSmooth = centroidSmooth; ctx.twoPi = twoPi; ctx.invSr = invSr;
+    ctx.sc = sc; ctx.P = this.P; ctx.vocExc = _vocExc;
     const _halfPi = Math.PI * 0.5;
     for (let s = 0; s < voiceCount; s++) {
       const pan = voiceCount > 1 ? s / (voiceCount - 1) : 0.5;
-      const panL = Math.cos(pan * _halfPi);
-      const panR = Math.sin(pan * _halfPi);
+      ctx.panL = Math.cos(pan * _halfPi);
+      ctx.panR = Math.sin(pan * _halfPi);
       const v = voices[s];
-      // Overall voice gain = sum of partial target gains (for noise mode).
       let anyActive = false;
       for (let k = 0; k < v.gains.length; k++) {
         if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
       }
       if (!anyActive) {
         v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = -1;
-        // Clear vocoder biquad states so reactivation doesn't ring.
         if (v.voc1) { v.voc1[0] = v.voc1[1] = v.voc1[2] = v.voc1[3] = 0; }
         if (v.voc2) { v.voc2[0] = v.voc2[1] = v.voc2[2] = v.voc2[3] = 0; }
         v.vocEnv = 0;
@@ -244,344 +493,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       }
       _activeCount++;
 
-      if (isAcid) {
-        // 303-style acid carrier: PolyBLEP sawtooth → 3-pole TPT/ZDF
-        // diode ladder filter with tanh feedback → drive.
-        // Spectral centroid shifts the base cutoff: blue light → brighter,
-        // red light → duller. ±2 octaves from center.
-        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
-        let voiceGain = v.gains[0];
-        const voiceTarget = v.targetGains[0];
-        const baseFreq = v.freq;
-        const dt = baseFreq * invSr;
-        const acidRes = this.P.acidRes;
-        const acidEnv = this.P.acidEnv;
-        // Base cutoff: 80-8000 Hz log-mapped from the knob [0,1],
-        // then shifted ±2 octaves by spectral centroid.
-        const centroidShift = Math.pow(2, (v.centroid - 0.5) * 4);
-        const baseCutoffHz = 80 * Math.pow(100, this.P.acidCutoff) * centroidShift;
-        // Seed smoothCutoff on first activation so the filter doesn't
-        // start with g=tan(0)=0 (silent first block).
-        if (v.smoothCutoff < 0) v.smoothCutoff = baseCutoffHz;
-        // Decay: per-sample smoothing constant. Maps [0,1] → 30ms-2s.
-        // Lower values = longer decay = slower squelch = more 303.
-        const decayMs = 0.03 + this.P.acidDecay * 1.97; // 30ms to 2s
-        const envSmooth = 1 - Math.exp(-1 / (decayMs * sampleRate));
-        // Drive: 1× (clean) to 5× (screaming).
-        const driveAmt = 1 + this.P.acidDrive * 4;
-        // Feedback coefficient: k=0 → no resonance, k≈4.5 → self-osc.
-        const k = acidRes * 4.5;
-        let phase = v.sawPhase;
-        let s1 = v.lp1, s2 = v.lp2, s3 = v.lp3;
-        let sCutoff = v.smoothCutoff;
-        // Precompute constants for the inner loop.
-        const envScale = acidEnv * 5;
-        const ln2 = 0.6931471805599453;
-        const piInvSr = Math.PI * invSr;
-        const cutoffCeil = sampleRate * 0.45;
-        // Compute tan(g) every 32 samples to reduce zipper noise from
-        // stepped filter coefficients during fast cutoff sweeps.
-        let g = Math.tan(piInvSr * sCutoff);
-        let g1 = g / (1 + g);
-        for (let i = 0; i < len; i++) {
-          voiceGain += (voiceTarget - voiceGain) * smooth;
-          // PolyBLEP sawtooth
-          phase += dt;
-          let saw = 2 * phase - 1;
-          if (phase >= 1) { phase -= 1; saw = 2 * phase - 1; }
-          const t1 = phase / dt;
-          if (t1 < 1) { saw -= t1 + t1 - t1 * t1 - 1; }
-          const t2 = (1 - phase) / dt;
-          if (t2 < 1) { saw += t2 * t2 - t2 - t2 + 1; }
-          // Target cutoff: base + envelope sweep from sensor energy.
-          // exp(x * ln2) is faster than pow(2, x).
-          const targetCutoff = Math.min(cutoffCeil,
-            baseCutoffHz * Math.exp(voiceGain * envScale * ln2));
-          // Smooth cutoff with the decay time constant.
-          sCutoff += (targetCutoff - sCutoff) * envSmooth;
-          // Recompute filter coefficient every 32 samples.
-          if ((i & 31) === 31) { g = Math.tan(piInvSr * sCutoff); g1 = g / (1 + g); }
-          // Input with resonance feedback.
-          const u = saw * 1.5 - k * ftanh(s3);
-          // 3 cascaded one-poles (18 dB/oct diode ladder)
-          const v1 = (u - s1) * g1; s1 += 2 * v1;
-          const v2 = (s1 - s2) * g1; s2 += 2 * v2;
-          const v3 = (s2 - s3) * g1; s3 += 2 * v3;
-          // Post-filter drive.
-          const driven = ftanh(s3 * driveAmt);
-          const _s = driven * voiceGain;
-          bufL[i] += _s * panL; bufR[i] += _s * panR;
-        }
-        v.sawPhase = phase;
-        v.lp1 = s1; v.lp2 = s2; v.lp3 = s3;
-        v.smoothCutoff = sCutoff;
-        v.gains[0] = voiceGain;
-      } else if (isFM) {
-        // FM synthesis carrier. Spectral centroid modulates the FM ratio:
-        // blue → higher ratio (brighter harmonics), red → lower (purer).
-        // ±50% of the base ratio.
-        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
-        let voiceGain = v.gains[0];
-        const voiceTarget = v.targetGains[0];
-        const cFreq = v.freq;
-        const ratioMod = 1 + (v.centroid - 0.5);  // 0.5x – 1.5x
-        const mFreq = cFreq * this.P.fmRatio * ratioMod;
-        const maxIndex = this.P.fmDepth * 8; // mod index 0-8
-        const cInc = twoPi * cFreq * invSr;
-        const mInc = twoPi * mFreq * invSr;
-        let cPhase = v.phases.length > 0 ? v.phases[0] : 0;
-        let mPhase = v.modPhase;
-        for (let i = 0; i < len; i++) {
-          voiceGain += (voiceTarget - voiceGain) * smooth;
-          const modIndex = voiceGain * maxIndex;
-          const mod = fsin(mPhase) * modIndex;
-          const sample = fsin(cPhase + mod) * voiceGain;
-          bufL[i] += sample * panL; bufR[i] += sample * panR;
-          cPhase += cInc;
-          mPhase += mInc;
-          if (cPhase > twoPi) cPhase -= twoPi;
-          if (mPhase > twoPi) mPhase -= twoPi;
-        }
-        if (v.phases.length > 0) v.phases[0] = cPhase;
-        v.modPhase = mPhase;
-        v.gains[0] = voiceGain;
-      } else if (isSupersaw) {
-        // Supersaw: 7 detuned saws. Spectral centroid modulates detune:
-        // blue → wider (thick chorus), red → tighter (clean unison).
-        // ±100% of the base detune.
-        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
-        let voiceGain = v.gains[0];
-        const voiceTarget = v.targetGains[0];
-        const baseFreq = v.freq;
-        const detuneMod = v.centroid * 2;  // 0x–2x of base detune
-        const maxCents = this.P.ssDetune * 50 * detuneMod;
-        const detuneRatios = [
-          1,
-          Math.pow(2, maxCents / 3 / 1200),
-          Math.pow(2, -maxCents / 3 / 1200),
-          Math.pow(2, maxCents * 2 / 3 / 1200),
-          Math.pow(2, -maxCents * 2 / 3 / 1200),
-          Math.pow(2, maxCents / 1200),
-          Math.pow(2, -maxCents / 1200),
-        ];
-        const dts = new Float32Array(7);
-        for (let j = 0; j < 7; j++) dts[j] = baseFreq * detuneRatios[j] * invSr;
-        const ph = v.ssPhases;
-        for (let i = 0; i < len; i++) {
-          voiceGain += (voiceTarget - voiceGain) * smooth;
-          let sum = 0;
-          for (let j = 0; j < 7; j++) {
-            ph[j] += dts[j];
-            let saw = 2 * ph[j] - 1;
-            if (ph[j] >= 1) { ph[j] -= 1; saw = 2 * ph[j] - 1; }
-            // PolyBLEP correction
-            const t1 = ph[j] / dts[j];
-            if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
-            const t2 = (1 - ph[j]) / dts[j];
-            if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
-            sum += saw;
-          }
-          const _s = sum * (1 / 7) * voiceGain;
-          bufL[i] += _s * panL; bufR[i] += _s * panR;
-        }
-        v.gains[0] = voiceGain;
-      } else if (isNoise) {
-        // Unity-gain bandpass noise carrier (Csound resonz topology).
-        // Spectral centroid shifts the bandpass center: blue → higher,
-        // red → lower. ±1 octave from the voice's base frequency.
-        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
-        const centroidShift = Math.pow(2, (v.centroid - 0.5) * 2);
-        const noiseQ = Math.max(1, this.P.noiseQ || 14);
-        const freqMod = Math.min(sampleRate * 0.45, v.freq * centroidShift);
-        const w = twoPi * freqMod * invSr;
-        const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * freqMod / (noiseQ * sampleRate)));
-        const c1 = 2 * r * Math.cos(w);
-        const c2 = -(r * r);
-        const norm = (1 - r * r) / 2;
-        let voiceGain = v.gains[0];
-        const voiceTarget = v.targetGains[0];
-        let y1 = v.bp1, y2 = v.bp2;
-        for (let i = 0; i < len; i++) {
-          voiceGain += (voiceTarget - voiceGain) * smooth;
-          const noise = Math.random() * 2 - 1;
-          const y0 = noise + c1 * y1 + c2 * y2;
-          const bp = (y0 - y2) * norm;
-          y2 = y1; y1 = y0;
-          const _s = bp * voiceGain * 8;
-          bufL[i] += _s * panL; bufR[i] += _s * panR;
-        }
-        v.bp1 = y1; v.bp2 = y2;
-        v.gains[0] = voiceGain;
-      } else if (isPulse) {
-        // PolyBLEP variable-width pulse wave. Spectral centroid modulates
-        // duty cycle: blue (1) → narrow (buzzy), red (0) → wide (warm).
-        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
-        let voiceGain = v.gains[0];
-        const voiceTarget = v.targetGains[0];
-        const baseWidth = this.P.pulseWidth || 0.5;
-        // Centroid modulates ±0.35 around the base width.
-        const duty = Math.max(0.05, Math.min(0.95,
-          baseWidth + (0.5 - v.centroid) * 0.7));
-        const baseFreq = v.freq;
-        const dt = baseFreq * invSr;
-        let phase = v.pulsePhase;
-        for (let i = 0; i < len; i++) {
-          voiceGain += (voiceTarget - voiceGain) * smooth;
-          phase += dt;
-          if (phase >= 1) phase -= 1;
-          // Raw pulse: +1 when phase < duty, -1 otherwise.
-          let pulse = phase < duty ? 1 : -1;
-          // PolyBLEP at the rising edge (phase ≈ 0).
-          const t1 = phase / dt;
-          if (t1 < 1) pulse += t1 + t1 - t1 * t1 - 1;
-          const t1b = (1 - phase) / dt;
-          if (t1b < 1) pulse -= t1b * t1b - t1b - t1b + 1;
-          // PolyBLEP at the duty-cycle crossing (phase ≈ duty).
-          const t2 = (phase - duty) / dt;
-          if (t2 > 0 && t2 < 1) pulse -= t2 + t2 - t2 * t2 - 1;
-          const t2b = (duty - phase) / dt;
-          if (t2b > 0 && t2b < 1) pulse += t2b * t2b - t2b - t2b + 1;
-          const _s = pulse * voiceGain;
-          bufL[i] += _s * panL; bufR[i] += _s * panR;
-        }
-        v.pulsePhase = phase;
-        v.gains[0] = voiceGain;
-      } else if (isVocoder) {
-        // Classic vocoder: shared broadband excitation → 4th-order
-        // bandpass (two cascaded biquads) → envelope-modulated output.
-        // Q is auto-computed from voice spacing for non-overlapping bands.
-        const voiceTarget = v.targetGains[0];
-        const freq = v.freq;
-        // Auto-Q: bandwidth = gap to next voice. For N log-spaced voices,
-        // ratio = (hiHz/loHz)^(1/N). BW = freq × (ratio-1). Q = 1/(ratio-1).
-        const ratio = sc > 1 ? Math.pow(6000 / 80, 1 / sc) : 2;
-        const bw = freq * (ratio - 1);
-        const Q = Math.max(1, freq / bw);
-        // Biquad BPF coefficients (Audio EQ Cookbook, Robert Bristow-Johnson).
-        const w0 = twoPi * freq * invSr;
-        const sinW = Math.sin(w0), cosW = Math.cos(w0);
-        const alpha = sinW / (2 * Q);
-        const a0inv = 1 / (1 + alpha);
-        const b0 =  (sinW / 2) * a0inv;
-        const b1 =  0;
-        const b2 = -(sinW / 2) * a0inv;
-        const a1 = (-2 * cosW) * a0inv;
-        const a2 = (1 - alpha) * a0inv;
-        // Envelope: fast attack/release in ms → per-sample coefficients.
-        const atkMs = this.P.vocAttack ?? 5;
-        const relMs = this.P.vocRelease ?? 20;
-        const atkCoeff = 1 - Math.exp(-1 / (atkMs * 0.001 * sampleRate));
-        const relCoeff = 1 - Math.exp(-1 / (relMs * 0.001 * sampleRate));
-        let env = v.vocEnv;
-        const s1 = v.voc1, s2 = v.voc2; // biquad states [x1,x2,y1,y2]
-        // Gain normalization: at Q=10, peak gain ≈ Q. Compensate.
-        const gainNorm = 1 / Math.max(1, Q * 0.5);
-        for (let i = 0; i < len; i++) {
-          // Envelope follower: fast attack, slower release.
-          env += (voiceTarget - env) * (voiceTarget > env ? atkCoeff : relCoeff);
-          // Apply envelope to excitation BEFORE filtering — prevents
-          // biquad state buildup during silence that clicks on onset.
-          const exc = _vocExc[i] * env;
-          // First biquad.
-          let y = b0 * exc + b1 * s1[0] + b2 * s1[1] - a1 * s1[2] - a2 * s1[3];
-          s1[1] = s1[0]; s1[0] = exc; s1[3] = s1[2]; s1[2] = y;
-          // Second biquad (cascade for 4th order / 24 dB/oct).
-          const y2 = b0 * y + b1 * s2[0] + b2 * s2[1] - a1 * s2[2] - a2 * s2[3];
-          s2[1] = s2[0]; s2[0] = y; s2[3] = s2[2]; s2[2] = y2;
-          const _s = y2 * gainNorm * 4;
-          bufL[i] += _s * panL; bufR[i] += _s * panR;
-        }
-        v.vocEnv = env;
-        // Store the envelope (not raw target) so the anyActive check
-        // keeps this voice alive while the biquad ring decays.
-        v.gains[0] = env;
-      } else if (isKarplus) {
-        // Karplus-Strong plucked string. Delay line with lowpass feedback.
-        // Sensor energy re-excites the string; spectral centroid modulates
-        // damping: blue (1) → bright/long ring, red (0) → dark/short thud.
-        v.centroid += (v.targetCentroid - v.centroid) * centroidSmooth;
-        let voiceGain = v.gains[0];
-        const voiceTarget = v.targetGains[0];
-        // Damping: 0 = heavy (short, dark), 1 = light (long, bright).
-        // Centroid adds ±0.3 to the base damping.
-        const baseDamp = this.P.kpDamping || 0.4;
-        const dampMod = Math.max(0, Math.min(1,
-          baseDamp + (v.centroid - 0.5) * 0.6));
-        // Feedback coefficient: higher = longer sustain.
-        const fb = 0.9 + dampMod * 0.099; // 0.9 – 0.999
-        // Lowpass blend in the feedback loop: 0 = full averaging (dark),
-        // 1 = no averaging (bright). Centroid/damping controls this so
-        // blue-shifted voices stay bright instead of converging to buzz.
-        const lpBlend = dampMod * 0.6; // 0 – 0.6
-        // Excite slider controls the balance between continuous
-        // excitation (sustained, bowed-string-like) and transient-only
-        // (plucked, re-excited on rising edges). Low = more continuous,
-        // high = more plucky.
-        const exciteAmt = this.P.kpExcite || 0.5;
-        const kpBuf = v.kpBuf;
-        const kpLen = kpBuf.length;
-        let idx = v.kpIdx;
-        let prev = v.kpPrev;
-        // Transient re-excitation on rising edge.
-        const gainRising = voiceTarget >= 0.05 && v.kpGainPrev < 0.05;
-        if (gainRising) {
-          for (let j = 0; j < kpLen; j++) {
-            kpBuf[j] += (Math.random() * 2 - 1) * voiceTarget * 0.5;
-          }
-        }
-        v.kpGainPrev = voiceTarget;
-        // Continuous excitation: inject noise proportional to sensor
-        // energy each sample. Scaled by (1 - exciteAmt) so at full
-        // Excite the string is purely plucked, at zero it's bowed.
-        const contExcite = (1 - exciteAmt) * 0.4;
-        // Excitation filter: one-pole lowpass on the injected noise.
-        // Blue centroid (1) → high cutoff (bright, shimmery excitation).
-        // Red centroid (0) → low cutoff (dark, woody excitation).
-        // Coefficient: 0 = fully filtered, 1 = unfiltered white noise.
-        const exFiltCoeff = 0.05 + v.centroid * 0.9; // 0.05 – 0.95
-        let exLp = v.kpExLp;
-        // Lowpass coefficients for feedback: blend between pure averaging
-        // (dark) and passthrough (bright) based on damping/centroid.
-        const lpA = 0.5 + lpBlend * 0.5; // weight of current sample: 0.5 – 0.8
-        const lpB = 1 - lpA;              // weight of previous sample: 0.5 – 0.2
-        for (let i = 0; i < len; i++) {
-          voiceGain += (voiceTarget - voiceGain) * smooth;
-          // Inject filtered noise into the delay line at the write head.
-          if (voiceGain > 0.01) {
-            const white = Math.random() * 2 - 1;
-            exLp += (white - exLp) * exFiltCoeff;
-            kpBuf[idx] += exLp * voiceGain * contExcite;
-          }
-          // Read from delay line.
-          const out = kpBuf[idx];
-          // Variable lowpass in feedback: bright voices keep more highs.
-          const filtered = (out * lpA + prev * lpB) * fb;
-          prev = out;
-          // Write back.
-          kpBuf[idx] = filtered;
-          idx++;
-          if (idx >= kpLen) idx = 0;
-          const _s = out * Math.min(1, voiceGain * 3);
-          bufL[i] += _s * panL; bufR[i] += _s * panR;
-        }
-        v.kpIdx = idx;
-        v.kpPrev = prev;
-        v.kpExLp = exLp;
-        v.gains[0] = voiceGain;
-      } else {
-        // Sine / harmonic carrier.
-        for (let i = 0; i < len; i++) {
-          let sample = 0;
-          for (let k = 0; k < v.phases.length; k++) {
-            v.gains[k] += (v.targetGains[k] - v.gains[k]) * smooth;
-            if (v.gains[k] < 1e-6 && v.targetGains[k] < 1e-6) continue;
-            sample += fsin(v.phases[k]) * v.gains[k];
-            v.phases[k] += twoPi * v.freq * (k + 1) * invSr;
-            if (v.phases[k] > twoPi) v.phases[k] -= twoPi;
-          }
-          bufL[i] += sample * panL; bufR[i] += sample * panR;
-        }
-      }
+      const fn = _CARRIERS[this.carrier] || _carrierSine;
+      fn(v, ctx);
     }
     this._lastActiveCount = _activeCount;
     // Soft limiter on both channels.

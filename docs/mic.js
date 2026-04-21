@@ -141,6 +141,8 @@ export class MicModulator {
             this._globalBend = bend;
           }
         }
+        // Wake the frame loop on any state-changing MIDI message.
+        if (this.onMidiChange) this.onMidiChange();
         if (debugEl) {
           const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
           const ch = (status & 0x0f) + 1;

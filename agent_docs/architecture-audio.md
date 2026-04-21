@@ -123,9 +123,18 @@ synth runs as a single `AudioWorkletProcessor` ("chromavox-synth"),
 replacing the previous 313-node WebAudio graph (144 OscillatorNodes +
 144 GainNodes + 24 voice-mix GainNodes + 1 master).
 
-The worklet source is an inline template string loaded via Blob URL —
-no separate `.js` file, no build step. `synth.enable()` is async
-(awaits `audioWorklet.addModule`).
+The worklet lives in a standalone file (`docs/synth-worklet.js`) with
+full IDE support. `synth.js` fetches the file, patches the
+`__PARAM_DEFAULTS__` placeholder with a JSON blob of carrier parameter
+defaults (from `carriers.js`), then creates a Blob URL and calls
+`audioWorklet.addModule`. The fetched source is cached in `_WORKLET_SRC`
+so subsequent `enable()` calls skip the fetch. `synth.enable()` is
+async; a try/catch around the fetch + addModule cleans up the
+AudioContext on failure (prevents leaked contexts). Tests load the
+worklet source via `readFileSync` + the same placeholder patching.
+
+`synth.js` itself is ~190 lines — just the main-thread API (enable,
+disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
 
 - **Voice pitch** uses the same base and step as the mic side, so
   input and output ladders line up. `synth.setBase(hz)` rebuilds
@@ -138,7 +147,12 @@ no separate `.js` file, no build step. `synth.enable()` is async
 - **Carrier mode**: selectable via the Carrier dropdown in the Audio
   out options menu. Carrier parameters are defined in `docs/carriers.js`
   (single source of truth for UI, persistence, automation, and worklet
-  defaults). Eight modes:
+  defaults). Each carrier is a standalone function in the worklet
+  (`_carrierSine`, `_carrierAcid`, `_carrierFM`, `_carrierSupersaw`,
+  `_carrierNoise`, `_carrierPulse`, `_carrierVocoder`,
+  `_carrierKarplus`), dispatched via a constant map
+  `_CARRIERS = { sine: _carrierSine, ... }`. The voice loop calls
+  `_CARRIERS[this.carrier](v, ctx)` — no if/else chain. Eight modes:
   - `sine` (default): harmonic partials with 1/k rolloff for
     neutral sawtooth-like timbre from white light. Bin-to-partial
     mapping is **inverted**: blue light (low wavelength bins) drives
@@ -224,9 +238,30 @@ no separate `.js` file, no build step. `synth.enable()` is async
   loops. Noise and karplus carriers use `Math.random()` — a
   deterministic PRNG (Mulberry32) caused inter-voice correlation
   artifacts.
-- **Gain smoothing**: per-carrier time constants inside the worklet
-  replace the old uniform ~60 ms smoothing. karplus: 5 ms, pulse:
-  30 ms, acid: 40 ms, noise/FM/supersaw: 60 ms, sine: 80 ms.
+- **Global constant maps** (module scope in `synth-worklet.js`,
+  outside `process()`):
+  - `_SINGLE_BAND` — which carriers use `gainK=1` (single-band
+    normalization instead of multi-partial `K`).
+  - `_SMOOTH_SEC` — per-carrier gain smoothing time constants
+    (karplus 5 ms, pulse 30 ms, acid 40 ms, noise/FM/supersaw 60 ms,
+    sine 80 ms).
+  - `_CARRIERS` — function dispatch table mapping carrier name to
+    function.
+  - Replaced 7 `isXxx` boolean flags with one `isVocoder` (for shared
+    excitation buffer).
+- **Shared carrier context (`ctx`)**: a flat object with `bufL, bufR,
+  len, smooth, centroidSmooth, twoPi, invSr, sc, P, vocExc, panL,
+  panR` passed to every carrier function. Cached on `this._ctx` —
+  properties updated in place each `process()` call, zero allocation
+  after the first call. No destructuring; all carriers use `ctx.`
+  property access directly (V8 hidden class optimization).
+- **Hot-path allocation removal**: `ctx` object cached on `this._ctx`;
+  vocoder excitation buffer cached on `this._vocExcBuf`; supersaw `dts`
+  array cached on `v._ssDts` per voice; supersaw `dr` array literal
+  replaced with individual variables. Zero allocations in `process()`
+  after first call.
+- **Gain smoothing**: per-carrier time constants (from `_SMOOTH_SEC`)
+  inside the worklet replace the old uniform ~60 ms smoothing.
   Prevents zipper noise from single-frame spikes.
 - **Acid filter zipper reduction**: `tan(g)` recomputed every 32
   samples instead of once per block, smoothing cutoff modulation.

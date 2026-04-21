@@ -204,6 +204,7 @@ mpc.onCC = encoderCC;
 apc.onCC = encoderCC;
 // Keyboard note on/off in mic.js needs to wake the frame loop.
 mic.onTouchChange = () => setDirty();
+mic.onMidiChange = () => setDirty();
 // Route mic CC events: transport buttons handled here, encoders to controller.
 mic.onCC = (cc, val) => {
   // Play button (CC 85) toggles audio out. Only on press (val > 0).
