@@ -113,6 +113,8 @@ export class PushController {
     for (let i = 0; i < PAD_COUNT; i++) {
       this.output.send([0x90, PAD_BASE + i, 0]);
     }
+    // Light up buttons we use, dim everything else.
+    this._initButtonLEDs();
     this._playInitAnimation();
     this._connectDisplay();
   }
@@ -120,6 +122,7 @@ export class PushController {
   detach() {
     this._stopInitAnimation();
     this._disconnectDisplay();
+    this._clearButtonLEDs();
     this.clearPads();
     this.output = null;
   }
@@ -400,6 +403,57 @@ export class PushController {
     const semi = SCALES[scaleName] || SCALES.chromatic;
     _rowOffset = fourthOffset(semi);
     _scaleLength = semi.length;
+  }
+
+  // --- Button backlight control ---
+  // All Push 2/3 non-pad buttons have LEDs addressable via CC messages.
+  // Light the ones Chromavox uses, dim everything else so the hardware
+  // feels alive and shows what's available.
+
+  // CC numbers for all known Push 2 buttons.
+  static BUTTON_CCS = [
+    14, 15,           // Tempo, Swing
+    20,21,22,23,24,25,26,27, // Track 1-8 below display (RGB)
+    28, 29, 30, 31,   // Master, Stop Clip, Setup, Layout
+    35,               // Convert
+    36,37,38,39,40,41,42,43, // Scene 1-8
+    44, 45, 46, 47,   // Arrows L/R/U/D
+    48, 49, 50, 51,   // Select, Shift, Note, Session
+    52, 53,           // Add Device, Add Track
+    54, 55,           // Octave Down/Up
+    56, 57, 58, 59,   // Repeat, Accent, Scale, User
+    60, 61,           // Mute, Solo (RGB)
+    62, 63,           // Page Left/Right
+    85, 86, 87, 88,   // Play, Record, New, Duplicate
+    89, 90,           // Automate, Fixed Length
+    102,103,104,105,106,107,108,109, // Track 1-8 above display (RGB)
+    110, 111, 112, 113, // Device, Browse, Mix, Clip (RGB)
+    116, 117, 118, 119, // Quantize, Double Loop, Delete, Undo
+  ];
+
+  // Buttons Chromavox actively uses — lit bright.
+  static ACTIVE_BUTTONS = [
+    85,       // Play → toggle audio out
+    53,       // Add Track (+) → add element
+    62, 63,   // Page Left/Right → octave shift
+    118,      // Delete → (shown as available)
+  ];
+
+  _initButtonLEDs() {
+    if (!this.output) return;
+    const active = new Set(PushController.ACTIVE_BUTTONS);
+    const DIM = 4;     // low brightness for inactive
+    const BRIGHT = 60; // medium-high for active
+    for (const cc of PushController.BUTTON_CCS) {
+      this.output.send([0xB0, cc, active.has(cc) ? BRIGHT : DIM]);
+    }
+  }
+
+  _clearButtonLEDs() {
+    if (!this.output) return;
+    for (const cc of PushController.BUTTON_CCS) {
+      this.output.send([0xB0, cc, 0]);
+    }
   }
 
   _reset() {
