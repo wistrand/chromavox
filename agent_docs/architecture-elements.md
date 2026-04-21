@@ -1,12 +1,53 @@
 # Architecture: Elements
 
-Defined in `docs/scene.js`. Convex polygons are easy; non-convex also
-works (e.g. `rabbit`) as long as winding is consistent (CW in y-down).
-Lens surfaces are arc-approximations with a fixed number of segments
-per arc — see `localPolygon` in `docs/scene.js` for the current values.
+Defined in `docs/scene.js` (geometry) and `docs/elements.js` (property
+schema). Convex polygons are easy; non-convex also works (e.g. `rabbit`)
+as long as winding is consistent (CW in y-down). Lens surfaces are
+arc-approximations with a fixed number of segments per arc — see
+`localPolygon` in `docs/scene.js` for the current values.
 
 Element kinds: `prism`, `block`, `mirror`, `mirror-concave`,
 `mirror-convex`, `lens-convex`, `lens-concave`, `circle`, `rabbit`.
+
+## Element property schema (`docs/elements.js`)
+
+Single source of truth for per-kind element properties. Exports
+`ELEMENTS` (9 kinds) and `ELEMENT_KINDS`.
+
+Each kind entry has:
+- `label` — display name for dropdown/toolbar.
+- `material` — default material.
+- `materials` (optional) — valid materials for this kind. If omitted,
+  all materials of the matching type (dielectric or mirror) are shown.
+- `props` — ordered property descriptors (insertion order = slider
+  order in the panel).
+- `resize` — which props change on Shift+Up/Down, with min clamps.
+- `pinch` — which props change on pinch-scale, with min clamps.
+
+Property descriptor fields: `label`, `min`, `max`, `default`, `step`,
+`type` (`'color'` or `'range'` default), `display` (value → string
+formatter), `toInternal` / `fromInternal` (UI ↔ internal conversion,
+e.g. deg ↔ rad for spin), `resetable` (shows × reset button).
+
+Shared templates defined once and spread: `SPIN`, `ABSORB`, `DELAY`,
+`COLOR`. `delayK` default is `null` (inherits from material).
+
+Consumers:
+- `makeElement` in `scene.js` reads defaults from the schema.
+- Property panel in `ui.js` auto-generates sliders from `props`.
+  All sliders show value in faded right-aligned text. Material
+  dropdown is first in the panel, uses `def.materials` or falls back
+  to all materials matching the element's type.
+- Resize/pinch in `ui.js` driven by `ELEMENTS[kind].resize`/`.pinch`.
+- `LABEL_BY_KIND` derived from `ELEMENTS[kind].label`.
+
+## Per-element absorption multiplier (`el.absorb`)
+
+Scalar multiplier on Beer-Lambert absorption. Default 1, range 0–50.
+Defined in the schema as the `ABSORB` template. CPU tracer:
+`elementAbsorption` in `spectrum.js` multiplies the material's base α
+by `el.absorb ?? 1`. GPU tracer: stored in element texture row 0
+w-channel, read in GLSL `matAbsorption`.
 
 `mirror-concave` and `mirror-convex` are curved mirrors with parameters
 `h` (aperture) and `radius`, material `mirror`. They appear in the toolbar
@@ -62,15 +103,13 @@ Check `makeElement` for the current values.
 
 ## Adding a new element kind
 
-1. Extend `localPolygon` with its geometry.
-2. Extend `makeElement` with its defaults (size, material, initial
-   `rot`).
-3. Extend UI's `sizeFields` map so the property panel shows the right
-   sliders, and `bumpSize` in `bindShortcuts` for arrow-key resize.
-4. Extend `elementOutlineColor` in the renderer (or let it fall through
+1. Add an entry to `ELEMENTS` in `docs/elements.js` with label,
+   material, props, resize, and pinch.
+2. Extend `localPolygon` in `docs/scene.js` with its geometry.
+3. Extend `elementOutlineColor` in the renderer (or let it fall through
    to the default) and optionally add a `LOOK` entry for the element
    pass.
-5. Add a tool button in `play.html` (inside the `#toolbar .tools`
+4. Add a tool button in `play.html` (inside the `#toolbar .tools`
    group) — `placeable` set in `UI.bindTools` picks it up
    automatically.
 

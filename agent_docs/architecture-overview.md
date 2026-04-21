@@ -19,11 +19,20 @@ No dependencies.
   Beer-Lambert absorption, dichroic reflectance, `MATERIALS` table,
   `SCALES` table + `scaleFreq(base, scale, i, stepDeg)` for musical
   bucketing.
+- `docs/elements.js` — single source of truth for per-kind element
+  properties. Exports `ELEMENTS` (9 kinds) and `ELEMENT_KINDS`.
+  Each kind: `label`, `material`, optional `materials`, `props`
+  (ordered descriptors with label/min/max/default/step/type/display/
+  toInternal/fromInternal/resetable), `resize`, `pinch`. Shared
+  templates: `SPIN`, `ABSORB`, `DELAY`, `COLOR`. Consumed by
+  `makeElement` in scene.js, property panel in ui.js, resize/pinch
+  in ui.js. `LABEL_BY_KIND` derived from `ELEMENTS[kind].label`.
 - `docs/scene.js` — data model, local/world polygon geometry, JSON
-  save/load. `createScene()` initialises `scene.runtime` (transient
-  per-frame state: `micLevels`, `wlPerSource`) and increments
-  `scene.generation` (used by the tracer to detect scene replacement
-  and auto-reset persistence).
+  save/load. `makeElement` reads defaults from the `ELEMENTS` schema
+  in `elements.js`. `createScene()` initialises `scene.runtime`
+  (transient per-frame state: `micLevels`, `wlPerSource`) and
+  increments `scene.generation` (used by the tracer to detect scene
+  replacement and auto-reset persistence).
 - `docs/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
 - `docs/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
   rendered into a **HDR `RGBA16F` FBO** via `EXT_color_buffer_float`
@@ -42,9 +51,12 @@ No dependencies.
   Filters system-realtime messages (status >= 0xF0, e.g. Active Sensing)
   before processing/logging MIDI input.
 - `docs/synth.js` — additive sensor synth; single `AudioWorkletProcessor`
-  ("chromavox-synth") loaded from an inline Blob URL. Main thread posts
-  `sensorBins` via `MessagePort`; worklet renders 6 harmonic partials per
-  voice with per-sample gain smoothing.
+  ("chromavox-synth") loaded from an inline Blob URL. Stereo output
+  with constant-power panning (sensor 0 → left, sensor N-1 → right).
+  Main thread posts `sensorBins` via `MessagePort`; worklet renders
+  6 harmonic partials per voice with per-carrier gain smoothing time
+  constants. Uses a 2048-entry sine wavetable (`fsin`) with linear
+  interpolation for sine partials and FM.
 - `docs/push.js` — Ableton Push 2/3 integration: 8x8 RGB pixel map,
   dynamic palette management, sensor-to-pad color mapping, encoder-to-
   element dispatch, in-key layout computation, and Push display bridge.

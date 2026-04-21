@@ -197,9 +197,21 @@ no separate `.js` file, no build step. `synth.enable()` is async
   frame (~6 KB/frame: sensors × bins × 4 bytes). The worklet reads
   the latest snapshot in `process()`. Rebuild sends a new frequency
   array via `MessagePort` — no node teardown/recreation.
-- **Gain smoothing**: per-sample exponential smoothing (~60 ms time
-  constant) inside the worklet replaces the old `setTargetAtTime`
-  calls, preventing zipper noise from single-frame spikes.
+- **Stereo output**: `AudioWorkletNode` uses `outputChannelCount: [2]`.
+  Constant-power pan per voice: sensor 0 pans left, sensor N-1 pans
+  right. Pan law is `cos/sin(pan * PI/2)`. Soft limiter applied
+  independently to both channels.
+- **Sine wavetable (`fsin`)**: 2048-entry LUT with linear
+  interpolation, replaces `Math.sin` in sine partial and FM inner
+  loops. Noise and karplus carriers use `Math.random()` — a
+  deterministic PRNG (Mulberry32) caused inter-voice correlation
+  artifacts.
+- **Gain smoothing**: per-carrier time constants inside the worklet
+  replace the old uniform ~60 ms smoothing. karplus: 5 ms, pulse:
+  30 ms, acid: 40 ms, noise/FM/supersaw: 60 ms, sine: 80 ms.
+  Prevents zipper noise from single-frame spikes.
+- **Acid filter zipper reduction**: `tan(g)` recomputed every 32
+  samples instead of once per block, smoothing cutoff modulation.
 - **Fixed-range normalization**: the worklet receives `fullScale`
   (`BASE_INTENSITY * sqrt(raysPer)`) via the rebuild message. Each
   partial's sensor bin sum is divided by `fullScale / gainK` to

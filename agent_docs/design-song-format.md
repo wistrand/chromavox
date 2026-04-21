@@ -89,8 +89,14 @@ restore.
 
 - `emitter`: count, wavelength range, rays — same as scene.emitter
 - `sensorCount`: sensor count for the song
-- `mode`, `base`, `span`: mic-side scale settings
-- `carrier`, `partials`, `volume`: synth settings
+- `mode`, `base`, `span`: mic-side scale settings (applied via
+  `onGlobal` callback to `mic-mode`, `mic-base`, `chromatic-span`)
+- `carrier`: synth carrier mode (applied to `synth-carrier`)
+- `partials`, `volume`: synth settings
+
+The `global` section is applied once on load (first play frame) via
+the `onGlobal` callback. It does not re-apply on restart, only on
+new load.
 
 ### `keyframes`
 

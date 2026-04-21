@@ -105,8 +105,13 @@ The vertex shader implements the same physics as `castRay` in
 - Beer-Lambert absorption inside dielectrics
 - Wavelength-to-RGB (piecewise, matches `spectrum.js`)
 - Sellmeier and Cauchy refractive index
-- Material absorption (base + Gaussian band)
+- Material absorption (base + Gaussian band), multiplied by
+  per-element `el.absorb` (stored in element texture row 0 w-channel)
 - Mirror reflectance (base + Gaussian band)
+- Per-element color physics: GLSL `matAbsorption` and `matReflectance`
+  check element texture row 3 (color RGB). `colorTrans()` in GLSL
+  matches the CPU's `colorTransmission()` — colored elements now
+  filter wavelengths on GPU (was previously ignored)
 - Delay element capture (skips — CPU handles particles)
 - Inside-element stack (depth-3, packed into one fp32 float)
 

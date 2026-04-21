@@ -43,6 +43,8 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [Song format design](agent_docs/design-song-format.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
 
+Note: `agent_docs/plan-element-schema.md` was removed (implemented).
+
 
 ## Conventions
 
@@ -120,6 +122,15 @@ Detailed notes are split into topic files under `agent_docs/`:
 - Per-element `el.color` overrides both visuals *and* physics: renderer
   replaces tint + edge glow; tracer switches to `elementAbsorption` /
   `elementReflectance` that treat the color as a transmission filter.
+  GPU tracer now also implements `el.color` physics (GLSL `colorTrans`
+  matches CPU `colorTransmission`).
+- Per-element `el.absorb` (default 1, range 0–50) multiplies
+  Beer-Lambert absorption. CPU: `elementAbsorption` in spectrum.js.
+  GPU: element texture row 0 w-channel.
+- Element property schema (`docs/elements.js`): single source of truth
+  for per-kind properties. `ELEMENTS` exports 9 kinds; `makeElement`
+  in scene.js reads from it; property panel and resize/pinch in ui.js
+  are schema-driven.
 - Layout is a two-row / three-column grid — fixed-height toolbar on top,
   left and right panels + stage below. Toolbar stays visible always
   (raised z-index over the drawer overlays, fixed height, horizontal
@@ -167,14 +178,21 @@ Detailed notes are split into topic files under `agent_docs/`:
   loaded from an inline Blob URL — no separate file, no build step.
   Main thread posts `sensorBins` via `MessagePort` each frame; worklet
   reads the latest snapshot in `process()`. Per-sample gain smoothing
-  (~60 ms time constant) inside the worklet replaces the old
-  `setTargetAtTime` calls. Fixed-range normalization: worklet receives
+  (per-carrier time constants: karplus 5ms, pulse 30ms, acid 40ms,
+  noise/FM/supersaw 60ms, sine 80ms) inside the worklet replaces
+  the old `setTargetAtTime` calls. Fixed-range normalization: worklet receives
   `fullScale` (`BASE_INTENSITY * sqrt(raysPer)`) via rebuild; each
   partial's bin sum is divided by `fullScale/gainK` (`gainK` = `K`
   for sine, `1` for noise/acid) to recover 0–1 micGain, then floor
   0.15, gamma 1.5, and `1/sqrt(sc * gainK)` voice scale. Sine
   partials get 1/k rolloff for neutral timbre. `tanh` soft limiter
-  at ±0.8 prevents hard clipping. Seven carrier modes: `sine`
+  at ±0.8 prevents hard clipping (applied independently to both
+  stereo channels). Stereo output: `outputChannelCount: [2]`,
+  constant-power pan per voice (sensor 0 → left, N-1 → right,
+  `cos/sin(pan * PI/2)` pan law). Sine wavetable (`fsin`): 2048-entry
+  LUT with linear interpolation for sine partials and FM; noise and
+  karplus use `Math.random()` (Mulberry32 PRNG reverted due to
+  inter-voice correlation). Seven carrier modes: `sine`
   (harmonic partials, inverted bin-to-partial mapping: blue→high
   partials, red→fundamental), `noise` (unity-gain Csound `resonz`
   bandpass; `bp = (y0-y2)*(1-r²)/2`, variable Q via slider, default
@@ -309,10 +327,12 @@ Detailed notes are split into topic files under `agent_docs/`:
   Sensors, Selected.
 - Stats window: floating draggable window toggled via a checkbox in the
   Bench dropdown. Shows elements, sources, sensors,
-  rays/src, segments, particles, pools, and spinning count. Close button
-  in titlebar (pointerdown handler skips `.fw-close` to avoid drag
-  capture). Updates every frame when visible, skips DOM writes when
-  hidden.
+  rays/src, segments, particles, pools, spinning count, and audio stats
+  (carrier, active/total voices, block size, xruns). Xrun detection via
+  `currentFrame` gap checking in worklet. Close button in titlebar
+  (pointerdown handler skips `.fw-close` to avoid drag capture). Updates
+  every frame when visible, skips DOM writes when hidden. Text is
+  selectable (`user-select: text`).
 - Spectrum readout smoothing: `renderer.updateReadout(scene, tracer)`
   applies (A) Gaussian blur [0.25, 0.5, 0.25] across bins, (C) temporal
   IIR (`_displayBins` lerps at 0.3), (D) slow-decaying peak

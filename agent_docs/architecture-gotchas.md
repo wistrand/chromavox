@@ -124,6 +124,10 @@
 
 ## Synth
 
+- Sine wavetable (`fsin`): 2048-entry LUT with linear interpolation
+  for sine partials and FM. Noise and karplus use `Math.random()` — a
+  deterministic PRNG (Mulberry32) was tried and reverted because it
+  caused audible inter-voice correlation artifacts.
 - Karplus excitation uses `>= 0.05` threshold for transient detection
   (not `>`). The Excite slider blends between continuous (bowed) and
   transient-only (plucked) modes.

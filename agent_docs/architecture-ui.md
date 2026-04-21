@@ -34,7 +34,8 @@ they track the canvas, not the full stage.
   natural width.
 - **Left panel** carries: Emitters (count/wavelength range/rays/spread/
   aperture plus a **lambda bend** slider below the wavelength sliders),
-  Sensors (count/sync/factor), and the Selected property panel.
+  Sensors (count/sync/factor), and the Selected property panel
+  (auto-generated from the element schema in `docs/elements.js`).
   Global settings (aspect, no-overlap, distort, stats, spectrum
   toggles, tracer indicator) moved to the Bench toolbar dropdown.
   Audio in/out controls live entirely in the toolbar `▾` dropdowns.
@@ -249,9 +250,23 @@ keyboard-claviature note layout. `Esc` closes it.
 Floating draggable window toggled via a checkbox in the left panel
 (below the Distort checkbox). Shows live counts: elements, sources,
 sensors, rays/src, segments, particles, pools, and spinning elements.
-Close button in titlebar; the pointerdown handler skips `.fw-close`
-targets to avoid starting a drag from the close button. Updates every
-frame when visible and skips DOM writes when hidden.
+Also shows audio stats reported by the worklet: carrier mode,
+active/total voices, block size, and xruns (dropped buffers detected
+via `currentFrame` gap checking in the worklet). Close button in
+titlebar; the pointerdown handler skips `.fw-close` targets to avoid
+starting a drag from the close button. Updates every frame when visible
+and skips DOM writes when hidden. Stats text is selectable
+(`user-select: text`).
+
+## Right wall touch gestures
+
+When **Independent scale** is checked, touch gestures near the right
+wall (sensor side) control synth parameters:
+
+- **Drag up/down** near the right wall: shifts synth base frequency.
+- **Pinch** on the right wall: zooms synth span.
+
+These gestures are only active when independent scale is on.
 
 ## Mobile / touch
 

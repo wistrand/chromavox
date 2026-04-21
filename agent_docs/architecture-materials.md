@@ -22,7 +22,9 @@ changes over time.
   reflectance band.
 - `elementAbsorption(el, mat, λ)` — α with `el.color` override: if set,
   derives α from the color as a transmission filter; otherwise falls
-  back to `materialAbsorption(mat, λ)`.
+  back to `materialAbsorption(mat, λ)`. Result is multiplied by
+  `el.absorb ?? 1` (per-element absorption scalar, range 0–50,
+  default 1).
 - `elementReflectance(el, mat, λ)` — same override logic for mirror
   reflectance.
 - `hexToRgb(hex)` — shared color parser used by both UI and renderer.
