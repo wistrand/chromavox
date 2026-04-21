@@ -426,28 +426,34 @@ export class MicModulator {
 
   setTouchLevel(emitterIdx, level) {
     // Touch input is always available regardless of source.
-    // Store targets; actual levels ramp toward targets in smoothTouchLevels().
+    // Store targets + transition start state for time-based linear ramp.
     if (!this._touchLevels) this._touchLevels = new Float32Array(64);
     if (!this._touchTargets) this._touchTargets = new Float32Array(64);
+    if (!this._touchStart) this._touchStart = new Float32Array(64);
+    if (!this._touchStartTime) this._touchStartTime = new Float32Array(64);
     if (emitterIdx >= 0 && emitterIdx < this._touchTargets.length) {
-      this._touchTargets[emitterIdx] = level;
+      if (this._touchTargets[emitterIdx] !== level) {
+        this._touchStart[emitterIdx] = this._touchLevels[emitterIdx];
+        this._touchStartTime[emitterIdx] = performance.now();
+        this._touchTargets[emitterIdx] = level;
+      }
     }
   }
 
-  // Ramp _touchLevels toward _touchTargets. Called once per frame from
-  // the main loop. ~3ms attack, ~5ms release at 60fps (~16ms per frame).
+  // Ramp _touchLevels toward _touchTargets via time-based linear lerp.
+  // Attack = 30ms, release = 50ms. Framerate-independent.
   smoothTouchLevels() {
     if (!this._touchLevels || !this._touchTargets) return;
-    const atkRate = 0.2;  // per-frame: reaches 87% in 3 frames (~50ms)
-    const relRate = 0.15; // per-frame: reaches 87% in 4 frames (~66ms)
+    const now = performance.now();
+    const ATK_MS = 30, REL_MS = 50;
     for (let i = 0; i < this._touchLevels.length; i++) {
-      const t = this._touchTargets[i];
-      const c = this._touchLevels[i];
-      if (Math.abs(t - c) < 0.001) {
-        this._touchLevels[i] = t;
-      } else {
-        this._touchLevels[i] += (t - c) * (t > c ? atkRate : relRate);
-      }
+      const tgt = this._touchTargets[i];
+      const cur = this._touchLevels[i];
+      if (cur === tgt) continue;
+      const elapsed = now - this._touchStartTime[i];
+      const dur = tgt > this._touchStart[i] ? ATK_MS : REL_MS;
+      const t = Math.min(1, elapsed / dur);
+      this._touchLevels[i] = this._touchStart[i] + (tgt - this._touchStart[i]) * t;
     }
   }
 
@@ -604,6 +610,8 @@ export class MicModulator {
     this._midiSustained = null;
     this._touchLevels = null;
     this._touchTargets = null;
+    this._touchStart = null;
+    this._touchStartTime = null;
     this._fileSource = null;
     this._fileBuffer = null;
     this._filePlaying = false;
