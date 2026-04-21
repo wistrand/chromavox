@@ -357,6 +357,13 @@ export class Renderer {
     if (w > stageW) { w = stageW; h = stageW / ASPECT; }
     vp.style.width  = Math.floor(w) + 'px';
     vp.style.height = Math.floor(h) + 'px';
+    // Sync sensor readout height to bench viewport so bars align
+    // with sensor positions on the canvas (not the full panel height).
+    const readout = document.getElementById('sensor-readout');
+    if (readout) {
+      readout.style.height = Math.floor(h) + 'px';
+      readout.style.marginTop = Math.floor((stageH - h) / 2) + 'px';
+    }
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.canvas.width = Math.max(2, Math.floor(w * dpr));
@@ -742,8 +749,22 @@ export class Renderer {
 
   updateReadout(scene, tracer) {
     const host = document.getElementById('sensor-readout');
+    if (!host) return;
     const bars = host.children;
-    if (bars.length !== scene.sensorCount) return;
+    // Rebuild if count mismatch — prevents silent bail on sensor change.
+    if (bars.length !== scene.sensorCount) {
+      host.innerHTML = '';
+      for (let i = 0; i < scene.sensorCount; i++) {
+        const bar = document.createElement('div');
+        bar.className = 'sensor-bar';
+        const c = document.createElement('canvas');
+        c.width = 128; c.height = 14;
+        bar.appendChild(c);
+        host.appendChild(bar);
+      }
+      return; // skip this frame, draw next
+    }
+    if (!tracer.sensorBins) return;
     const binCount = tracer.binCount;
     const totalBins = scene.sensorCount * binCount;
 
