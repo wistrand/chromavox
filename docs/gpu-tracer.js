@@ -81,6 +81,8 @@ uniform float u_apertureFactor;
 uniform float u_spreadRad;
 uniform float u_baseIntensity;
 uniform sampler2D u_micLevels;
+uniform sampler2D u_wlPerSource;
+uniform int u_hasWlPer;
 
 // TF outputs: ray state + segment (6 vec4 = 24 floats INTERLEAVED)
 out vec4 v_rayPosDir;
@@ -256,8 +258,14 @@ void main() {
     float yT = fract(float(k + 1) * PHI);
     float aT = fract(float(k + 1) * PSI);
     float ey = ey0 + (srcStripH - apertureH) * 0.5 + yT * apertureH;
-    float wlRange = max(1.0, u_wlMax - u_wlMin);
-    wl = u_wlMin + wlRange * (float(k) + 0.5) / float(u_raysPerSource);
+    float srcWlMin = u_wlMin;
+    float srcWlMax = u_wlMax;
+    if (u_hasWlPer > 0) {
+      srcWlMin = texelFetch(u_wlPerSource, ivec2(srcIdx, 0), 0).r;
+      srcWlMax = texelFetch(u_wlPerSource, ivec2(srcIdx, 1), 0).r;
+    }
+    float wlRange = max(1.0, srcWlMax - srcWlMin);
+    wl = srcWlMin + wlRange * (float(k) + 0.5) / float(u_raysPerSource);
     float angle = (aT - 0.5) * u_spreadRad;
     pos = vec2(4.0, ey);
     dir = vec2(cos(angle), sin(angle));
@@ -531,6 +539,7 @@ export class GPUTracer {
       baseIntensity: u('u_baseIntensity'),
       edgeCount: u('u_edgeCount'), elementCount: u('u_elementCount'),
       edges: u('u_edges'), elements: u('u_elements'), micLevels: u('u_micLevels'),
+      wlPerSource: u('u_wlPerSource'), hasWlPer: u('u_hasWlPer'),
     };
     this._aRayPosDir = gl.getAttribLocation(prog, 'a_rayPosDir');
     this._aRayState = gl.getAttribLocation(prog, 'a_rayState');
@@ -579,6 +588,14 @@ export class GPUTracer {
     gl.bindTexture(gl.TEXTURE_2D, this._micTex);
     gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, 64, 1);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 64, 1, gl.RED, gl.FLOAT, new Float32Array(64));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    // Per-source wavelength range: 64×2 R32F (row 0 = wlMin, row 1 = wlMax).
+    this._wlPerTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this._wlPerTex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, 64, 2);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 64, 2, gl.RED, gl.FLOAT, new Float32Array(128));
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
@@ -729,6 +746,25 @@ export class GPUTracer {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
       this._micData.subarray(0, Math.min(nSrc, 64)));
 
+    // Per-source wavelength ranges.
+    const wlPer = runtime.wlPerSource;
+    this._hasWlPer = !!wlPer;
+    if (wlPer) {
+      if (!this._wlPerData || this._wlPerData.length < nSrc) {
+        this._wlPerData = new Float32Array(Math.max(nSrc, 1));
+      }
+      const d = this._wlPerData;
+      gl.bindTexture(gl.TEXTURE_2D, this._wlPerTex);
+      // Row 0: wlMin per source.
+      for (let i = 0; i < nSrc && i < 64; i++) d[i] = wlPer.min[i];
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
+        d.subarray(0, Math.min(nSrc, 64)));
+      // Row 1: wlMax per source.
+      for (let i = 0; i < nSrc && i < 64; i++) d[i] = wlPer.max[i];
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 1, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
+        d.subarray(0, Math.min(nSrc, 64)));
+    }
+
     // Effective bounce count: bounded by total element edges + 1.
     // A ray can cross at most one edge per bounce, so it can't bounce
     // more times than there are edges. Reduces dispatch count and
@@ -804,6 +840,10 @@ export class GPUTracer {
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this._micTex);
     gl.uniform1i(loc.micLevels, 2);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this._wlPerTex);
+    gl.uniform1i(loc.wlPerSource, 3);
+    gl.uniform1i(loc.hasWlPer, this._hasWlPer ? 1 : 0);
 
     // --- Bounce loop: ping-pong between two buffers ---
     // Two separate VAOs for the two read buffers, to avoid rebinding

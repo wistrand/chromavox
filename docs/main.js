@@ -8,7 +8,7 @@ import { UI } from './ui.js';
 import { wavelengthToRGB } from './spectrum.js';
 import { MicModulator, micBands } from './mic.js';
 import { SensorSynth } from './synth.js';
-import { PushController } from './push.js';
+import { PushController, padNoteToEmitter } from './push.js';
 import { MPCController } from './akai-mpc.js';
 import { APCController, apcPadNoteToEmitter } from './akai-apc.js';
 import { scaleFreq } from './spectrum.js';
@@ -71,7 +71,7 @@ const UI_CONTROL_IDS = [
   ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
   'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
-  'midi-gain', 'sim-rate', 'distort-toggle', 'no-overlap', 'bench-aspect',
+  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'no-overlap', 'bench-aspect',
 ];
 function saveUiState() {
   const state = {};
@@ -195,6 +195,9 @@ mic.onCC = (cc, val) => {
   if (cc === 85 && val > 0) { synthBtn.click(); return; }
   // + button (CC 32) adds a new element (same as the Add button).
   if (cc === 32 && val > 0) { document.getElementById('add-btn').click(); return; }
+  // Page buttons (CC 62/63): shift keyboard octave like , and . keys.
+  if (cc === 62 && val > 0) { mic.keyboardOctave--; return; }
+  if (cc === 63 && val > 0) { mic.keyboardOctave++; return; }
   // Volume encoder (CC 79) adjusts synth master volume.
   if (cc === 79) {
     const dir = val >= 64 ? -1 : 1;
@@ -220,10 +223,11 @@ mic.onCC = (cc, val) => {
 };
 
 // Attach/detach hardware controller after MIDI enable/disable.
-// Auto-detects Push vs MPC by port name.
+// Auto-detects controller type by port name.
 function attachPush() {
   if (mic.source !== 'midi' || !mic._midiAccess || !mic._midiInput) return;
   const name = mic._midiInput.name || '';
+  let mapperType;
   if (name.includes('MPC')) {
     mpc.attach(mic._midiAccess, mic._midiInput);
     hwController = mpc;
@@ -231,15 +235,35 @@ function attachPush() {
       const k = note - 36;
       return (k >= 0 && k < 16) ? k : -1;
     };
+    mapperType = 'MPC 4x4';
   } else if (name.includes('APC')) {
     apc.attach(mic._midiAccess, mic._midiInput);
     hwController = apc;
     mic._padMapper = apcPadNoteToEmitter;
-  } else {
+    mapperType = 'APC 8x8';
+  } else if (/push/i.test(name)) {
     push.attach(mic._midiAccess, mic._midiInput);
     hwController = push;
     mic._padMapper = null;
+    mapperType = 'Push in-key';
+  } else {
+    hwController = null;
+    mic._padMapper = (note) => {
+      const base = mic._kbdMidiBase ?? 48;
+      const idx = note - base;
+      return (idx >= 0 && idx < 128) ? idx : -1;
+    };
+    _syncKbdMidiBase();
+    mapperType = 'keyboard (linear)';
   }
+  const ml = document.getElementById('midi-mapper');
+  if (ml) ml.textContent = `Mapper: ${mapperType} — ${name}`;
+}
+// Sync the keyboard MIDI base note from the current base Hz setting.
+function _syncKbdMidiBase() {
+  const hz = currentBaseHz();
+  // Convert Hz to MIDI note: note = 12 * log2(hz / 440) + 69.
+  mic._kbdMidiBase = Math.round(12 * Math.log2(hz / 440) + 69);
 }
 function detachPush() {
   push.detach();
@@ -388,6 +412,26 @@ document.getElementById('synth-span').addEventListener('input', e => {
   if (synthIndep()) pushSynthScale();
 });
 syncSynthIndepVisibility();
+
+// Wavelength bend slider: -100..100 maps to _globalBend -1..+1.
+// Synced bidirectionally with MIDI pitch bend.
+const wlBendSlider = document.getElementById('wl-bend');
+const wlBendLabel = document.getElementById('wl-bend-val');
+wlBendSlider.addEventListener('input', () => {
+  const v = parseInt(wlBendSlider.value, 10);
+  mic._globalBend = v / 100;
+  wlBendLabel.textContent = v;
+  dirty = true;
+});
+// Called from the frame loop to sync slider with MIDI pitch bend.
+function syncBendSlider() {
+  const gb = mic._globalBend || 0;
+  const sv = Math.round(gb * 100);
+  if (parseInt(wlBendSlider.value, 10) !== sv) {
+    wlBendSlider.value = sv;
+    wlBendLabel.textContent = sv;
+  }
+}
 
 // Sim rate: slider 0..100 → log-mapped 0.05× … 4×, default 1× at 50.
 // Scales the particle-advance dt in the tracer. >1× drains delay glass
@@ -563,6 +607,11 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     if (helpDialog.open) helpDialog.close(); else helpDialog.showModal();
   }
+  // Floating window toggles: 1=mic spectrum, 2=synth spectrum, 3=synth waveform, 4=stats.
+  if (e.key === '1') { document.getElementById('mic-spectrum-toggle').click(); }
+  if (e.key === '2') { document.getElementById('synth-spectrum-toggle').click(); }
+  if (e.key === '3') { document.getElementById('synth-waveform-toggle').click(); }
+  if (e.key === '4') { document.getElementById('stats-toggle').click(); }
 });
 
 async function populateDevices(selectId, kind, fallbackName) {
@@ -622,6 +671,7 @@ function syncMicDeviceVisibility() {
   document.getElementById('mic-device-row').style.display = src === 'mic' ? '' : 'none';
   document.getElementById('midi-device-row').style.display = src === 'midi' ? '' : 'none';
   document.getElementById('midi-gain-row').style.display = src === 'midi' ? '' : 'none';
+  document.getElementById('midi-mapper-row').style.display = src === 'midi' ? '' : 'none';
   document.getElementById('midi-debug-row').style.display = src === 'midi' ? '' : 'none';
   document.getElementById('file-source-row').style.display = src === 'file' ? '' : 'none';
   if (src !== 'file') document.getElementById('file-transport-row').style.display = 'none';
@@ -718,10 +768,9 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     return Math.max(0, Math.min(nSrc - 1, idx));
   }
   stage.addEventListener('contextmenu', e => {
-    if (mic.source === 'touch') e.preventDefault();
+    if (touchEmitterIdx(e) >= 0) e.preventDefault();
   });
   stage.addEventListener('pointerdown', e => {
-    if (mic.source !== 'touch') return;
     const idx = touchEmitterIdx(e);
     if (idx < 0) return; // outside touch zone — let UI handle it
     e.preventDefault();  // prevent browser pan/drag gesture
@@ -732,7 +781,6 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     dirty = true;
   });
   stage.addEventListener('pointermove', e => {
-    if (mic.source !== 'touch') return;
     if (!_touchPointers.has(e.pointerId)) return;
     e.stopPropagation(); // keep note pointer away from UI drag/pinch
     const oldIdx = _touchPointers.get(e.pointerId);
@@ -746,7 +794,6 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     }
   });
   const touchUp = e => {
-    if (mic.source !== 'touch') return;
     if (!_touchPointers.has(e.pointerId)) return;
     e.stopPropagation(); // prevent UI from processing note-pointer release
     const idx = _touchPointers.get(e.pointerId);
@@ -859,6 +906,7 @@ document.getElementById('mic-base').addEventListener('change', e => {
   if (!synthIndep()) synth.setBase(parseFloat(e.target.value));
   syncKeyboardScale();
   rebuildEmitterLabels();
+  _syncKbdMidiBase();
 });
 
 const volSlider = document.getElementById('synth-vol');
@@ -1524,6 +1572,33 @@ function frame() {
   }
   cv.updateSongTransport();
 
+  // Reset per-frame — rebuilt below by bucket-color, MPE, or bend.
+  scene.runtime.wlPerSource = null;
+
+  // Overlay touch/keys and MIDI input on top of song levels during playback.
+  if (songPlayer.playing) {
+    const n = scene.emitter.count;
+    if (!scene.runtime.micLevels) scene.runtime.micLevels = new Float32Array(n);
+    // Touch/keys overlay.
+    if (mic._touchLevels) {
+      for (let i = 0; i < n; i++) {
+        const tv = mic._touchLevels[i] || 0;
+        if (tv > scene.runtime.micLevels[i]) scene.runtime.micLevels[i] = tv;
+      }
+    }
+    // MIDI pad overlay.
+    if (mic.active && mic.source === 'midi' && mic._midiNotes && mic._midiNotes.size > 0) {
+      const padMapper = mic._padMapper || padNoteToEmitter;
+      for (const [note, vel] of mic._midiNotes) {
+        const idx = padMapper(note);
+        if (idx >= 0 && idx < n) {
+          const v = Math.min(1, vel * mic.midiGain);
+          if (v > scene.runtime.micLevels[idx]) scene.runtime.micLevels[idx] = v;
+        }
+      }
+    }
+  }
+
   if (mic.active && !songPlayer.playing) {
     const s = mic.sample();
     if (s) {
@@ -1539,6 +1614,15 @@ function frame() {
       // causing spectral leakage into neighboring buckets.
       scene.runtime.micLevels = mic.directLevels(scene.emitter.count, micMode, baseHz, stepSemi)
         || micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
+      // Overlay touch/keys input on top of any source — max of both.
+      if (mic._touchLevels && mic.source !== 'touch') {
+        const n = scene.emitter.count;
+        if (!scene.runtime.micLevels) scene.runtime.micLevels = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          const tv = mic._touchLevels[i] || 0;
+          if (tv > scene.runtime.micLevels[i]) scene.runtime.micLevels[i] = tv;
+        }
+      }
       if (baseHz !== lastBaseHz) {
         if (!synthIndep()) synth.setBase(baseHz);
         rebuildEmitterLabels();
@@ -1557,10 +1641,76 @@ function frame() {
         }
         scene.runtime.wlPerSource = { min, max };
       } else {
-        scene.runtime.wlPerSource = null;
+        // MPE slide → per-emitter wavelength shift.
+        scene.runtime.wlPerSource = mic.mpeWavelengths(
+          scene.emitter.count, scene.emitter.wlMin, scene.emitter.wlMax,
+          mic._padMapper || null);
+      }
+      // MPE pitch bend → per-emitter frequency detune (applied as
+      // wavelength scaling: bend shifts the emitter's wavelength band
+      // center up or down by ±2 semitones worth of frequency shift).
+      const bendMults = mic.mpeBendMultipliers(
+        scene.emitter.count, mic._padMapper || null);
+      if (bendMults && scene.runtime.wlPerSource) {
+        const wp = scene.runtime.wlPerSource;
+        for (let i = 0; i < scene.emitter.count; i++) {
+          if (bendMults[i] !== 1) {
+            // Shift wavelength center by the inverse of the frequency
+            // multiplier (higher freq = shorter wavelength).
+            const invM = 1 / bendMults[i];
+            const center = (wp.min[i] + wp.max[i]) / 2;
+            const halfRange = (wp.max[i] - wp.min[i]) / 2;
+            wp.min[i] = Math.max(380, center * invM - halfRange);
+            wp.max[i] = Math.min(780, center * invM + halfRange);
+          }
+        }
+      } else if (bendMults) {
+        // No wlPerSource yet — create one with default range + bend.
+        const n = scene.emitter.count;
+        const wlMin = scene.emitter.wlMin, wlMax = scene.emitter.wlMax;
+        const min = new Float32Array(n);
+        const max = new Float32Array(n);
+        const center = (wlMin + wlMax) / 2;
+        const halfRange = (wlMax - wlMin) / 2;
+        for (let i = 0; i < n; i++) {
+          const invM = 1 / bendMults[i];
+          min[i] = Math.max(380, center * invM - halfRange);
+          max[i] = Math.min(780, center * invM + halfRange);
+        }
+        scene.runtime.wlPerSource = { min, max };
       }
       dirty = true;
     }
+  }
+
+  // Global pitch bend (touch strip / slider): shift wavelength
+  // range for all emitters. ±150 nm at full bend. Built fresh from
+  // base values every frame — never reads previous frame's wlPerSource.
+  syncBendSlider();
+  const gb = mic._globalBend || 0;
+  if (Math.abs(gb) > 0.001) {
+    const n = scene.emitter.count;
+    const offset = gb * 200;
+    const baseMin = scene.emitter.wlMin;
+    const baseMax = scene.emitter.wlMax;
+    // If bucket-color or MPE already set wlPerSource this frame,
+    // apply offset to those fresh values. Otherwise build from base.
+    const wp = scene.runtime.wlPerSource;
+    if (wp) {
+      for (let i = 0; i < n; i++) {
+        wp.min[i] = Math.max(380, wp.min[i] + offset);
+        wp.max[i] = Math.min(780, wp.max[i] + offset);
+      }
+    } else {
+      const min = new Float32Array(n);
+      const max = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        min[i] = Math.max(380, baseMin + offset);
+        max[i] = Math.min(780, baseMax + offset);
+      }
+      scene.runtime.wlPerSource = { min, max };
+    }
+    dirty = true;
   }
 
   // Continuous rotation: step each spinning element's rot by spin * dt.

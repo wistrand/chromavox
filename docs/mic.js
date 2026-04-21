@@ -39,50 +39,21 @@ export class MicModulator {
 
     // Sources that don't need an AudioContext — handle setup and
     // return early. The AudioContext is created below for audio sources.
+    // Always set up touch/keys input so it works alongside any source.
+    this._touchLevels = new Float32Array(64);
+    this._installKeyboard();
+
     if (source === 'touch') {
-      this._touchLevels = new Float32Array(64);
-      this.keyboardOctave = 0;
-      const KEY_TO_DEG = {
-        KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5,
-        KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
-      };
-      this._kbdActiveDegs = new Set();
-      const onDown = e => {
-        if (e.repeat) return;
-        if (e.code === 'Comma')  { this.keyboardOctave--; return; }
-        if (e.code === 'Period') { this.keyboardOctave++; return; }
-        const deg = KEY_TO_DEG[e.code];
-        if (deg === undefined) return;
-        e.preventDefault();
-        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
-        const idx = scale.length * this.keyboardOctave + deg;
-        if (idx >= 0 && idx < 64) {
-          this._touchLevels[idx] = 1;
-          this._kbdActiveDegs.add(e.code);
-        }
-      };
-      const onUp = e => {
-        const deg = KEY_TO_DEG[e.code];
-        if (deg === undefined) return;
-        this._kbdActiveDegs.delete(e.code);
-        const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
-        const idx = scale.length * this.keyboardOctave + deg;
-        if (idx >= 0 && idx < 64) this._touchLevels[idx] = 0;
-      };
-      window.addEventListener('keydown', onDown);
-      window.addEventListener('keyup', onUp);
-      this._kbdCleanup = () => {
-        window.removeEventListener('keydown', onDown);
-        window.removeEventListener('keyup', onUp);
-        this._kbdActiveDegs = null;
-      };
       this.source = source;
       this.active = true;
       return;
     }
 
     if (source === 'midi') {
-      this._midiNotes = new Map();
+      this._midiNotes = new Map();    // note → velocity/pressure (0-1)
+      this._mpeChToNote = new Map();  // MPE channel → note number
+      this._mpeSlide = new Map();     // note → slide (0-1, center 0.5)
+      this._mpeBend = new Map();      // note → pitch bend (-1 to +1)
       this._midiAccess = null;
       this._midiInput = null;
       const debugEl = typeof document !== 'undefined' ? document.getElementById('midi-debug') : null;
@@ -92,13 +63,83 @@ export class MicModulator {
         const [status, note, vel] = bytes;
         if (status >= 0xF0) return;
         const cmd = status & 0xf0;
+        const ch = status & 0x0f;
         if (cmd === 0x90 && vel > 0) {
           this._midiNotes.set(note, vel / 127);
+          if (ch > 0) this._mpeChToNote.set(ch, note);
+          // Remove from sustained set if re-struck while pedal is held.
+          if (this._midiSustained) this._midiSustained.delete(note);
         } else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) {
-          this._midiNotes.delete(note);
+          if (this._midiSustainOn) {
+            // Sustain pedal held: keep the note sounding, mark for
+            // release when pedal lifts.
+            if (!this._midiSustained) this._midiSustained = new Set();
+            this._midiSustained.add(note);
+          } else {
+            this._midiNotes.delete(note);
+          }
+          this._mpeSlide.delete(note);
+          this._mpeBend.delete(note);
+          if (ch > 0) this._mpeChToNote.delete(ch);
+        }
+        // Sustain pedal (CC 64): hold notes after key release.
+        if (cmd === 0xB0 && note === 64) {
+          this._midiSustainOn = vel > 0;
+          if (!this._midiSustainOn && this._midiSustained) {
+            // Pedal released: clear all sustained notes.
+            for (const n of this._midiSustained) {
+              this._midiNotes.delete(n);
+            }
+            this._midiSustained.clear();
+          }
+        }
+        // Channel Pressure (mono aftertouch 0xD0): update note levels.
+        // MPE sends per-channel; non-MPE sends on ch 0 (all notes).
+        if (cmd === 0xD0) {
+          const pressure = note / 127; // byte 2 is pressure value
+          if (ch > 0) {
+            const n = this._mpeChToNote.get(ch);
+            if (n !== undefined && this._midiNotes.has(n)) {
+              this._midiNotes.set(n, pressure);
+            }
+          } else {
+            for (const n of this._midiNotes.keys()) {
+              this._midiNotes.set(n, pressure);
+            }
+          }
+        }
+        // Polyphonic Key Pressure (poly aftertouch 0xA0): per-note
+        // pressure. Push 3 sends this in Poly Aftertouch expression
+        // mode. Byte 2 = note number, byte 3 = pressure.
+        if (cmd === 0xA0) {
+          const pressure = vel / 127;
+          if (this._midiNotes.has(note)) {
+            this._midiNotes.set(note, pressure);
+          }
+        }
+        // MPE slide (CC 74): per-note Y-axis position. Value 64 = center.
+        // Map to per-note wavelength shift (0 = red-shifted, 1 = blue-shifted).
+        if (cmd === 0xB0 && note === 74 && ch > 0) {
+          const n = this._mpeChToNote.get(ch);
+          if (n !== undefined) this._mpeSlide.set(n, vel / 127);
         }
         if (cmd === 0xB0 && this.onCC) {
-          this.onCC(note, vel);
+          // Don't forward per-note CC 74 to the encoder handler.
+          if (!(note === 74 && ch > 0)) this.onCC(note, vel);
+        }
+        // Pitch bend (0xE0). 14-bit: (vel << 7) | note. Center = 8192.
+        if (cmd === 0xE0) {
+          const bendRaw = ((vel & 0x7F) << 7) | (note & 0x7F);
+          const bend = (bendRaw - 8192) / 8192; // -1 to +1
+          if (ch > 0) {
+            // MPE per-note bend.
+            const n = this._mpeChToNote.get(ch);
+            if (n !== undefined) this._mpeBend.set(n, bend);
+          } else {
+            // Global bend (ch 0): shift all emitters. Stored as a
+            // single value; main.js applies it to wlPerSource.
+            this._globalBend = bend;
+          }
         }
         if (debugEl) {
           const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
@@ -337,11 +378,100 @@ export class MicModulator {
   // bucket directly.
   // Returns null for mic / noise sources (FFT is the right path there).
   // Set a touch emitter level. Called by the UI on pointer events.
+  _installKeyboard() {
+    if (this._kbdCleanup) return; // already installed
+    this.keyboardOctave = 0;
+    const KEY_TO_DEG = {
+      KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5,
+      KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
+    };
+    this._kbdActiveDegs = new Set();
+    const onDown = e => {
+      if (e.repeat) return;
+      if (e.code === 'Comma')  { this.keyboardOctave--; return; }
+      if (e.code === 'Period') { this.keyboardOctave++; return; }
+      const deg = KEY_TO_DEG[e.code];
+      if (deg === undefined) return;
+      if (e.target.matches('input, select, textarea')) return;
+      e.preventDefault();
+      const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+      const idx = scale.length * this.keyboardOctave + deg;
+      if (!this._touchLevels) this._touchLevels = new Float32Array(64);
+      if (idx >= 0 && idx < 64) {
+        this._touchLevels[idx] = 1;
+        this._kbdActiveDegs.add(e.code);
+      }
+    };
+    const onUp = e => {
+      const deg = KEY_TO_DEG[e.code];
+      if (deg === undefined) return;
+      this._kbdActiveDegs.delete(e.code);
+      const scale = SCALES[this.keyboardScale] || SCALES.chromatic;
+      const idx = scale.length * this.keyboardOctave + deg;
+      if (!this._touchLevels) return;
+      if (idx >= 0 && idx < 64) this._touchLevels[idx] = 0;
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    this._kbdCleanup = () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      this._kbdActiveDegs = null;
+    };
+  }
+
   setTouchLevel(emitterIdx, level) {
-    if (!this._touchLevels) return;
+    // Touch input is always available regardless of source.
+    if (!this._touchLevels) this._touchLevels = new Float32Array(64);
     if (emitterIdx >= 0 && emitterIdx < this._touchLevels.length) {
       this._touchLevels[emitterIdx] = level;
     }
+  }
+
+  // Build per-emitter wavelength overrides from MPE slide (CC 74).
+  // Returns { min: Float32Array, max: Float32Array } or null if no MPE data.
+  // Slide 0.5 = center = default wavelength range. Sliding up (→1) shifts
+  // bluer, sliding down (→0) shifts redder. Range: ±100 nm offset.
+  mpeWavelengths(n, wlMin, wlMax, padMapper) {
+    if (!this._mpeSlide || this._mpeSlide.size === 0) return null;
+    const min = new Float32Array(n);
+    const max = new Float32Array(n);
+    const wlRange = wlMax - wlMin;
+    const band = wlRange / n;
+    // Default: evenly spaced wavelength bands.
+    for (let i = 0; i < n; i++) {
+      min[i] = wlMin;
+      max[i] = wlMax;
+    }
+    let any = false;
+    for (const [note, slide] of this._mpeSlide) {
+      const idx = padMapper ? padMapper(note) : note;
+      if (idx < 0 || idx >= n) continue;
+      // Slide 0.5 = no shift. Range: ±100 nm.
+      const offset = (slide - 0.5) * 200;
+      min[idx] = Math.max(380, wlMin + offset);
+      max[idx] = Math.min(780, wlMax + offset);
+      any = true;
+    }
+    return any ? { min, max } : null;
+  }
+
+  // Get per-emitter pitch bend multiplier from MPE pitch bend.
+  // Returns Float32Array of multipliers (1.0 = no bend) or null.
+  // Push 3 MPE range is ±48 semitones. We use ±2 semitones for
+  // subtle detuning (the full ±48 would be extreme).
+  mpeBendMultipliers(n, padMapper) {
+    if (!this._mpeBend || this._mpeBend.size === 0) return null;
+    const mults = new Float32Array(n).fill(1);
+    let any = false;
+    for (const [note, bend] of this._mpeBend) {
+      const idx = padMapper ? padMapper(note) : note;
+      if (idx < 0 || idx >= n) continue;
+      // ±2 semitones. bend is -1 to +1.
+      mults[idx] = Math.pow(2, bend * 2 / 12);
+      any = true;
+    }
+    return any ? mults : null;
   }
 
   directLevels(n, mode, baseHz, step) {
@@ -443,6 +573,12 @@ export class MicModulator {
     if (this._midiInput) { this._midiInput.onmidimessage = null; this._midiInput = null; }
     if (this._midiAccess) { this._midiAccess.onstatechange = null; this._midiAccess = null; }
     this._midiNotes = null;
+    this._mpeChToNote = null;
+    this._mpeSlide = null;
+    this._mpeBend = null;
+    this._globalBend = 0;
+    this._midiSustainOn = false;
+    this._midiSustained = null;
     this._touchLevels = null;
     this._fileSource = null;
     this._fileBuffer = null;

@@ -12,8 +12,8 @@
   },
   "sensorCount": 48,
   "elements": [
-    { "kind": "mirror-concave", "x": 380, "y": 660, "rot": -1.90, "h": 220, "radius": 400, "material": "mirror" },
-    { "kind": "prism", "x": 200, "y": 400, "rot": 0.80, "size": 130, "material": "flint" },
-    { "kind": "mirror-concave", "x": 380, "y": 180, "rot": 1.90, "h": 220, "radius": 400, "material": "mirror" }
+    { "kind": "mirror-concave", "x": 280, "y": 790, "rot": 1.40, "h": 220, "radius": 450, "material": "mirror" },
+    { "kind": "prism", "x": 280, "y": 420, "rot": 0.60, "size": 130, "material": "flint" },
+    { "kind": "mirror-concave", "x": 280, "y": 100, "rot": 4.70, "h": 220, "radius": 450, "material": "mirror" }
   ]
 }
