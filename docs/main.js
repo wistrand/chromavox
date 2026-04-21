@@ -612,6 +612,34 @@ window.addEventListener('keydown', e => {
   if (e.key === '2') { document.getElementById('synth-spectrum-toggle').click(); }
   if (e.key === '3') { document.getElementById('synth-waveform-toggle').click(); }
   if (e.key === '4') { document.getElementById('stats-toggle').click(); }
+  // Fullscreen toggle.
+  if (e.key === 'f' || e.key === 'F') { e.preventDefault(); cv.toggleFullscreen(); }
+});
+
+document.getElementById('fullscreen-toggle').addEventListener('click', () => cv.toggleFullscreen());
+// Fullscreen mode: hide UI, show only bench + sensor spectrograms.
+cv.toggleFullscreen = () => {
+  const app = document.getElementById('app');
+  const entering = !app.classList.contains('fullscreen-mode');
+  app.classList.toggle('fullscreen-mode');
+  if (entering) {
+    // Request browser fullscreen if available.
+    const el = document.documentElement;
+    (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+  }
+  // Resize the renderer to fill the new layout.
+  renderer.resize();
+  dirty = true;
+};
+// Exit fullscreen mode when the browser exits fullscreen (Escape key).
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) {
+    document.getElementById('app').classList.remove('fullscreen-mode');
+    renderer.resize();
+    dirty = true;
+  }
 });
 
 async function populateDevices(selectId, kind, fallbackName) {
