@@ -127,11 +127,12 @@ const D_REF = 80;
 // Per-element absorption. When `el.color` is set, derives α from the color
 // as a transmission filter; otherwise falls back to the material's band.
 export function elementAbsorption(el, mat, wlNm) {
+  const mul = el?.absorb ?? 1;
   if (el && el.color) {
     const trans = colorTransmission(hexToRgb(el.color), wlNm);
-    return -Math.log(trans) / D_REF;
+    return (-Math.log(trans) / D_REF) * mul;
   }
-  return materialAbsorption(mat, wlNm);
+  return materialAbsorption(mat, wlNm) * mul;
 }
 
 // Per-element mirror reflectance. When `el.color` is set, reflects

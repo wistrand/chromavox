@@ -1121,6 +1121,14 @@ window.addEventListener('resize', () => {
     const sources = scene.emitter.count;
     const rays = scene.emitter.raysPerSource;
     const spinning = scene.elements.filter(e => e.spin).length;
+    // Audio stats from worklet (updated ~2×/sec via MessagePort).
+    const as = synth.stats;
+    const audioLines = as
+      ? `\nCarrier:    ${as.carrier}\n` +
+        `Voices:     ${as.activeVoices}/${as.voices}\n` +
+        `Block size: ${as.blockSize}\n` +
+        `Xruns:      ${as.droppedBuffers || 0}`
+      : '\nAudio:      off';
     statsContent.textContent =
       `FPS:        ${_fpsVal.toFixed(0)}\n` +
       `Elements:   ${els}\n` +
@@ -1130,7 +1138,8 @@ window.addEventListener('resize', () => {
       `Segments:   ${segs}\n` +
       `Particles:  ${parts}\n` +
       `Pools:      ${pools}\n` +
-      `Spinning:   ${spinning}`;
+      `Spinning:   ${spinning}` +
+      audioLines;
   };
 }
 

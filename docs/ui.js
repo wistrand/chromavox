@@ -949,6 +949,27 @@ export class UI {
       addRow(key, inp);
     }
 
+    // Absorption multiplier for dielectric elements.
+    if (!el.material || !el.material.startsWith('mirror')) {
+      const absWrap = document.createElement('span');
+      const absInp = document.createElement('input');
+      absInp.type = 'range'; absInp.min = 0; absInp.max = 50; absInp.step = 0.1;
+      absInp.value = el.absorb ?? 1;
+      const absVal = document.createElement('span');
+      absVal.textContent = (el.absorb ?? 1).toFixed(1) + '×';
+      absVal.style.cssText = 'font-size:11px;margin-left:4px;color:var(--muted)';
+      absWrap.appendChild(absInp);
+      absWrap.appendChild(absVal);
+      absInp.addEventListener('input', () => {
+        this.beginEdit();
+        el.absorb = parseFloat(absInp.value);
+        absVal.textContent = el.absorb.toFixed(1) + '×';
+        this.onChange();
+      });
+      absInp.addEventListener('change', () => this.endEdit());
+      addRow('Absorb', absWrap);
+    }
+
   }
 
   // --- Save / load / clear ---

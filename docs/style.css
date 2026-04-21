@@ -296,4 +296,4 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 }
 .fw-close:hover { color: var(--ink); }
 .fw-body { padding: 8px 10px; }
-#stats-content { white-space: pre; font-family: monospace; font-size: 11px; line-height: 1.5; }
+#stats-content { white-space: pre; font-family: monospace; font-size: 11px; line-height: 1.5; user-select: text; cursor: text; }

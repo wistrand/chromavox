@@ -209,14 +209,40 @@ float matN(int elIdx, float wl) {
   return r0.y + r0.z / (um * um);
 }
 
+// Color transmission: how strongly an RGB color filter transmits
+// wavelength wl. T = dot(color, wlRGB) / sum(wlRGB). Matches the
+// CPU's colorTransmission() in spectrum.js.
+float colorTrans(vec3 color, float wl) {
+  vec3 w = wlToRGB(wl);
+  float total = w.r + w.g + w.b + 1e-6;
+  return clamp(dot(color, w) / total, 0.01, 1.0);
+}
+
 float matAbsorption(int elIdx, float wl) {
+  // Absorption multiplier from row 0.w (el.absorb, default 1).
+  float absorbMul = elRow(elIdx, 0).w;
+  // Check for element color override (row 3, yzw = RGB, 0 if no color).
+  vec4 r3 = elRow(elIdx, 3);
+  vec3 elColor = r3.yzw;
+  if (elColor.r + elColor.g + elColor.b > 0.01) {
+    float trans = colorTrans(elColor, wl);
+    return (-log(trans) / 80.0) * absorbMul; // D_REF = 80
+  }
   vec4 r1 = elRow(elIdx, 1);
-  if (r1.y <= 0.0) return r1.x;
-  float d = (wl - r1.z) / r1.w;
-  return r1.x + r1.y * exp(-d * d);
+  float alpha;
+  if (r1.y <= 0.0) alpha = r1.x;
+  else { float d = (wl - r1.z) / r1.w; alpha = r1.x + r1.y * exp(-d * d); }
+  return alpha * absorbMul;
 }
 
 float matReflectance(int elIdx, float wl) {
+  // Check for element color override.
+  vec4 r3 = elRow(elIdx, 3);
+  vec3 elColor = r3.yzw;
+  if (elColor.r + elColor.g + elColor.b > 0.01) {
+    float trans = colorTrans(elColor, wl);
+    return 0.02 + 0.93 * trans;
+  }
   vec4 r2 = elRow(elIdx, 2);
   if (r2.y <= 0.0) return r2.x;
   float d = (wl - r2.z) / r2.w;
@@ -675,7 +701,7 @@ export class GPUTracer {
         const info = elementInfos[i], mat = info.mat, el = info.el, off = i * 4;
         if (row === 0) {
           d[off] = mat?.type === 'mirror' ? 1 : 0;
-          d[off+1] = mat?.A ?? 1; d[off+2] = mat?.B ?? 0; d[off+3] = 0;
+          d[off+1] = mat?.A ?? 1; d[off+2] = mat?.B ?? 0; d[off+3] = el.absorb ?? 1;
         } else if (row === 1) {
           const a = mat?.absorb ?? {};
           d[off] = a.base ?? 0; d[off+1] = a.peak ?? 0; d[off+2] = a.center ?? 0; d[off+3] = a.sigma ?? 1;

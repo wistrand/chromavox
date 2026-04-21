@@ -29,6 +29,21 @@ function ftanh(x) {
   return _TANH_TBL[i] + (_TANH_TBL[i + 1] - _TANH_TBL[i]) * f;
 }
 
+// Fast sine via lookup table. 2048 entries over [0, 2π].
+// Linear interpolation. Replaces Math.sin in inner loops (~3-5× faster).
+const _SIN_N = 2048;
+const _SIN_TBL = new Float32Array(_SIN_N + 1);
+for (let i = 0; i <= _SIN_N; i++) {
+  _SIN_TBL[i] = Math.sin(i / _SIN_N * 2 * Math.PI);
+}
+const _SIN_INC = _SIN_N / (2 * Math.PI);
+function fsin(x) {
+  const t = ((x % (2 * Math.PI)) + 2 * Math.PI) * _SIN_INC;
+  const i = t | 0;
+  const f = t - i;
+  return _SIN_TBL[i % _SIN_N] + (_SIN_TBL[(i + 1) % _SIN_N] - _SIN_TBL[i % _SIN_N]) * f;
+}
+
 class ChromavoxSynth extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -100,8 +115,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
   process(inputs, outputs) {
     const out = outputs[0];
     if (!out || !out[0] || this.voices.length === 0) return true;
-    const buf = out[0];
-    const len = buf.length;
+    const bufL = out[0];
+    const bufR = out[1] || out[0]; // fallback to mono if no R channel
+    const len = bufL.length;
     const bins = this.bins;
     const K = this.partials;
     const bc = this.binCount;
@@ -172,13 +188,25 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // Synthesise.
     const twoPi = 2 * Math.PI;
     const invSr = 1 / sampleRate;
-    const smooth = 1 - Math.exp(-1 / (0.06 * sampleRate));
+    // Per-carrier gain smoothing time constants (seconds).
+    // Karplus needs fast attack for pluck transients; sine benefits
+    // from slower transitions to reduce intermodulation.
+    const smoothSec = isKarplus ? 0.005 : isPulse ? 0.03
+      : isAcid ? 0.04 : (isNoise || isFM || isSupersaw) ? 0.06 : 0.08;
+    const smooth = 1 - Math.exp(-1 / (smoothSec * sampleRate));
     // Block-rate smoothing for centroid (applied once per block, not per sample).
     const centroidSmooth = 1 - Math.pow(1 - smooth, len);
-    for (let i = 0; i < len; i++) buf[i] = 0;
+    for (let i = 0; i < len; i++) { bufL[i] = 0; bufR[i] = 0; }
     const voices = this.voices;
     const voiceCount = voices.length;
+    let _activeCount = 0;
+    // Constant-power pan per voice: sensor 0 (bottom) → left,
+    // sensor N-1 (top) → right. PI/2 sweep.
+    const _halfPi = Math.PI * 0.5;
     for (let s = 0; s < voiceCount; s++) {
+      const pan = voiceCount > 1 ? s / (voiceCount - 1) : 0.5;
+      const panL = Math.cos(pan * _halfPi);
+      const panR = Math.sin(pan * _halfPi);
       const v = voices[s];
       // Overall voice gain = sum of partial target gains (for noise mode).
       let anyActive = false;
@@ -186,6 +214,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
       }
       if (!anyActive) { v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = -1; continue; }
+      _activeCount++;
 
       if (isAcid) {
         // 303-style acid carrier: PolyBLEP sawtooth → 3-pole TPT/ZDF
@@ -222,10 +251,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         const ln2 = 0.6931471805599453;
         const piInvSr = Math.PI * invSr;
         const cutoffCeil = sampleRate * 0.45;
-        // Compute tan(g) once per block from the current smoothed cutoff.
-        // The cutoff changes slowly (smoothed by envSmooth per sample),
-        // so recomputing tan every sample is wasteful. Update once per
-        // block; the per-sample error is inaudible at 128-sample blocks.
+        // Compute tan(g) every 32 samples to reduce zipper noise from
+        // stepped filter coefficients during fast cutoff sweeps.
         let g = Math.tan(piInvSr * sCutoff);
         let g1 = g / (1 + g);
         for (let i = 0; i < len; i++) {
@@ -244,8 +271,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
             baseCutoffHz * Math.exp(voiceGain * envScale * ln2));
           // Smooth cutoff with the decay time constant.
           sCutoff += (targetCutoff - sCutoff) * envSmooth;
-          // Recompute filter coefficient at midpoint of block.
-          if (i === (len >> 1)) { g = Math.tan(piInvSr * sCutoff); g1 = g / (1 + g); }
+          // Recompute filter coefficient every 32 samples.
+          if ((i & 31) === 31) { g = Math.tan(piInvSr * sCutoff); g1 = g / (1 + g); }
           // Input with resonance feedback.
           const u = saw * 1.5 - k * ftanh(s3);
           // 3 cascaded one-poles (18 dB/oct diode ladder)
@@ -254,7 +281,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           const v3 = (s2 - s3) * g1; s3 += 2 * v3;
           // Post-filter drive.
           const driven = ftanh(s3 * driveAmt);
-          buf[i] += driven * voiceGain;
+          const _s = driven * voiceGain;
+          bufL[i] += _s * panL; bufR[i] += _s * panR;
         }
         v.sawPhase = phase;
         v.lp1 = s1; v.lp2 = s2; v.lp3 = s3;
@@ -278,9 +306,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         for (let i = 0; i < len; i++) {
           voiceGain += (voiceTarget - voiceGain) * smooth;
           const modIndex = voiceGain * maxIndex;
-          const mod = Math.sin(mPhase) * modIndex;
-          const sample = Math.sin(cPhase + mod) * voiceGain;
-          buf[i] += sample;
+          const mod = fsin(mPhase) * modIndex;
+          const sample = fsin(cPhase + mod) * voiceGain;
+          bufL[i] += sample * panL; bufR[i] += sample * panR;
           cPhase += cInc;
           mPhase += mInc;
           if (cPhase > twoPi) cPhase -= twoPi;
@@ -325,7 +353,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
             if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
             sum += saw;
           }
-          buf[i] += sum * (1 / 7) * voiceGain;
+          const _s = sum * (1 / 7) * voiceGain;
+          bufL[i] += _s * panL; bufR[i] += _s * panR;
         }
         v.gains[0] = voiceGain;
       } else if (isNoise) {
@@ -350,7 +379,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           const y0 = noise + c1 * y1 + c2 * y2;
           const bp = (y0 - y2) * norm;
           y2 = y1; y1 = y0;
-          buf[i] += bp * voiceGain * 8;
+          const _s = bp * voiceGain * 8;
+          bufL[i] += _s * panL; bufR[i] += _s * panR;
         }
         v.bp1 = y1; v.bp2 = y2;
         v.gains[0] = voiceGain;
@@ -383,7 +413,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           if (t2 > 0 && t2 < 1) pulse -= t2 + t2 - t2 * t2 - 1;
           const t2b = (duty - phase) / dt;
           if (t2b > 0 && t2b < 1) pulse += t2b * t2b - t2b - t2b + 1;
-          buf[i] += pulse * voiceGain;
+          const _s = pulse * voiceGain;
+          bufL[i] += _s * panL; bufR[i] += _s * panR;
         }
         v.pulsePhase = phase;
         v.gains[0] = voiceGain;
@@ -440,7 +471,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           voiceGain += (voiceTarget - voiceGain) * smooth;
           // Inject filtered noise into the delay line at the write head.
           if (voiceGain > 0.01) {
-            const white = (Math.random() * 2 - 1);
+            const white = Math.random() * 2 - 1;
             exLp += (white - exLp) * exFiltCoeff;
             kpBuf[idx] += exLp * voiceGain * contExcite;
           }
@@ -453,7 +484,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           kpBuf[idx] = filtered;
           idx++;
           if (idx >= kpLen) idx = 0;
-          buf[i] += out * Math.min(1, voiceGain * 3);
+          const _s = out * Math.min(1, voiceGain * 3);
+          bufL[i] += _s * panL; bufR[i] += _s * panR;
         }
         v.kpIdx = idx;
         v.kpPrev = prev;
@@ -466,18 +498,38 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           for (let k = 0; k < v.phases.length; k++) {
             v.gains[k] += (v.targetGains[k] - v.gains[k]) * smooth;
             if (v.gains[k] < 1e-6 && v.targetGains[k] < 1e-6) continue;
-            sample += Math.sin(v.phases[k]) * v.gains[k];
+            sample += fsin(v.phases[k]) * v.gains[k];
             v.phases[k] += twoPi * v.freq * (k + 1) * invSr;
             if (v.phases[k] > twoPi) v.phases[k] -= twoPi;
           }
-          buf[i] += sample;
+          bufL[i] += sample * panL; bufR[i] += sample * panR;
         }
       }
     }
-    // Soft limiter: always-on tanh avoids the sharp knee at ±0.8 that
-    // caused intermodulation clicks with many simultaneous voices.
-    // tanh(x) ≈ x for small x, compresses gradually for larger values.
-    for (let i = 0; i < len; i++) buf[i] = ftanh(buf[i]);
+    this._lastActiveCount = _activeCount;
+    // Soft limiter on both channels.
+    for (let i = 0; i < len; i++) { bufL[i] = ftanh(bufL[i]); bufR[i] = ftanh(bufR[i]); }
+    // Dropped-buffer detection: currentFrame should advance by exactly
+    // 128 (render quantum) between calls. A gap > 128 = missed callback.
+    if (this._prevFrame !== undefined) {
+      const gap = currentFrame - this._prevFrame;
+      if (gap > 128) this._droppedBuffers = (this._droppedBuffers || 0) + (gap / 128 - 1);
+    }
+    this._prevFrame = currentFrame;
+    // Stats: report every ~500ms.
+    this._processCount = (this._processCount || 0) + 1;
+    if (this._processCount >= 187) { // ~500ms at 48kHz/128 samples
+      this.port.postMessage({
+        type: 'stats',
+        voices: this.voices.length,
+        activeVoices: this._lastActiveCount || 0,
+        carrier: this.carrier,
+        blockSize: len,
+        droppedBuffers: this._droppedBuffers || 0,
+      });
+      this._droppedBuffers = 0;
+      this._processCount = 0;
+    }
     return true;
   }
 }
@@ -567,8 +619,13 @@ export class SensorSynth {
     await this.ctx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
     this.workletNode = new AudioWorkletNode(this.ctx, 'chromavox-synth', {
-      outputChannelCount: [1],
+      outputChannelCount: [2],
     });
+    // Receive timing stats from the worklet thread.
+    this.workletNode.port.onmessage = e => {
+      if (e.data.type === 'stats') this.stats = e.data;
+    };
+    this.stats = null;
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 8192;
     this.analyser.smoothingTimeConstant = 0.6;
