@@ -2,6 +2,7 @@
 
 import { makeElement, worldEdges, pointInPolygon, overlapsAny, serializeScene, deserializeScene, createScene } from './scene.js';
 import { MATERIALS } from './spectrum.js';
+import { ELEMENTS } from './elements.js';
 
 // Apply a mutation to an element, reverting if it causes overlap.
 // `mutate` is called with the element; `keys` lists the properties
@@ -166,32 +167,12 @@ export class UI {
     const ROT_STEP = 1 * Math.PI / 180;
     const SIZE_STEP = 8;
     const bumpSize = (el, d) => {
-      switch (el.kind) {
-        case 'prism':
-        case 'rabbit':
-          el.size = Math.max(20, el.size + d);
-          break;
-        case 'block':
-          el.w = Math.max(20, el.w + d);
-          el.h = Math.max(10, el.h + d * 0.5);
-          break;
-        case 'mirror':
-          el.w = Math.max(20, el.w + d);
-          break;
-        case 'lens-convex':
-          el.h = Math.max(40, el.h + d);
-          el.radius = Math.max(80, el.radius + d);
-          break;
-        case 'lens-concave':
-          el.h = Math.max(40, el.h + d);
-          break;
-        case 'circle':
-          el.radius = Math.max(15, el.radius + d);
-          break;
-        case 'mirror-concave':
-        case 'mirror-convex':
-          el.h = Math.max(30, el.h + d);
-          break;
+      const _res = ELEMENTS[el.kind]?.resize;
+      if (_res) {
+        for (const key of _res.keys) {
+          const s = _res.scale?.[key] ?? 1;
+          el[key] = Math.max(_res.min[key] ?? 0, el[key] + d * s);
+        }
       }
     };
 
@@ -437,12 +418,8 @@ export class UI {
     });
 
     // Add split-button: left = place last-used kind, right (▾) = dropdown.
-    const LABEL_BY_KIND = {
-      prism: 'Prism', block: 'Block', 'lens-convex': 'Convex Lens',
-      'lens-concave': 'Concave Lens', mirror: 'Mirror',
-      'mirror-concave': 'Concave Mirror', 'mirror-convex': 'Convex Mirror',
-      circle: 'Circle', rabbit: 'Rabbit',
-    };
+    const LABEL_BY_KIND = {};
+    for (const [k, v] of Object.entries(ELEMENTS)) LABEL_BY_KIND[k] = v.label;
     const addBtn = document.getElementById('add-btn');
     const addOptions = document.getElementById('add-options');
     const addMenu = document.getElementById('add-menu');
@@ -497,34 +474,11 @@ export class UI {
     return { size: el.size, w: el.w, h: el.h, radius: el.radius };
   }
   _applyPinchScale(el, base, s) {
-    switch (el.kind) {
-      case 'prism':
-      case 'rabbit':
-        el.size = Math.max(20, base.size * s);
-        break;
-      case 'block':
-        el.w = Math.max(20, base.w * s);
-        el.h = Math.max(10, base.h * s);
-        break;
-      case 'mirror':
-        el.w = Math.max(20, base.w * s);
-        break;
-      case 'lens-convex':
-        el.h = Math.max(40, base.h * s);
-        el.radius = Math.max(80, base.radius * s);
-        break;
-      case 'lens-concave':
-        el.h = Math.max(40, base.h * s);
-        el.radius = Math.max(80, base.radius * s);
-        break;
-      case 'circle':
-        el.radius = Math.max(15, base.radius * s);
-        break;
-      case 'mirror-concave':
-      case 'mirror-convex':
-        el.h = Math.max(30, base.h * s);
-        el.radius = Math.max(80, base.radius * s);
-        break;
+    const p = ELEMENTS[el.kind]?.pinch ?? ELEMENTS[el.kind]?.resize;
+    if (p) {
+      for (const key of p.keys) {
+        el[key] = Math.max(p.min[key] ?? 0, base[key] * s);
+      }
     }
   }
   _applyEmitterToggle(sIdx, solo) {
@@ -748,34 +702,66 @@ export class UI {
     const el = this.selected;
     if (!el) { panel.innerHTML = '<em>No selection</em>'; return; }
 
-    const addRow = (label, input) => {
+    const addRow = (label, input, valText) => {
       const row = document.createElement('div');
       row.className = 'prop';
       const lab = document.createElement('label');
       lab.textContent = label;
+      if (valText !== undefined) {
+        const vs = document.createElement('span');
+        vs.className = 'prop-val';
+        vs.textContent = ' ' + valText;
+        lab.appendChild(vs);
+      }
       row.appendChild(lab);
       row.appendChild(input);
       panel.appendChild(row);
+      return lab; // return label so callers can update the value span
     };
 
+    const def = ELEMENTS[el.kind];
+    if (!def) return;
+
     const title = document.createElement('div');
-    title.innerHTML = `<strong>${el.kind}</strong>`;
+    title.innerHTML = `<strong>${def.label}</strong>`;
     panel.appendChild(title);
+
+    // Material dropdown (first, so the user sees what they're editing).
+    const matType = MATERIALS[def.material]?.type || 'dielectric';
+    const matList = def.materials
+      || Object.keys(MATERIALS).filter(k => MATERIALS[k].type === matType);
+    const sel = document.createElement('select');
+    for (const k of matList) {
+      const opt = document.createElement('option');
+      opt.value = k; opt.textContent = k;
+      if (k === el.material) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => {
+      this.beginEdit(); el.material = sel.value; this.endEdit(); this.onChange();
+    });
+    addRow('Material', sel);
 
     // Rotation
     const rot = document.createElement('input');
     rot.type = 'range'; rot.min = -180; rot.max = 180; rot.step = 1;
-    rot.value = Math.round(el.rot * 180 / Math.PI);
+    const rotDeg = () => Math.round(el.rot * 180 / Math.PI);
+    rot.value = rotDeg();
+    const rotLab = addRow('Rotation', rot, rotDeg() + '°');
+    const updateRotVal = () => {
+      const vs = rotLab.querySelector('.prop-val');
+      if (vs) vs.textContent = ' ' + rotDeg() + '°';
+    };
     rot.addEventListener('input', () => {
       this.beginEdit();
       const newRot = parseFloat(rot.value) * Math.PI / 180;
       if (!tryMutate(el, this.scene.elements, ['rot', 'spin'], e => { e.rot = newRot; e.spin = 0; })) {
-        rot.value = Math.round(el.rot * 180 / Math.PI);
+        rot.value = rotDeg();
       }
+      updateRotVal();
       this.onChange();
     });
     rot.addEventListener('change', () => this.endEdit());
-    addRow('Rotation', rot);
 
     // Continuous rotation (degrees per second).
     const spinRow = document.createElement('div');
@@ -785,19 +771,25 @@ export class UI {
     spinInput.type = 'range';
     spinInput.min = -180; spinInput.max = 180; spinInput.step = 1;
     spinInput.style.flex = '1';
-    spinInput.value = Math.round((el.spin || 0) * 180 / Math.PI);
+    const spinDeg = () => Math.round((el.spin || 0) * 180 / Math.PI);
+    spinInput.value = spinDeg();
     const spinResetBtn = document.createElement('button');
     spinResetBtn.textContent = '×';
     spinResetBtn.title = 'Stop spinning';
     spinRow.appendChild(spinInput);
     spinRow.appendChild(spinResetBtn);
-    addRow('Spin', spinRow);
+    const spinLab = addRow('Spin', spinRow, spinDeg() + '°/s');
+    const updateSpinVal = () => {
+      const vs = spinLab.querySelector('.prop-val');
+      if (vs) vs.textContent = ' ' + spinDeg() + '°/s';
+    };
     spinInput.addEventListener('input', () => {
       this.beginEdit();
       const newSpin = parseFloat(spinInput.value) * Math.PI / 180;
       if (!tryMutate(el, this.scene.elements, ['spin'], e => { e.spin = newSpin; })) {
-        spinInput.value = Math.round((el.spin || 0) * 180 / Math.PI);
+        spinInput.value = spinDeg();
       }
+      updateSpinVal();
       this.onChange();
     });
     spinInput.addEventListener('change', () => this.endEdit());
@@ -806,168 +798,109 @@ export class UI {
       el.spin = 0;
       this.endEdit();
       spinInput.value = 0;
+      updateSpinVal();
       this.onChange();
     });
 
-    // Material: mirror elements pick among mirror variants; everything else
-    // picks among dielectrics.
-    const wantType = (el.kind === 'mirror') ? 'mirror' : 'dielectric';
-    const sel = document.createElement('select');
-    for (const k of Object.keys(MATERIALS)) {
-      if (MATERIALS[k].type !== wantType) continue;
-      const opt = document.createElement('option');
-      opt.value = k; opt.textContent = k;
-      if (k === el.material) opt.selected = true;
-      sel.appendChild(opt);
-    }
-    sel.addEventListener('change', () => {
-      this.beginEdit();
-      el.material = sel.value;
-      this.endEdit();
-      this.onChange();
-    });
-    addRow('Material', sel);
-
-    // Color override: optional per-element tint that replaces the material's
-    // default visual color. Reset button clears el.color so the material
-    // default is restored.
+    // --- Schema-driven property sliders ---
+    // Material color hints for the color picker default.
     const MATERIAL_COLOR_HINT = {
       crown: '#8ccbff', flint: '#ffb3cc', fused: '#d9ffe6', water: '#80bfff',
       diamond: '#ffffe6', hyper: '#ff80ff', slowGlass: '#9b80e0',
       mirror: '#bfccff', 'mirror-red': '#ff6666',
       'mirror-green': '#66ff6e', 'mirror-blue': '#6670ff',
     };
-    const colorRow = document.createElement('div');
-    colorRow.style.display = 'flex';
-    colorRow.style.gap = '4px';
-    const colorInput = document.createElement('input');
-    colorInput.type = 'color';
-    colorInput.style.flex = '1';
-    const initialColor = el.color || MATERIAL_COLOR_HINT[el.material] || '#cccccc';
-    colorInput.value = initialColor;
-    const resetBtn = document.createElement('button');
-    resetBtn.textContent = '×';
-    resetBtn.title = 'Reset to material default';
-    colorRow.appendChild(colorInput);
-    colorRow.appendChild(resetBtn);
-    addRow('Color', colorRow);
 
-    // Hue slider lets the user scrub through the spectrum live. Mirrors the
-    // color picker value both ways.
-    const hueInput = document.createElement('input');
-    hueInput.type = 'range';
-    hueInput.min = 0; hueInput.max = 360; hueInput.step = 1;
-    hueInput.value = hexToHue(initialColor);
-    hueInput.style.background = 'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)';
-    addRow('Hue', hueInput);
+    // Generate sliders from schema props (skip rot — handled above).
+    for (const [key, desc] of Object.entries(def.props)) {
+      if (key === 'rot') continue; // already rendered as Rotation row
+      if (key === 'spin') continue; // already rendered as Spin row
 
-    colorInput.addEventListener('input', () => {
-      this.beginEdit();
-      el.color = colorInput.value;
-      hueInput.value = hexToHue(el.color);
-      this.onChange();
-    });
-    colorInput.addEventListener('change', () => this.endEdit());
-    hueInput.addEventListener('input', () => {
-      this.beginEdit();
-      const hex = hslToHex(parseInt(hueInput.value, 10), 1, 0.5);
-      el.color = hex;
-      colorInput.value = hex;
-      this.onChange();
-    });
-    hueInput.addEventListener('change', () => this.endEdit());
-    resetBtn.addEventListener('click', () => {
-      this.beginEdit();
-      delete el.color;
-      this.endEdit();
-      const fallback = MATERIAL_COLOR_HINT[el.material] || '#cccccc';
-      colorInput.value = fallback;
-      hueInput.value = hexToHue(fallback);
-      this.onChange();
-    });
+      if (desc.type === 'color') {
+        // Color picker + hue slider + reset.
+        const colorRow = document.createElement('div');
+        colorRow.style.display = 'flex'; colorRow.style.gap = '4px';
+        const colorInput = document.createElement('input');
+        colorInput.type = 'color'; colorInput.style.flex = '1';
+        const initialColor = el.color || MATERIAL_COLOR_HINT[el.material] || '#cccccc';
+        colorInput.value = initialColor;
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent = '×'; resetBtn.title = 'Reset to material default';
+        colorRow.appendChild(colorInput); colorRow.appendChild(resetBtn);
+        addRow('Color', colorRow);
 
-    // Delay slider — overrides the material's `delayK`. Audio echo per
-    // bench unit of internal path. Mirrors don't accumulate inside-stack
-    // time so the slider has no effect on them; shown for consistency.
-    const DELAY_MAX = 0.005; // s per bench unit; max ~1 s through 200 units
-    const delayRow = document.createElement('div');
-    delayRow.style.display = 'flex';
-    delayRow.style.gap = '4px';
-    const delayInput = document.createElement('input');
-    delayInput.type = 'range';
-    delayInput.min = 0; delayInput.max = 100; delayInput.step = 1;
-    delayInput.style.flex = '1';
-    const matDelay = MATERIALS[el.material]?.delayK ?? 0;
-    const initialDelay = (typeof el.delayK === 'number') ? el.delayK : matDelay;
-    delayInput.value = Math.round((initialDelay / DELAY_MAX) * 100);
-    const delayResetBtn = document.createElement('button');
-    delayResetBtn.textContent = '×';
-    delayResetBtn.title = 'Zero delay';
-    delayRow.appendChild(delayInput);
-    delayRow.appendChild(delayResetBtn);
-    addRow('Delay', delayRow);
+        const hueInput = document.createElement('input');
+        hueInput.type = 'range'; hueInput.min = 0; hueInput.max = 360; hueInput.step = 1;
+        hueInput.value = hexToHue(initialColor);
+        hueInput.style.background = 'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)';
+        addRow('Hue', hueInput);
 
-    delayInput.addEventListener('input', () => {
-      this.beginEdit();
-      el.delayK = (parseInt(delayInput.value, 10) / 100) * DELAY_MAX;
-      this.onChange();
-    });
-    delayInput.addEventListener('change', () => this.endEdit());
-    delayResetBtn.addEventListener('click', () => {
-      this.beginEdit();
-      el.delayK = 0;
-      this.endEdit();
-      delayInput.value = 0;
-      this.onChange();
-    });
+        colorInput.addEventListener('input', () => {
+          this.beginEdit(); el.color = colorInput.value;
+          hueInput.value = hexToHue(el.color); this.onChange();
+        });
+        colorInput.addEventListener('change', () => this.endEdit());
+        hueInput.addEventListener('input', () => {
+          this.beginEdit();
+          const hex = hslToHex(parseInt(hueInput.value, 10), 1, 0.5);
+          el.color = hex; colorInput.value = hex; this.onChange();
+        });
+        hueInput.addEventListener('change', () => this.endEdit());
+        resetBtn.addEventListener('click', () => {
+          this.beginEdit(); delete el.color; this.endEdit();
+          const fb = MATERIAL_COLOR_HINT[el.material] || '#cccccc';
+          colorInput.value = fb; hueInput.value = hexToHue(fb); this.onChange();
+        });
+        continue;
+      }
 
-    // Size params per kind
-    const sizeFields = {
-      'prism':        [['size', 40, 300]],
-      'rabbit':       [['size', 60, 300]],
-      'circle':       [['radius', 20, 300]],
-      'block':        [['w', 40, 400], ['h', 20, 300]],
-      'lens-convex':  [['h', 40, 300], ['radius', 80, 1200]],
-      'lens-concave': [['w', 20, 200], ['h', 40, 300], ['radius', 80, 800]],
-      'mirror':         [['w', 30, 400], ['h', 2, 20]],
-      'mirror-concave': [['h', 30, 200], ['radius', 80, 800]],
-      'mirror-convex':  [['h', 30, 200], ['radius', 80, 800]],
-    };
-    for (const [key, min, max] of sizeFields[el.kind] || []) {
+      // Numeric slider.
+      const hasConvert = !!desc.toInternal;
+      const uiVal = () => hasConvert ? desc.fromInternal(el[key] || 0) : (el[key] ?? desc.default ?? 0);
+      const fmtVal = v => desc.display ? desc.display(v) : String(Math.round(v * 100) / 100);
+
       const inp = document.createElement('input');
-      inp.type = 'range'; inp.min = min; inp.max = max; inp.step = 1;
-      inp.value = el[key];
+      inp.type = 'range';
+      inp.min = desc.min; inp.max = desc.max; inp.step = desc.step || 1;
+      inp.value = uiVal();
+
+      let rowLab;
+      const updateVal = () => {
+        const vs = rowLab?.querySelector('.prop-val');
+        if (vs) vs.textContent = ' ' + fmtVal(uiVal());
+      };
+
+      if (desc.resetable) {
+        const row = document.createElement('div');
+        row.style.display = 'flex'; row.style.gap = '4px';
+        inp.style.flex = '1';
+        const btn = document.createElement('button');
+        btn.textContent = '×'; btn.title = 'Reset';
+        row.appendChild(inp); row.appendChild(btn);
+        btn.addEventListener('click', () => {
+          this.beginEdit();
+          el[key] = hasConvert ? desc.toInternal(0) : 0;
+          this.endEdit();
+          inp.value = 0;
+          updateVal();
+          this.onChange();
+        });
+        rowLab = addRow(desc.label || key, row, fmtVal(uiVal()));
+      } else {
+        rowLab = addRow(desc.label || key, inp, fmtVal(uiVal()));
+      }
+
       inp.addEventListener('input', () => {
         this.beginEdit();
-        const newVal = parseFloat(inp.value);
-        if (!tryMutate(el, this.scene.elements, [key], e => { e[key] = newVal; })) {
-          inp.value = el[key];
+        const v = parseFloat(inp.value);
+        const intVal = hasConvert ? desc.toInternal(v) : v;
+        if (!tryMutate(el, this.scene.elements, [key], e => { e[key] = intVal; })) {
+          inp.value = uiVal();
         }
+        updateVal();
         this.onChange();
       });
       inp.addEventListener('change', () => this.endEdit());
-      addRow(key, inp);
-    }
-
-    // Absorption multiplier for dielectric elements.
-    if (!el.material || !el.material.startsWith('mirror')) {
-      const absWrap = document.createElement('span');
-      const absInp = document.createElement('input');
-      absInp.type = 'range'; absInp.min = 0; absInp.max = 50; absInp.step = 0.1;
-      absInp.value = el.absorb ?? 1;
-      const absVal = document.createElement('span');
-      absVal.textContent = (el.absorb ?? 1).toFixed(1) + '×';
-      absVal.style.cssText = 'font-size:11px;margin-left:4px;color:var(--muted)';
-      absWrap.appendChild(absInp);
-      absWrap.appendChild(absVal);
-      absInp.addEventListener('input', () => {
-        this.beginEdit();
-        el.absorb = parseFloat(absInp.value);
-        absVal.textContent = el.absorb.toFixed(1) + '×';
-        this.onChange();
-      });
-      absInp.addEventListener('change', () => this.endEdit());
-      addRow('Absorb', absWrap);
     }
 
   }

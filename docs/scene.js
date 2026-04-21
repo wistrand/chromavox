@@ -2,6 +2,7 @@
 // Coordinates are in "bench pixels" matching the canvas backing store.
 
 import { MATERIALS } from './spectrum.js';
+import { ELEMENTS } from './elements.js';
 
 // Stable UUIDs for element IDs — survive serialization, undo/redo,
 // and session boundaries. Used by the song format to match elements
@@ -44,28 +45,15 @@ export function createScene() {
 }
 
 export function makeElement(kind, x, y) {
-  const base = { id: genId(), kind, x, y, rot: 0 };
-  switch (kind) {
-    // Default rotations are chosen so that horizontal rays from the left
-    // produce a visible optical effect on placement:
-    //   prism  — π/6 (~30°): left face at ~50° incidence, well above the
-    //            ~44° TIR cutoff for flint. Dispersion is visible.
-    //   block  — π/6: otherwise axis-aligned → 0° incidence → ray exits
-    //            parallel, no visible refraction.
-    //   mirror — π/4 (45°): otherwise horizontal strip that parallel rays
-    //            skim past; at 45° it reflects horizontal rays vertically.
-    //   lenses — 0: on-axis is the correct optical orientation.
-    case 'prism':        return { ...base, rot: Math.PI / 6, size: 120, material: 'flint' };
-    case 'block':        return { ...base, rot: Math.PI / 6, w: 180, h: 80, material: 'crown' };
-    case 'lens-convex':  return { ...base, h: 110, radius: 220, material: 'crown' };
-    case 'lens-concave': return { ...base, w: 30, h: 110, radius: 220, material: 'crown' };
-    case 'mirror':         return { ...base, rot: Math.PI / 4, w: 180, h: 6, material: 'mirror' };
-    case 'mirror-concave': return { ...base, rot: Math.PI, h: 80, radius: 160, material: 'mirror' };
-    case 'mirror-convex':  return { ...base, rot: Math.PI, h: 80, radius: 160, material: 'mirror' };
-    case 'rabbit':       return { ...base, size: 140, material: 'crown' };
-    case 'circle':       return { ...base, radius: 80, material: 'crown' };
-    default: throw new Error('unknown element kind: ' + kind);
+  const def = ELEMENTS[kind];
+  if (!def) throw new Error('unknown element kind: ' + kind);
+  const el = { id: genId(), kind, x, y, rot: 0, material: def.material };
+  for (const [key, desc] of Object.entries(def.props)) {
+    if (desc.default != null) {
+      el[key] = desc.default;
+    }
   }
+  return el;
 }
 
 // Local-space polygon vertices for an element.
