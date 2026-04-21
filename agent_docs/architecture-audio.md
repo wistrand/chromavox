@@ -48,6 +48,14 @@ doesn't know where the audio came from. Touch/keys and MIDI sources
 bypass the AudioContext entirely — `directLevels()` returns emitter
 levels directly.
 
+**Touch/keys always active**: the touch zone and keyboard claviature
+work alongside any source, not only when `touch/keys` is selected.
+`_installKeyboard()` is extracted and called for all sources in the
+constructor. Touch/keys levels overlay on any other source's levels
+via `max()` — e.g. during song playback, touching the bench edge or
+pressing claviature keys adds to the file/mic levels rather than
+replacing them.
+
 `micBands(mic, n, mode, baseHz, stepSemi)` bins the FFT into `n`
 buckets:
 
@@ -81,16 +89,16 @@ All modes use `getFloatFrequencyData` (dB values). Normalization is
 - **File source** (`mic.source === 'file'`): converts dB to linear
   amplitude via `dbToLin` (`10^(dB/20)`), then peak-normalizes using
   `_peakHold` (module-scope; rises instantly, decays at 0.95/frame —
-  roughly 1 s to half at 60 fps). After normalization, `sqrt` shaping
-  recovers spectral contrast from mastered broadband audio. A linear
-  noise gate (`NOISE_GATE_LIN = 0.001`) blanks output when silent.
+  roughly 1 s to half at 60 fps). Linear output (no sqrt, no gamma).
+  A linear noise gate (`NOISE_GATE_LIN = 0.001`) blanks output when
+  silent.
 - **All other audio sources** (mic, sine, harmonics, noise, keyboard):
   absolute `dbNorm` mapping (dB → 0–1 via the analyser's fixed
-  `minDecibels`/`maxDecibels` range). Floor 0.15, gamma 1.5 zero out
-  quiet buckets. A noise gate (`NOISE_GATE = 0.10` on the normalized
-  frame peak) blanks the entire output when nothing is playing. No
-  peak-hold — the fixed dB range provides stable scaling so silence
-  stays quiet.
+  `minDecibels`/`maxDecibels` range). Scale-mode floor is 0.45 (steep
+  cutoff suppresses ambient noise); log-mode floor is 0.20. A noise
+  gate (`NOISE_GATE = 0.10` on the normalized frame peak) blanks the
+  entire output when nothing is playing. No peak-hold — the fixed dB
+  range provides stable scaling so silence stays quiet.
 
 Peak per bucket (not mean) gives sharper vocoder-like channel
 separation in both paths. `_peakHold` is reset to 0 in `enable()` so
@@ -123,21 +131,60 @@ no separate `.js` file, no build step. `synth.enable()` is async
   `synth.setStep` skips rebuild for both log and voice (step is
   irrelevant when frequencies are log-spaced).
 - **Carrier mode**: selectable via the Carrier dropdown in the Audio
-  out options menu. Three modes:
+  out options menu. Carrier parameters are defined in `docs/carriers.js`
+  (single source of truth for UI, persistence, automation, and worklet
+  defaults). Seven modes:
   - `sine` (default): harmonic partials with 1/k rolloff for
-    neutral sawtooth-like timbre from white light.
+    neutral sawtooth-like timbre from white light. Bin-to-partial
+    mapping is **inverted**: blue light (low wavelength bins) drives
+    high partials (brighter timbre), red (high bins) drives the
+    fundamental (purer tone).
   - `noise`: unity-gain bandpass noise (Csound `resonz` topology).
     Single 2-pole resonator with zeros at DC/Nyquist:
-    `bp = (y0 - y2) * (1-r²)/2`. Constant-Q (Q=25):
-    `r = 1 - π·freq/(25·sr)`. Peak gain exactly 1.0 at all
-    frequencies — no ampScale needed.
+    `bp = (y0 - y2) * (1-r²)/2`. Variable Q via the **Q slider**
+    (range 1-50, default 14): `r = 1 - π·freq/(Q·sr)`. Peak gain
+    exactly 1.0 at all frequencies — no ampScale needed.
   - `acid`: 303-style acid carrier. PolyBLEP sawtooth → 3-pole
     TPT/ZDF diode ladder filter (18 dB/oct) with `tanh` feedback
     for resonance. Sensor energy drives filter cutoff (the squelch):
     `cutoff = freq × 2^(1 + voiceGain × envAmount × 5 octaves)`.
-    Per-voice state: `sawPhase`, `lp1`, `lp2`, `lp3`. Resonance
-    and Env Amount sliders posted via MessagePort. Post-filter drive
-    via `tanh(s3 × 2.5)`.
+    Per-voice state: `sawPhase`, `lp1`, `lp2`, `lp3`. Resonance,
+    Env Amount, Cutoff, Decay, and Drive sliders posted via
+    MessagePort. Post-filter drive via `tanh(s3 × 2.5)`.
+  - `fm`: FM synthesis carrier. Ratio slider (1-8) sets the
+    modulator:carrier frequency ratio. Depth slider (0-1) sets
+    modulation index.
+  - `supersaw`: 7 detuned sawtooth oscillators. Detune slider (0-1)
+    controls spread.
+  - `pulse`: PolyBLEP variable-width pulse wave. **Width** slider
+    (0.05-0.95, default 0.5) sets the base duty cycle. Two PolyBLEP
+    corrections (at 0 and at the duty cycle crossing) give clean
+    anti-aliased edges.
+  - `karplus`: Karplus-Strong physical string model. Per-voice delay
+    line (length = `ceil(sampleRate / freq)`). **Damping** slider
+    (0-1, default 0.4) controls feedback lowpass coefficient (higher
+    = faster decay). **Excite** slider (0-1, default 0.5) blends
+    between continuous excitation (bowed-string-like, low values) and
+    transient-only re-excitation (plucked, high values). Transient
+    mode triggers on rising gain edges (threshold `>= 0.05`).
+    Variable lowpass filter in the feedback loop, with cutoff
+    controlled by the Damping parameter.
+- **Spectral centroid**: for all non-sine carriers, each voice
+  computes a spectral centroid from its wavelength bins. The centroid
+  is **inverted**: blue (short wavelength, low bins) → 1.0 (bright),
+  red (long wavelength, high bins) → 0.0 (dark). Falls back to
+  position-based centroid (from sensor index) when there's no
+  wavelength data (passthrough). Block-rate smoothing:
+  `centroidSmooth = 1 - (1 - smooth)^blockLength` (applied once per
+  render block, not per sample, for correct coefficient scaling).
+  Per-carrier centroid mapping:
+  - `acid` → cutoff shift (±2 octaves from base cutoff)
+  - `noise` → bandpass center frequency shift (±1 octave)
+  - `fm` → ratio modulation (0.5x-1.5x of base ratio)
+  - `supersaw` → detune modulation (0x-2x of base detune)
+  - `pulse` → duty cycle shift (blue narrows, red widens)
+  - `karplus` → excitation filter cutoff (blue = bright/shimmery,
+    red = dark/woody) plus feedback damping amount
 - **Partials**: adjustable 1–8 via the Partials slider (default 6).
   Each voice synthesises that many harmonic overtones with
   `Math.sin` directly (no wavetable). Harmonic gains come from
@@ -157,9 +204,9 @@ no separate `.js` file, no build step. `synth.enable()` is async
   (`BASE_INTENSITY * sqrt(raysPer)`) via the rebuild message. Each
   partial's sensor bin sum is divided by `fullScale / gainK` to
   recover the 0–1 micGain scale (`gainK` = `K` for sine, `1` for
-  noise and acid since they use a single band). A floor of 0.15
-  and gamma of 1.5 shape the gain, then `1 / sqrt(sc * gainK)`
-  scales for multi-voice headroom. Sine partials get 1/k rolloff.
+  noise and other single-band carriers). A floor of 0.02 (linear,
+  no gamma) and `1 / sqrt(sc * gainK)` scales for multi-voice
+  headroom. Sine partials get 1/k rolloff.
   A `tanh` soft limiter at ±0.8 prevents hard clipping when many
   voices overlap. No peak-hold — quiet voices stay quiet relative
   to loud ones, matching the mic spectrum's absolute scaling.

@@ -115,6 +115,23 @@
   (sine / harmonics / noise / keyboard) which doesn't need
   `mediaDevices`.
 
+## Rendering (cont.)
+
+- Renderer caps instanced segment draws at 500K instances
+  (`Math.min(segCount, 500000)` in `drawArraysInstanced`). Scenes
+  with extreme ray counts can hit this silently — segments beyond the
+  cap are not drawn.
+
+## Synth
+
+- Karplus excitation uses `>= 0.05` threshold for transient detection
+  (not `>`). The Excite slider blends between continuous (bowed) and
+  transient-only (plucked) modes.
+- Centroid smoothing uses block-rate coefficient
+  (`1 - (1 - smooth)^blockLength`), not per-sample. This gives the
+  correct smoothing time constant regardless of block size. Applying
+  the per-sample coefficient once per block would under-smooth.
+
 ## UI / state
 
 - Slider sanity: nothing prevents `wlMin > wlMax`; the tracer handles

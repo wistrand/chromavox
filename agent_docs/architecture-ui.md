@@ -33,8 +33,9 @@ they track the canvas, not the full stage.
   Children have `flex-shrink: 0` so nothing compresses below its
   natural width.
 - **Left panel** carries: Emitters (count/wavelength range/rays/spread/
-  aperture), Sensors (count/sync/factor), and the Selected property
-  panel. Global settings (aspect, no-overlap, distort, stats, spectrum
+  aperture plus a **lambda bend** slider below the wavelength sliders),
+  Sensors (count/sync/factor), and the Selected property panel.
+  Global settings (aspect, no-overlap, distort, stats, spectrum
   toggles, tracer indicator) moved to the Bench toolbar dropdown.
   Audio in/out controls live entirely in the toolbar `▾` dropdowns.
   Scrolls internally.
@@ -93,8 +94,11 @@ key bindings — they include:
 - A to toggle audio in.
 - Q to toggle audio out.
 - H or ? to toggle the help dialog.
-- Keyboard claviature (when Audio in source is `keyboard`): bottom-row
-  piano layout, comma / period to shift octave.
+- Keyboard claviature (works alongside any source — see
+  architecture-audio.md): bottom-row piano layout, comma / period to
+  shift octave.
+- 1/2/3/4 toggle floating windows: 1=mic spectrum, 2=synth spectrum,
+  3=synth waveform, 4=stats.
 
 Shortcuts are ignored when focus is in a form control so typing into
 inputs isn't hijacked. They are also short-circuited while a mouse

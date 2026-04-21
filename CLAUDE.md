@@ -38,8 +38,8 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [Delay materials](agent_docs/architecture-delay.md)
 - [MIDI input](agent_docs/architecture-midi.md)
 - [Ableton Push](agent_docs/architecture-push.md)
+- [Akai controllers](agent_docs/architecture-akai-controllers.md)
 - [GPU tracer](agent_docs/architecture-gpu-tracer.md)
-- [Ping-pong tracer plan](agent_docs/plan-pingpong-tracer.md)
 - [Song format design](agent_docs/design-song-format.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
 
@@ -174,12 +174,22 @@ Detailed notes are split into topic files under `agent_docs/`:
   for sine, `1` for noise/acid) to recover 0–1 micGain, then floor
   0.15, gamma 1.5, and `1/sqrt(sc * gainK)` voice scale. Sine
   partials get 1/k rolloff for neutral timbre. `tanh` soft limiter
-  at ±0.8 prevents hard clipping. Three carrier modes: `sine`
-  (harmonic partials), `noise` (unity-gain Csound `resonz` bandpass;
-  `bp = (y0-y2)*(1-r²)/2`, Q=25), `acid` (PolyBLEP saw → 3-pole
-  TPT/ZDF diode ladder filter with `tanh` feedback; sensor energy
-  drives cutoff for 303-style squelch; Resonance + Env Amount
-  sliders). Partials slider visible only in sine mode. Voices with
+  at ±0.8 prevents hard clipping. Seven carrier modes: `sine`
+  (harmonic partials, inverted bin-to-partial mapping: blue→high
+  partials, red→fundamental), `noise` (unity-gain Csound `resonz`
+  bandpass; `bp = (y0-y2)*(1-r²)/2`, variable Q via slider, default
+  14), `acid` (PolyBLEP saw → 3-pole TPT/ZDF diode ladder filter
+  with `tanh` feedback; sensor energy drives cutoff for 303-style
+  squelch; Resonance + Env Amount + Cutoff + Decay + Drive sliders),
+  `fm` (FM synthesis, ratio + depth), `supersaw` (7 detuned saws,
+  detune slider), `pulse` (PolyBLEP variable-width pulse, Width
+  slider 0.05-0.95), `karplus` (Karplus-Strong delay line per voice,
+  Damping + Excite sliders, continuous + transient excitation).
+  Spectral centroid (inverted: blue→1.0, red→0.0) modulates per-
+  carrier parameters (acid→cutoff, noise→freq, fm→ratio,
+  supersaw→detune, pulse→duty, karplus→excitation filter). Carrier
+  params defined in `docs/carriers.js`. Partials slider visible only
+  in sine mode. Voices with
   all gains < 1e-5 are skipped (voice stealing). Rebuild sends
   frequency array + `fullScale` via `MessagePort`. `synth.enable()`
   is async (awaits `audioWorklet.addModule`). Log-mode voice
@@ -192,14 +202,17 @@ Detailed notes are split into topic files under `agent_docs/`:
   `[]` (not `null`) so `directLevels` returns an all-zeros array
   instead of falling through to the FFT path, preventing spectral
   leakage from the fading oscillator from lighting up many emitters.
-- Touch/keys source (default): combined touch + keyboard, no
-  AudioContext. Touch on the left edge of the bench (≤60px from
-  emitter ticks, including letterbox black bars) sets emitter levels
-  by Y position. Keyboard claviature (ZXCVBNM layout) sets by scale
-  degree. Both write to `_touchLevels`. Multi-touch supported. All
-  emitters force-enabled. `stopPropagation` on touch-zone pointers
-  prevents UI drag interference. Element hit-test has a 15px
-  proximity fallback for easier touch selection.
+- Touch/keys always active: touch zone and keyboard claviature work
+  alongside any source, not only when `touch/keys` is selected.
+  `_installKeyboard()` extracted, called for all sources. Touch/keys
+  levels overlay on other sources via `max()`. Touch on the left edge
+  of the bench (≤60px from emitter ticks, including letterbox black
+  bars) sets emitter levels by Y position. Keyboard claviature
+  (ZXCVBNM layout) sets by scale degree. Both write to
+  `_touchLevels`. Multi-touch supported. All emitters force-enabled.
+  `stopPropagation` on touch-zone pointers prevents UI drag
+  interference. Element hit-test has a 15px proximity fallback for
+  easier touch selection.
 - UI shortcuts ignore key events while a drag is in progress
   (`if (this.dragging) return;`) so playing keyboard notes mid-drag
   doesn't hijack the gesture.
@@ -213,9 +226,10 @@ Detailed notes are split into topic files under `agent_docs/`:
   scale degrees, so any scale gets full coverage with no overlap.
   Span slider hidden for log and voice. `micBands` normalization is
   **split by source**: file source uses `dbToLin` (linear amplitude)
-  with `_peakHold` (decays 0.95/frame) + `sqrt` shaping; all other
-  sources use absolute `dbNorm` (dB to 0–1 via analyser range),
-  floor 0.15, gamma 1.5, noise gate 0.10.
+  with `_peakHold` (decays 0.95/frame), linear (no sqrt, no gamma);
+  all other sources use absolute `dbNorm` (dB to 0–1 via analyser
+  range), floor 0.45 for scale modes / 0.20 for log modes, noise
+  gate 0.10. Worklet floor reduced to 0.02, gamma removed (linear).
 - Synth side can run **independent** of the mic side via the
   `Independent scale` checkbox — separate Mode/Base/Span controls
   appear (and stay visible but **disabled / dimmed** via the

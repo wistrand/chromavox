@@ -247,6 +247,13 @@ USB. See `notes/push3-display.md` for protocol details.
   bilinear `imageSmoothingEnabled` for quality. Preserves thin ray
   lines that single-step downsampling would lose.
 
+## Related: Akai controllers
+
+`docs/akai-mpc.js` (MPC) and `docs/akai-apc.js` (APC Mini MK2) follow
+the same interface pattern. See `architecture-akai-controllers.md`.
+`main.js` detects the device by MIDI port name and instantiates the
+matching controller.
+
 ## Future extensions
 
 - **Scene buttons** (CC 36-43): preset load.

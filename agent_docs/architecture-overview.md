@@ -54,6 +54,15 @@ No dependencies.
   scale length. `_connectDisplay()` streams bench canvas and sensor
   spectrogram PNGs to the display sidecar via WebSocket (retry limited
   to 5 attempts).
+- `docs/akai-mpc.js` — Akai MPC Live II / One / X integration: 4x4
+  RGB pads via SysEx, Q-Link encoders, jog wheel. See
+  `architecture-akai-controllers.md`.
+- `docs/akai-apc.js` — Akai APC Mini MK2 / APC64 integration: 8x8
+  RGB pads via SysEx (with palette fallback), faders with pickup mode,
+  in-key layout matching Push. See `architecture-akai-controllers.md`.
+- `docs/carriers.js` — carrier parameter descriptors (UI, persistence,
+  automation, worklet defaults). Single source of truth for all
+  carrier modes.
 - `docs/main.js` — wiring + dirty-flag render loop + device pickers +
   localStorage persistence (auto-save on `markDirty`, restore on load).
   Spectrum readout smoothing (`_displayBins`, `_peakMax`, `_blurBuf`)
