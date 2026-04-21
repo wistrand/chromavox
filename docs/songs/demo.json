@@ -8,6 +8,9 @@
   "global": {
     "emitter": { "count": 24, "wlMin": 400, "wlMax": 700, "raysPerSource": 256 },
     "sensorCount": 24,
+    "mode": "chromatic",
+    "base": 130.81,
+    "span": 1,
     "carrier": "sine",
     "partials": 4,
     "volume": 0.25

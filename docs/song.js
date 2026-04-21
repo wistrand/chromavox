@@ -34,6 +34,7 @@ export class SongPlayer {
     this.time = 0;
     this.state = 'stopped';
     this.keyframesPaused = false;
+    this._globalApplied = false;
   }
 
   _inferDuration(song) {
@@ -129,7 +130,7 @@ export class SongPlayer {
       t = 0;
     }
 
-    // Apply global emitter/sensor config from first keyframe or global.
+    // Apply global emitter/sensor/scale config.
     const g = this.song.global;
     if (g) {
       if (g.emitter) {
@@ -139,6 +140,11 @@ export class SongPlayer {
         if (g.emitter.raysPerSource !== undefined) scene.emitter.raysPerSource = g.emitter.raysPerSource;
       }
       if (g.sensorCount !== undefined) scene.sensorCount = g.sensorCount;
+      // Scale / carrier settings. Applied once on play via onGlobal callback.
+      if (!this._globalApplied) {
+        this._globalApplied = true;
+        if (this.onGlobal) this.onGlobal(g);
+      }
     }
 
     // Build element map for each keyframe.

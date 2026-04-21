@@ -805,6 +805,101 @@ document.getElementById('midi-gain').addEventListener('input', e => {
   stage.addEventListener('pointercancel', touchUp);
 }
 
+// --- Right wall: drag synth base / pinch span (independent scale only) ---
+{
+  const stage = document.getElementById('stage');
+  const RTOUCH_ZONE_PX = 60;
+  const _rPointers = new Map(); // pointerId → { startY, startBase }
+  const synthBaseSelect = document.getElementById('synth-base');
+  const synthSpanSlider = document.getElementById('synth-span');
+  const baseOptions = [...synthBaseSelect.options].map(o => parseFloat(o.value)).sort((a, b) => a - b);
+
+  function isRightZone(e) {
+    const rect = canvas.getBoundingClientRect();
+    const benchX = (e.clientX - rect.left) / rect.width * scene.bench.w;
+    return benchX > scene.bench.w - RTOUCH_ZONE_PX;
+  }
+  function clientToBenchY(e) {
+    const rect = canvas.getBoundingClientRect();
+    return (e.clientY - rect.top) / rect.height * scene.bench.h;
+  }
+  // Find the nearest base frequency option to a target Hz.
+  function nearestBase(hz) {
+    let best = baseOptions[0], bestDist = Infinity;
+    for (const b of baseOptions) {
+      const d = Math.abs(Math.log(b) - Math.log(hz));
+      if (d < bestDist) { bestDist = d; best = b; }
+    }
+    return best;
+  }
+
+  stage.addEventListener('pointerdown', e => {
+    if (!synthIndep() || !isRightZone(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    _rPointers.set(e.pointerId, {
+      startY: clientToBenchY(e),
+      startBase: synthBase(),
+    });
+  });
+
+  stage.addEventListener('pointermove', e => {
+    if (!_rPointers.has(e.pointerId)) return;
+    e.stopPropagation();
+    const info = _rPointers.get(e.pointerId);
+
+    if (_rPointers.size === 1) {
+      // Single pointer: drag to shift synth base frequency.
+      // Dragging up = higher base, down = lower. 100 bench px = 1 octave.
+      const dy = info.startY - clientToBenchY(e);
+      const octaveShift = dy / 100;
+      const targetHz = info.startBase * Math.pow(2, octaveShift);
+      const nb = nearestBase(targetHz);
+      if (parseFloat(synthBaseSelect.value) !== nb) {
+        synthBaseSelect.value = nb;
+        synth.setBase(nb);
+        rebuildSensorLabels();
+        dirty = true;
+      }
+    } else if (_rPointers.size === 2) {
+      // Two pointers: pinch to zoom span.
+      // Handled below in the pinch logic.
+    }
+  });
+
+  // Pinch zoom for synth span.
+  let _rPinchStart = null;
+  stage.addEventListener('pointermove', e => {
+    if (_rPointers.size !== 2) { _rPinchStart = null; return; }
+    if (!_rPointers.has(e.pointerId)) return;
+    // Update this pointer's current Y.
+    _rPointers.get(e.pointerId)._curY = clientToBenchY(e);
+    const ptrs = [..._rPointers.values()];
+    if (ptrs.length < 2 || ptrs[0]._curY === undefined || ptrs[1]._curY === undefined) return;
+    const curDist = Math.abs(ptrs[0]._curY - ptrs[1]._curY);
+    if (!_rPinchStart) {
+      _rPinchStart = { dist: curDist, span: parseInt(synthSpanSlider.value, 10) || 1 };
+      return;
+    }
+    const scale = curDist / (_rPinchStart.dist || 1);
+    const newSpan = Math.max(1, Math.min(12, Math.round(_rPinchStart.span * scale)));
+    if (parseInt(synthSpanSlider.value, 10) !== newSpan) {
+      synthSpanSlider.value = newSpan;
+      document.getElementById('synth-span-val').textContent = newSpan;
+      synth.setStep(newSpan);
+      rebuildSensorLabels();
+      dirty = true;
+    }
+  });
+
+  const rUp = e => {
+    _rPointers.delete(e.pointerId);
+    if (_rPointers.size < 2) _rPinchStart = null;
+  };
+  stage.addEventListener('pointerup', rUp);
+  stage.addEventListener('pointercancel', rUp);
+}
+
 // MIDI device picker.
 async function populateMidiDevices() {
   const sel = document.getElementById('midi-device');
@@ -1552,6 +1647,40 @@ window.addEventListener('resize', () => {
     if (param === 'volume' && !synth._volumeOverride) synth.setVolume(value);
     else if (param === 'carrier') synth.setCarrier(value);
     else synth.setParam(param, value);
+  };
+
+  // Apply global scale/carrier settings from song on first play frame.
+  songPlayer.onGlobal = g => {
+    if (g.mode) {
+      document.getElementById('mic-mode').value = g.mode;
+      synth.setMode(g.mode);
+      syncSpanVisibility();
+      syncKeyboardScale();
+      rebuildEmitterLabels();
+    }
+    if (g.base) {
+      const baseSel = document.getElementById('mic-base');
+      // Find closest option.
+      let best = baseSel.options[0];
+      for (const opt of baseSel.options) {
+        if (Math.abs(parseFloat(opt.value) - g.base) < Math.abs(parseFloat(best.value) - g.base)) best = opt;
+      }
+      baseSel.value = best.value;
+      synth.setBase(parseFloat(best.value));
+      rebuildEmitterLabels();
+    }
+    if (g.span !== undefined) {
+      document.getElementById('chromatic-span').value = g.span;
+      document.getElementById('chromatic-span-val').textContent = g.span;
+      synth.setStep(g.span);
+    }
+    if (g.carrier) {
+      document.getElementById('synth-carrier').value = g.carrier;
+      synth.setCarrier(g.carrier);
+      // Trigger carrier UI rebuild.
+      document.getElementById('synth-carrier').dispatchEvent(new Event('change'));
+    }
+    rebuildSensorLabels();
   };
 
   // Update transport display every frame.
