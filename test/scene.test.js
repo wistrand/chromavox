@@ -155,7 +155,7 @@ test('serializeScene + deserializeScene roundtrip', () => {
   assert(restored.emitter.count === scene.emitter.count);
 });
 
-test('deserializeScene: rescales to canonical bench', () => {
+test('deserializeScene: preserves non-legacy bench size', () => {
   const json = JSON.stringify({
     version: 1,
     bench: { w: 100, h: 200 },
@@ -164,9 +164,23 @@ test('deserializeScene: rescales to canonical bench', () => {
     elements: [{ kind: 'prism', x: 50, y: 100, size: 30, material: 'crown', rot: 0 }],
   });
   const restored = deserializeScene(json);
+  assertClose(restored.bench.w, 100, 1);
+  assertClose(restored.bench.h, 200, 1);
+  assert(restored.elements[0].x === 50, 'element x should NOT be rescaled');
+});
+
+test('deserializeScene: rescales legacy 1600x900 bench', () => {
+  const json = JSON.stringify({
+    version: 1,
+    bench: { w: 1600, h: 900 },
+    emitter: { count: 4, wlMin: 400, wlMax: 700, raysPerSource: 10, spreadDeg: 0, disabled: [] },
+    sensorCount: 8,
+    elements: [{ kind: 'prism', x: 800, y: 450, size: 120, material: 'crown', rot: 0 }],
+  });
+  const restored = deserializeScene(json);
   assertClose(restored.bench.w, CANONICAL_BENCH.w, 1);
   assertClose(restored.bench.h, CANONICAL_BENCH.h, 1);
-  assert(restored.elements[0].x !== 50, 'element x should be rescaled');
+  assertClose(restored.elements[0].x, 800 * CANONICAL_BENCH.w / 1600, 1);
 });
 
 test('serializeScene: output is valid JSON', () => {

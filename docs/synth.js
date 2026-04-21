@@ -11,7 +11,7 @@
 import { scaleFreq } from './spectrum.js';
 import { CARRIERS, ALL_PARAM_IDS, PARAM_DEFAULTS } from './carriers.js';
 
-const WORKLET_SRC = `
+export const _WORKLET_SRC = `
 // Fast tanh via lookup table. 4096 entries over [-4, 4].
 // Beyond ±4, tanh ≈ ±1. Linear interpolation between entries.
 const _TANH_N = 4096;
@@ -409,7 +409,7 @@ export class SensorSynth {
     if (this.sinkId && typeof this.ctx.setSinkId === 'function') {
       this.ctx.setSinkId(this.sinkId).catch(err => console.warn('setSinkId:', err));
     }
-    const blob = new Blob([WORKLET_SRC], { type: 'application/javascript' });
+    const blob = new Blob([_WORKLET_SRC], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
     await this.ctx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);

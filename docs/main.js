@@ -9,6 +9,8 @@ import { wavelengthToRGB } from './spectrum.js';
 import { MicModulator, micBands } from './mic.js';
 import { SensorSynth } from './synth.js';
 import { PushController } from './push.js';
+import { MPCController } from './akai-mpc.js';
+import { APCController, apcPadNoteToEmitter } from './akai-apc.js';
 import { scaleFreq } from './spectrum.js';
 import { SongPlayer } from './song.js';
 import { CARRIERS, ALL_PARAM_IDS } from './carriers.js';
@@ -127,10 +129,16 @@ const mic = new MicModulator();
 const songPlayer = new SongPlayer();
 const synth = new SensorSynth();
 const push = new PushController();
+const mpc = new MPCController();
+const apc = new APCController();
+// Active hardware controller (whichever is connected). All share the
+// same onCC interface, so main.js wiring is controller-agnostic.
+let hwController = null;
 
-// Push encoder CC → selected element property control.
-// CC 71-78 map to: rotation, spin, x, y, size/w, size/h, delayK, hue.
-push.onCC = (cc, val) => {
+// Encoder CC → selected element property control.
+// CC 71-78 map to: x, y, rotation, spin, hue, delay, size/w, h/radius.
+// Shared by Push and MPC (MPC remaps Q-Link CCs to 71-74 internally).
+const encoderCC = (cc, val) => {
   if (!ui.selected && scene.elements.length > 0) {
     ui.select(scene.elements[0]);
     // select() triggers onChange which may leave history clean.
@@ -178,7 +186,10 @@ push.onCC = (cc, val) => {
   ui.endEdit();
   markDirty();
 };
-// Route mic CC events: transport buttons handled here, encoders to Push.
+push.onCC = encoderCC;
+mpc.onCC = encoderCC;
+apc.onCC = encoderCC;
+// Route mic CC events: transport buttons handled here, encoders to controller.
 mic.onCC = (cc, val) => {
   // Play button (CC 85) toggles audio out. Only on press (val > 0).
   if (cc === 85 && val > 0) { synthBtn.click(); return; }
@@ -204,17 +215,39 @@ mic.onCC = (cc, val) => {
     ui.select(scene.elements[next]);
     return;
   }
-  push.handleCC(cc, val);
+  if (hwController) hwController.handleCC(cc, val);
+  else push.handleCC(cc, val);
 };
 
-// Attach/detach Push after MIDI enable/disable. Called from all the
-// mic.enable / mic.disable sites so the wiring stays in one place.
+// Attach/detach hardware controller after MIDI enable/disable.
+// Auto-detects Push vs MPC by port name.
 function attachPush() {
-  if (mic.source === 'midi' && mic._midiAccess && mic._midiInput) {
+  if (mic.source !== 'midi' || !mic._midiAccess || !mic._midiInput) return;
+  const name = mic._midiInput.name || '';
+  if (name.includes('MPC')) {
+    mpc.attach(mic._midiAccess, mic._midiInput);
+    hwController = mpc;
+    mic._padMapper = (note) => {
+      const k = note - 36;
+      return (k >= 0 && k < 16) ? k : -1;
+    };
+  } else if (name.includes('APC')) {
+    apc.attach(mic._midiAccess, mic._midiInput);
+    hwController = apc;
+    mic._padMapper = apcPadNoteToEmitter;
+  } else {
     push.attach(mic._midiAccess, mic._midiInput);
+    hwController = push;
+    mic._padMapper = null;
   }
 }
-function detachPush() { push.detach(); }
+function detachPush() {
+  push.detach();
+  mpc.detach();
+  apc.detach();
+  hwController = null;
+  mic._padMapper = null;
+}
 
 function currentBaseHz() {
   return parseFloat(document.getElementById('mic-base').value);
@@ -231,6 +264,8 @@ function syncKeyboardScale() {
   const scaleName = (mode === 'log' || mode === 'voice') ? 'chromatic' : mode;
   mic.setKeyboardScale(scaleName, base, step);
   push.setScale(scaleName);
+  mpc.setScale(scaleName);
+  apc.setScale(scaleName);
 }
 
 function syncBaseSelect(hz) {
@@ -1603,9 +1638,9 @@ function frame() {
     synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount);
   }
 
-  // Push pad LED feedback (no GL dependency — runs every frame).
-  if (push.output) {
-    push.updateFromSensors(tracer.sensorBins, tracer.binCount, scene.sensorCount, scene.emitter, scene.runtime);
+  // Hardware controller pad LED feedback (Push or MPC).
+  if (hwController && hwController.output) {
+    hwController.updateFromSensors(tracer.sensorBins, tracer.binCount, scene.sensorCount, scene.emitter, scene.runtime);
   }
 
   cv.updateStats();

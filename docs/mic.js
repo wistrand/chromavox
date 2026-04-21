@@ -358,7 +358,7 @@ export class MicModulator {
       if (!this._midiNotes) return new Float32Array(n);
       const levels = new Float32Array(n);
       for (const [note, vel] of this._midiNotes) {
-        const idx = padNoteToEmitter(note);
+        const idx = this._padMapper ? this._padMapper(note) : padNoteToEmitter(note);
         if (idx >= 0 && idx < n) levels[idx] = Math.max(levels[idx], Math.min(1, vel * this.midiGain));
       }
       return levels;
