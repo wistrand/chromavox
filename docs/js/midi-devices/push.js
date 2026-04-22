@@ -10,8 +10,8 @@
 //
 // See notes/push-midi-map.md for the full reference.
 
-import { wavelengthToRGB, SCALES } from './spectrum.js';
-import { makeElement, localPolygon } from './scene.js';
+import { wavelengthToRGB, SCALES } from '../spectrum.js';
+import { makeElement, localPolygon } from '../scene.js';
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s;
@@ -76,10 +76,13 @@ export function padNoteToEmitter(note) {
 }
 
 export class PushController {
+  static matches(name) { return /push/i.test(name); }
+  static label = 'Push in-key';
   constructor() {
     this.output = null;
     this.sysex = false;
     this.onCC = null;
+    this.padMapper = null;
 
     // 8x8 pixel map (source of truth). Index = pad index (0-63), 3 bytes per pixel.
     this.pixels = new Uint8Array(PAD_COUNT * 3);

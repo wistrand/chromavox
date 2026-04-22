@@ -3,7 +3,7 @@
 
 import { test, assert, assertClose } from './run.js';
 import { readFileSync } from 'fs';
-import { PARAM_DEFAULTS } from '../docs/carriers.js';
+import { PARAM_DEFAULTS } from '../docs/js/carriers.js';
 
 // --- Worklet shim ---
 const _registered = {};
@@ -19,7 +19,7 @@ globalThis.registerProcessor = (name, cls) => { _registered[name] = cls; };
 
 // Load worklet source from the external file, patch PARAM_DEFAULTS,
 // and eval — same as the browser path but using fs instead of fetch.
-const _raw = readFileSync('docs/synth-worklet.js', 'utf-8');
+const _raw = readFileSync('docs/js/synth-worklet.js', 'utf-8');
 const _WORKLET_SRC = _raw.replace('__PARAM_DEFAULTS__', JSON.stringify(PARAM_DEFAULTS));
 (0, eval)(_WORKLET_SRC);
 

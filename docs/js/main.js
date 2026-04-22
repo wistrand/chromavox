@@ -8,9 +8,8 @@ import { UI } from './ui.js';
 import { wavelengthToRGB } from './spectrum.js';
 import { MicModulator, micBands } from './mic.js';
 import { SensorSynth } from './synth.js';
-import { PushController, padNoteToEmitter } from './push.js';
-import { MPCController } from './akai-mpc.js';
-import { APCController, apcPadNoteToEmitter } from './akai-apc.js';
+import { padNoteToEmitter } from './midi-devices/push.js';
+import { MidiRouter } from './midi-devices/router.js';
 import { scaleFreq } from './spectrum.js';
 import { SongPlayer } from './song.js';
 import { CARRIERS, ALL_PARAM_IDS } from './carriers.js';
@@ -141,12 +140,7 @@ let lastFrameTime = performance.now() / 1000;
 const mic = new MicModulator();
 const songPlayer = new SongPlayer();
 const synth = new SensorSynth();
-const push = new PushController();
-const mpc = new MPCController();
-const apc = new APCController();
-// Active hardware controller (whichever is connected). All share the
-// same onCC interface, so main.js wiring is controller-agnostic.
-let hwController = null;
+const midi = new MidiRouter();
 
 // Encoder CC → selected element property control.
 // CC 71-78 map to: x, y, rotation, spin, hue, delay, size/w, h/radius.
@@ -166,9 +160,9 @@ const encoderCC = (cc, val) => {
   ui.beginEdit();
   // Encoder order: x, y, rotation, spin, hue, delay, size/w, h/radius.
   switch (cc) {
-    case 71: el.x += Math.sign(delta) * 0.5; break;
+    case 71: el.x += -Math.sign(delta) * 0.5; break;
     case 72: el.y += Math.sign(delta) * 0.5; break;
-    case 73: el.rot += Math.sign(delta) * 0.005; break;
+    case 73: el.rot += -Math.sign(delta) * 0.005; break;
     case 74: el.spin = (el.spin || 0) - Math.sign(delta) * 0.4 * Math.PI / 180; break;
     case 75: {
       const cur = el.color || '#ffffff';
@@ -199,9 +193,7 @@ const encoderCC = (cc, val) => {
   ui.endEdit();
   markDirty();
 };
-push.onCC = encoderCC;
-mpc.onCC = encoderCC;
-apc.onCC = encoderCC;
+midi.setCCHandler(encoderCC);
 // Keyboard note on/off in mic.js needs to wake the frame loop.
 mic.onTouchChange = () => setDirty();
 mic.onMidiChange = () => setDirty();
@@ -234,58 +226,27 @@ mic.onCC = (cc, val) => {
     ui.select(scene.elements[next]);
     return;
   }
-  if (hwController) hwController.handleCC(cc, val);
-  else push.handleCC(cc, val);
+  midi.handleCC(cc, val);
 };
 
-// Attach/detach hardware controller after MIDI enable/disable.
-// Auto-detects controller type by port name.
-function attachPush() {
-  if (mic.source !== 'midi' || !mic._midiAccess || !mic._midiInput) return;
-  const name = mic._midiInput.name || '';
-  let mapperType;
-  if (name.includes('MPC')) {
-    mpc.attach(mic._midiAccess, mic._midiInput);
-    hwController = mpc;
-    mic._padMapper = (note) => {
-      const k = note - 36;
-      return (k >= 0 && k < 16) ? k : -1;
-    };
-    mapperType = 'MPC 4x4';
-  } else if (name.includes('APC')) {
-    apc.attach(mic._midiAccess, mic._midiInput);
-    hwController = apc;
-    mic._padMapper = apcPadNoteToEmitter;
-    mapperType = 'APC 8x8';
-  } else if (/push/i.test(name)) {
-    push.attach(mic._midiAccess, mic._midiInput);
-    hwController = push;
-    mic._padMapper = null;
-    mapperType = 'Push in-key';
-  } else {
-    hwController = null;
-    mic._padMapper = (note) => {
-      const base = mic._kbdMidiBase ?? 48;
-      const idx = note - base;
-      return (idx >= 0 && idx < 128) ? idx : -1;
-    };
-    _syncKbdMidiBase();
-    mapperType = 'keyboard (linear)';
-  }
-  const ml = document.getElementById('midi-mapper');
-  if (ml) ml.textContent = `Mapper: ${mapperType} — ${name}`;
-}
 // Sync the keyboard MIDI base note from the current base Hz setting.
 function _syncKbdMidiBase() {
   const hz = currentBaseHz();
   // Convert Hz to MIDI note: note = 12 * log2(hz / 440) + 69.
   mic._kbdMidiBase = Math.round(12 * Math.log2(hz / 440) + 69);
 }
+midi.keyboard.onAttach = _syncKbdMidiBase;
+
+function attachPush() {
+  if (mic.source !== 'midi') return;
+  const res = midi.attach(mic._midiAccess, mic._midiInput, mic);
+  if (!res) return;
+  mic._padMapper = res.padMapper;
+  const ml = document.getElementById('midi-mapper');
+  if (ml) ml.textContent = res.label;
+}
 function detachPush() {
-  push.detach();
-  mpc.detach();
-  apc.detach();
-  hwController = null;
+  midi.detach();
   mic._padMapper = null;
 }
 
@@ -303,9 +264,7 @@ function syncKeyboardScale() {
   const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
   const scaleName = (mode === 'log' || mode === 'voice') ? 'chromatic' : mode;
   mic.setKeyboardScale(scaleName, base, step);
-  push.setScale(scaleName);
-  mpc.setScale(scaleName);
-  apc.setScale(scaleName);
+  midi.setScale(scaleName);
 }
 
 function syncBaseSelect(hz) {
@@ -1958,8 +1917,8 @@ function frame() {
     tracer.trace(scene);
     // Push display capture hooks into the renderer between the element
     // pass and the overlay pass — gets rays + elements without ticks/lines.
-    renderer.onPreOverlay = (push.output && push.displayConnected)
-      ? () => push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas)
+    renderer.onPreOverlay = (midi.push.output && midi.push.displayConnected)
+      ? () => midi.push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas)
       : null;
     // Highlight trace: single emitter, CPU, overlay only.
     if (highlightEmitter >= 0) {
@@ -2005,8 +1964,8 @@ function frame() {
   }
 
   // Hardware controller pad LED feedback (Push or MPC).
-  if (hwController && hwController.output) {
-    hwController.updateFromSensors(tracer.sensorBins, tracer.binCount, scene.sensorCount, scene.emitter, scene.runtime);
+  if (midi.active && midi.active.output) {
+    midi.active.updateFromSensors(tracer.sensorBins, tracer.binCount, scene.sensorCount, scene.emitter, scene.runtime);
   }
 
   cv.updateStats();

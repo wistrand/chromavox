@@ -3,7 +3,7 @@ import {
   wavelengthToRGB, sellmeierN, cauchyN, materialN, materialAbsorption,
   materialDelay, elementDelay, elementAbsorption, elementReflectance,
   hexToRgb, scaleFreq, mirrorReflectance, SCALES, MATERIALS,
-} from '../docs/spectrum.js';
+} from '../docs/js/spectrum.js';
 
 // --- wavelengthToRGB ---
 

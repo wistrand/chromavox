@@ -1,6 +1,6 @@
 import { test, assert, assertClose } from './run.js';
-import { Tracer } from '../docs/raytracer.js';
-import { createScene, makeElement } from '../docs/scene.js';
+import { Tracer } from '../docs/js/raytracer.js';
+import { createScene, makeElement } from '../docs/js/scene.js';
 
 function traceDefault(scene) {
   const t = new Tracer();

@@ -13,8 +13,8 @@
 // JS tracer call with GPU readback and run the same comparisons.
 
 import { readFileSync, readdirSync } from 'fs';
-import { Tracer } from '../docs/raytracer.js';
-import { createScene, makeElement, deserializeScene } from '../docs/scene.js';
+import { Tracer } from '../docs/js/raytracer.js';
+import { createScene, makeElement, deserializeScene } from '../docs/js/scene.js';
 
 const SNAPSHOT_DIR = 'test/snapshots';
 const SEG_FLOATS = 12;

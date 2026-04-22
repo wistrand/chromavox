@@ -2,7 +2,7 @@ import { test, assert, assertClose } from './run.js';
 import {
   createScene, makeElement, localPolygon, worldEdges, pointInPolygon,
   materialOptics, serializeScene, deserializeScene, CANONICAL_BENCH,
-} from '../docs/scene.js';
+} from '../docs/js/scene.js';
 
 // --- createScene ---
 

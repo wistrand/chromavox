@@ -12,7 +12,7 @@
 //   Port 1 (Private) — pads/buttons
 // attach() must find the Public output port for LED control.
 
-import { wavelengthToRGB } from './spectrum.js';
+import { wavelengthToRGB } from '../spectrum.js';
 
 const PAD_BASE = 36;    // Note offset (GM drum map: C1)
 const PAD_ROWS = 4;
@@ -39,12 +39,18 @@ export function mpcPadNoteToEmitter(note) {
 }
 
 export class MPCController {
+  static matches(name) { return name.includes('MPC'); }
+  static label = 'MPC 4x4';
   constructor() {
     this.output = null;
     this.sysex = false;
     this.onCC = null;
     this.animating = false;
     this._pid = 0x47; // default: MPC Live II
+    this.padMapper = (note) => {
+      const k = note - 36;
+      return (k >= 0 && k < 16) ? k : -1;
+    };
 
     this.pixels = new Uint8Array(PAD_COUNT * 3);
     this._hwState = new Uint8Array(PAD_COUNT * 3); // track sent RGB

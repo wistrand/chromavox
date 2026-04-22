@@ -4,7 +4,7 @@
 // where the sound came from.
 
 import { scaleFreq, SCALES } from './spectrum.js';
-import { padNoteToEmitter } from './push.js';
+import { padNoteToEmitter } from './midi-devices/push.js';
 
 export class MicModulator {
   constructor() {

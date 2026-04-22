@@ -14,7 +14,7 @@ import { CARRIERS, ALL_PARAM_IDS, PARAM_DEFAULTS } from './carriers.js';
 // Worklet source lives in synth-worklet.js (a real JS file for IDE
 // support). Loaded via fetch, patched with PARAM_DEFAULTS, and
 // turned into a Blob URL at enable() time.
-export const WORKLET_FILE = 'synth-worklet.js';
+export const WORKLET_FILE = 'js/synth-worklet.js';
 export { PARAM_DEFAULTS };
 
 // Legacy export for tests: set after first load.

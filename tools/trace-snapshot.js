@@ -13,8 +13,8 @@
 // against these snapshots to verify correctness.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { Tracer } from '../docs/raytracer.js';
-import { createScene, deserializeScene } from '../docs/scene.js';
+import { Tracer } from '../docs/js/raytracer.js';
+import { createScene, deserializeScene } from '../docs/js/scene.js';
 
 const SNAPSHOT_DIR = 'test/snapshots';
 mkdirSync(SNAPSHOT_DIR, { recursive: true });

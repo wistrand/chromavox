@@ -16,8 +16,8 @@
 // Faders (APC Mini MK2): CC 48-56 (9 faders, absolute 0-127).
 // Track buttons: notes 0x64-0x6B. Scene launch: notes 0x70-0x77.
 
-import { wavelengthToRGB, SCALES } from './spectrum.js';
-import { makeElement, localPolygon } from './scene.js';
+import { wavelengthToRGB, SCALES } from '../spectrum.js';
+import { makeElement, localPolygon } from '../scene.js';
 
 const PAD_ROWS = 8;
 const PAD_COLS = 8;
@@ -54,11 +54,14 @@ export function apcPadNoteToEmitter(note) {
 }
 
 export class APCController {
+  static matches(name) { return name.includes('APC'); }
+  static label = 'APC 8x8';
   constructor() {
     this.output = null;
     this.sysex = false;
     this.onCC = null;
     this.animating = false;
+    this.padMapper = apcPadNoteToEmitter;
 
     this.pixels = new Uint8Array(PAD_COUNT * 3);
     this._hwState = new Uint8Array(PAD_COUNT * 3);
