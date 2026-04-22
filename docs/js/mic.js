@@ -139,6 +139,7 @@ export class MicModulator {
             // Global bend (ch 0): shift all emitters. Stored as a
             // single value; main.js applies it to wlPerSource.
             this._globalBend = bend;
+            if (this.onGlobalBend) this.onGlobalBend(bend);
           }
         }
         // Wake the frame loop on any state-changing MIDI message.

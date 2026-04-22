@@ -37,6 +37,10 @@ export class SongPlayer {
     this.keyframesPaused = false;
     this.bendPaused = false;
     this._globalApplied = false;
+    // Notify listeners — otherwise switching from a playing/paused song
+    // leaves the UI (play button icon, seek slider, time readout) stuck
+    // in the previous song's state.
+    this.onStateChange?.(this.state);
   }
 
   _inferDuration(song) {

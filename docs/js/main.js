@@ -243,6 +243,9 @@ midi.setCCHandler(encoderCC);
 // Keyboard note on/off in mic.js needs to wake the frame loop.
 mic.onTouchChange = () => setDirty();
 mic.onMidiChange = () => setDirty();
+// MIDI pitch bend arriving from a hardware controller takes over from
+// the song's bend automation (same semantics as dragging the slider).
+mic.onGlobalBend = () => { if (songPlayer.playing) songPlayer.bendPaused = true; };
 // Route mic CC events: transport buttons handled here, encoders to controller.
 mic.onCC = (cc, val) => {
   // Play button (CC 85) toggles audio out. Only on press (val > 0).
