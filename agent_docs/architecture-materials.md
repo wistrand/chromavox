@@ -1,12 +1,12 @@
 # Architecture: Materials
 
-Defined in `docs/spectrum.js`. Each entry in `MATERIALS` has
+Defined in `docs/js/spectrum.js`. Each entry in `MATERIALS` has
 `type: 'dielectric' | 'mirror'`, dispersion data (Sellmeier coefficients
 for real glasses; Cauchy `A, B` for synthetic ones), and one of
 `absorb` (dielectrics) or `reflect` (mirrors). Both are Gaussian-band
 parametric: `{ base, peak, center, sigma }`.
 
-Refer to the `MATERIALS` object in `docs/spectrum.js` for the
+Refer to the `MATERIALS` object in `docs/js/spectrum.js` for the
 authoritative list of materials and their current tuning — the set
 changes over time.
 
@@ -30,7 +30,7 @@ changes over time.
 - `hexToRgb(hex)` — shared color parser used by both UI and renderer.
 
 The transmission-filter model's reference path length and the mirror
-reflectance mapping constants live at the top of `docs/spectrum.js`.
+reflectance mapping constants live at the top of `docs/js/spectrum.js`.
 
 ## UI integration
 

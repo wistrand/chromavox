@@ -1,15 +1,15 @@
 # Architecture: Elements
 
-Defined in `docs/scene.js` (geometry) and `docs/elements.js` (property
+Defined in `docs/js/scene.js` (geometry) and `docs/js/elements.js` (property
 schema). Convex polygons are easy; non-convex also works (e.g. `rabbit`)
 as long as winding is consistent (CW in y-down). Lens surfaces are
 arc-approximations with a fixed number of segments per arc — see
-`localPolygon` in `docs/scene.js` for the current values.
+`localPolygon` in `docs/js/scene.js` for the current values.
 
 Element kinds: `prism`, `block`, `mirror`, `mirror-concave`,
 `mirror-convex`, `lens-convex`, `lens-concave`, `circle`, `rabbit`.
 
-## Element property schema (`docs/elements.js`)
+## Element property schema (`docs/js/elements.js`)
 
 Single source of truth for per-kind element properties. Exports
 `ELEMENTS` (9 kinds) and `ELEMENT_KINDS`.
@@ -77,7 +77,7 @@ ray tracer intersects. Straight-edged elements emit segment edges as
 before. See architecture-raytracer.md for the edge format and reduction
 table.
 
-The renderer's `MAX_EDGES` limit in `docs/renderer.js` constrains how
+The renderer's `MAX_EDGES` limit in `docs/js/renderer.js` constrains how
 many vertices an element can have (applies to the polygon representation).
 
 ## Lens parameter constraints
@@ -88,7 +88,7 @@ many vertices an element can have (applies to the polygon representation).
 
 ## Default rotations
 
-Chosen in `makeElement` (`docs/scene.js`) so horizontal rays produce a
+Chosen in `makeElement` (`docs/js/scene.js`) so horizontal rays produce a
 visible effect on placement:
 
 - `prism` — rotated to avoid flint TIR at apex-up / 0° incidence.
@@ -103,9 +103,9 @@ Check `makeElement` for the current values.
 
 ## Adding a new element kind
 
-1. Add an entry to `ELEMENTS` in `docs/elements.js` with label,
+1. Add an entry to `ELEMENTS` in `docs/js/elements.js` with label,
    material, props, resize, and pinch.
-2. Extend `localPolygon` in `docs/scene.js` with its geometry.
+2. Extend `localPolygon` in `docs/js/scene.js` with its geometry.
 3. Extend `elementOutlineColor` in the renderer (or let it fall through
    to the default) and optionally add a `LOOK` entry for the element
    pass.

@@ -1,6 +1,6 @@
 # Architecture: Audio In / Out
 
-## Audio in (`docs/mic.js`)
+## Audio in (`docs/js/mic.js`)
 
 Toggle `Audio in` in the toolbar (or press `A`; Push Play button
 CC 85 also toggles). `mic-source` picks the signal
@@ -116,14 +116,14 @@ band linearly mapped across the visible range via
 `scene.runtime.wlPerSource`, so different notes show as different
 colors.
 
-## Audio out (`docs/synth.js`)
+## Audio out (`docs/js/synth.js`)
 
 `Audio out` toggles the additive synth (or press `Q`). The entire
 synth runs as a single `AudioWorkletProcessor` ("chromavox-synth"),
 replacing the previous 313-node WebAudio graph (144 OscillatorNodes +
 144 GainNodes + 24 voice-mix GainNodes + 1 master).
 
-The worklet lives in a standalone file (`docs/synth-worklet.js`) with
+The worklet lives in a standalone file (`docs/js/synth-worklet.js`) with
 full IDE support. `synth.js` fetches the file, patches the
 `__PARAM_DEFAULTS__` placeholder with a JSON blob of carrier parameter
 defaults (from `carriers.js`), then creates a Blob URL and calls
@@ -145,7 +145,7 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
   `synth.setStep` skips rebuild for both log and voice (step is
   irrelevant when frequencies are log-spaced).
 - **Carrier mode**: selectable via the Carrier dropdown in the Audio
-  out options menu. Carrier parameters are defined in `docs/carriers.js`
+  out options menu. Carrier parameters are defined in `docs/js/carriers.js`
   (single source of truth for UI, persistence, automation, and worklet
   defaults). Each carrier is a standalone function in the worklet
   (`_carrierSine`, `_carrierAcid`, `_carrierFM`, `_carrierSupersaw`,
@@ -180,18 +180,20 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
     corrections (at 0 and at the duty cycle crossing) give clean
     anti-aliased edges.
   - `vocoder`: classic vocoder topology — shared broadband excitation
-    → 4th-order bandpass (two cascaded biquads, 24 dB/oct) →
-    envelope-modulated output per voice. Shared excitation computed
-    once per block at fixed 100 Hz (PolyBLEP saw); all voices filter
-    the same signal. Auto-Q from voice spacing:
+    → 4th-order bandpass (two cascaded biquads in DF-II Transposed
+    form, 24 dB/oct) → envelope-modulated output per voice. Shared
+    excitation computed once per block at fixed 100 Hz (PolyBLEP saw);
+    all voices filter the same signal. Auto-Q from voice spacing:
     `Q = 1/(ratio - 1)` where `ratio = (6000/80)^(1/N)` (~10.4 for
     48 voices). Gain normalization `1/(Q*0.5)` compensates for filter
-    peak gain. Fast per-sample envelope (default 5 ms attack / 20 ms
-    release) applied PRE-filter to prevent biquad state buildup
-    clicks. Biquad states and `vocEnv` cleared in the `!anyActive`
-    branch to prevent reactivation clicks. Three sliders: **Excite**
-    (noise 0 / mix 0.5 / pulse 1), **Attack** (1–50 ms), **Release**
-    (5–200 ms).
+    peak gain. Per-voice centroid modulates Q over ±1 octave
+    (`qMod = 2^((centroid-0.5)*2)`) — bright input tightens the
+    formant, dull input widens it. Fast per-sample envelope (default
+    5 ms attack / 20 ms release) applied PRE-filter to prevent biquad
+    state buildup clicks. Biquad states (2 per biquad) and `vocEnv`
+    cleared in the `!anyActive` branch to prevent reactivation clicks.
+    Three sliders: **Excite** (noise 0 / mix 0.5 / pulse 1),
+    **Attack** (1–50 ms), **Release** (5–200 ms).
   - `karplus`: Karplus-Strong physical string model. Per-voice delay
     line (length = `ceil(sampleRate / freq)`). **Damping** slider
     (0-1, default 0.4) controls feedback lowpass coefficient (higher
@@ -217,6 +219,11 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
   - `pulse` → duty cycle shift (blue narrows, red widens)
   - `karplus` → excitation filter cutoff (blue = bright/shimmery,
     red = dark/woody) plus feedback damping amount
+  - `vocoder` → per-voice Q modulation (`qMod = 2^((centroid-0.5)*2)`,
+    ±1 octave on Q). Bright input tightens the formant filter; dull
+    input widens it — a focused vowel vs. a breathy one. The base `Q`
+    is a block constant on `ctx.vocQ`; carrier applies `qMod` per voice
+    and recomputes `gainNorm = 1 / max(1, Q * 0.5)` per voice.
 - **Partials**: adjustable 1–8 via the Partials slider (default 6).
   Each voice synthesises that many harmonic overtones with
   `Math.sin` directly (no wavetable). Harmonic gains come from
@@ -235,9 +242,14 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
   independently to both channels.
 - **Sine wavetable (`fsin`)**: 2048-entry LUT with linear
   interpolation, replaces `Math.sin` in sine partial and FM inner
-  loops. Noise and karplus carriers use `Math.random()` — a
-  deterministic PRNG (Mulberry32) caused inter-voice correlation
-  artifacts.
+  loops.
+- **PRNG policy**: `_carrierNoise` and `_carrierKarplus` per-sample
+  per-voice calls use `Math.random()` — a shared Mulberry32 stream
+  across voices introduced audible inter-voice correlation. A
+  module-level Mulberry32 (`_rng`) is used only where that problem is
+  structurally impossible: the vocoder's shared broadband excitation
+  buffer (single PRNG, not per-voice) and the karplus note-on burst
+  (one-shot per note transient, not in the sample loop).
 - **Global constant maps** (module scope in `synth-worklet.js`,
   outside `process()`):
   - `_SINGLE_BAND` — which carriers use `gainK=1` (single-band
@@ -265,6 +277,27 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
   Prevents zipper noise from single-frame spikes.
 - **Acid filter zipper reduction**: `tan(g)` recomputed every 32
   samples instead of once per block, smoothing cutoff modulation.
+  `Math.exp(voiceGain * envScale * ln2)` for the envelope-driven
+  cutoff target is evaluated at the same 32-sample rate (the per-
+  sample one-pole `envSmooth` lerp still fills the stairstep). Saves
+  ~124 `Math.exp` calls per block per acid voice.
+- **Vocoder biquad form**: DF-II Transposed (`y = b0*x + z1; z1 = z2 -
+  a1*y; z2 = b2*x - a2*y`). Two state floats per biquad instead of
+  four; no state shuffling (`s[1]=s[0]; s[0]=exc; …`). `b1 = 0` for
+  BPF, simplified. `v.voc1` / `v.voc2` are `Float32Array(2)`.
+- **Vocoder per-block constants**: `ratio`, `vocQ`, `vocAtk`, `vocRel`
+  are computed once per `process()` on `ctx.vocQ`/`vocAtk`/`vocRel`
+  instead of per voice. Avoids N_voices × (`Math.pow` + 2 × `Math.exp`)
+  per block.
+- **Sine phase-increment hoist**: the per-partial phase increment
+  `twoPi * freq * (k+1) * invSr` is computed once per block into a
+  scratch array `v._sineDts` (lazy-allocated) and reused across all
+  samples. Saves 3 FLOP × K × 128 per voice.
+- **Denormal guards**: acid (`s1/s2/s3`), vocoder (`z1a/z2a/z1b/z2b`),
+  and noise (`y1/y2`) filter states are clamped to zero if their
+  absolute value drops below 1e-20 at block boundaries. Prevents the
+  10–100× CPU stall that subnormal arithmetic causes on x86 without
+  FTZ/DAZ.
 - **Fixed-range normalization**: the worklet receives `fullScale`
   (`BASE_INTENSITY * sqrt(raysPer)`) via the rebuild message. Each
   partial's sensor bin sum is divided by `fullScale / gainK` to

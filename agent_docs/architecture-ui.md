@@ -35,7 +35,7 @@ they track the canvas, not the full stage.
 - **Left panel** carries: Emitters (count/wavelength range/rays/spread/
   aperture plus a **lambda bend** slider below the wavelength sliders),
   Sensors (count/sync/factor), and the Selected property panel
-  (auto-generated from the element schema in `docs/elements.js`).
+  (auto-generated from the element schema in `docs/js/elements.js`).
   Global settings (aspect, no-overlap, distort, stats, spectrum
   toggles, tracer indicator) moved to the Bench toolbar dropdown.
   Audio in/out controls live entirely in the toolbar `▾` dropdowns.
@@ -168,6 +168,27 @@ JSON is `version: 1`. `_selected` is stripped on serialize.
 `emitter.disabled` converts between `Set` and array.
 `deserializeScene` regenerates element IDs so imported scenes never
 collide with running ones.
+
+The serializer also emits:
+- `title` — compact auto-label via `autoTitle(scene)`, e.g.
+  `"3 prisms, 2 mirrors - vocoder"`. Always regenerated at serialize
+  time (no manual title UI).
+- `date` — ISO-8601 timestamp (`new Date().toISOString()`).
+- `synth` (optional) — `{ carrier, params }` captured from the carrier
+  select and cp-slider values by `syncSceneSynth()` in `main.js`.
+  `markDirty` calls `syncSceneSynth` before serialize so localStorage
+  stays in sync; the Save button uses the `ui.beforeSerialize` hook
+  (wired to `syncSceneSynth`) so the downloaded file matches.
+- `applySceneSynth()` (called from `resetDisplay`) restores `scene.synth`
+  onto the DOM + worklet on file/preset load.
+
+Save button filename: `chromavox-<slug>.json` where `<slug>` comes
+from `filenameFromTitle(autoTitle(scene))` in `ui.js` — NFKD-normalized,
+diacritics stripped, any non-alphanumeric run collapsed to `-`,
+lowercased.
+
+`document.title = 'Chromavox - ' + autoTitle(scene)` is set on init,
+on every `markDirty`, and on `resetDisplay`.
 
 Scene auto-saves to `localStorage` (key `'chromavox-scene'`) on every
 `markDirty`. On page load, `main.js` restores from localStorage if

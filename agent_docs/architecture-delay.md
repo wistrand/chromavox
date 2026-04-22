@@ -17,7 +17,7 @@ delay override; the `×` button zeros it.
 ## Material schema
 
 `delayK` lives alongside the existing Sellmeier/Cauchy dispersion and
-Beer-Lambert absorption fields in `MATERIALS` (`docs/spectrum.js`).
+Beer-Lambert absorption fields in `MATERIALS` (`docs/js/spectrum.js`).
 Accessors: `materialDelay(mat)` returns the material's base value;
 `elementDelay(el, mat)` returns the per-element override if set, else
 the material default. The particle simulation reads the effective

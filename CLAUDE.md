@@ -89,6 +89,13 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   collapse into one history entry.
 - Scene JSON is `version: 1`. IDs are regenerated on deserialize;
   `bumpIdCeiling` keeps the running counter ahead of any restored max.
+  `serializeScene` also emits `title` (auto-generated compact label from
+  element counts + carrier name via `autoTitle(scene)`), `date` (ISO
+  timestamp), and optional `synth: { carrier, params }`. The Save button
+  uses the title to derive the download filename
+  (`chromavox-<slug>.json` via `filenameFromTitle` in `ui.js`) and
+  `main.js` sets `document.title = 'Chromavox - ' + autoTitle(scene)`
+  on init and on every `markDirty`.
 - Transient per-frame state lives on `scene.runtime` (created by
   `createScene()`): `{ micLevels, wlPerSource }`. `serializeScene`
   excludes runtime (explicit field list). `Object.assign(scene, fresh)`
@@ -127,7 +134,7 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
 - Per-element `el.absorb` (default 1, range 0–50) multiplies
   Beer-Lambert absorption. CPU: `elementAbsorption` in spectrum.js.
   GPU: element texture row 0 w-channel.
-- Element property schema (`docs/elements.js`): single source of truth
+- Element property schema (`docs/js/elements.js`): single source of truth
   for per-kind properties. `ELEMENTS` exports 9 kinds; `makeElement`
   in scene.js reads from it; property panel and resize/pinch in ui.js
   are schema-driven.
@@ -175,7 +182,7 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   just chromatic). Changing the Base dropdown takes effect immediately
   in any scale.
 - Synth runs as a single `AudioWorkletProcessor` ("chromavox-synth")
-  in `docs/synth-worklet.js`. `synth.js` fetches the file, patches
+  in `docs/js/synth-worklet.js`. `synth.js` fetches the file, patches
   `__PARAM_DEFAULTS__` with carrier param JSON, creates a Blob URL,
   calls `addModule`. Source cached in `_WORKLET_SRC` after first load.
   `enable()` has try/catch — cleans up AudioContext on failure.
@@ -215,7 +222,7 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   Spectral centroid (inverted: blue→1.0, red→0.0) modulates per-
   carrier parameters (acid→cutoff, noise→freq, fm→ratio,
   supersaw→detune, pulse→duty, karplus→excitation filter). Carrier
-  params defined in `docs/carriers.js`. Partials slider visible only
+  params defined in `docs/js/carriers.js`. Partials slider visible only
   in sine mode. Voices with
   all gains < 1e-5 are skipped (voice stealing). Rebuild sends
   frequency array + `fullScale` via `MessagePort`. `synth.enable()`
@@ -371,7 +378,7 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   `tintStrength` (delayK * 80, capped at 0.5) in the renderer,
   making them look foggy. Zero-delay elements unchanged. Per-element
   `el.color` override still takes precedence.
-- GPU tracer (`docs/gpu-tracer.js`): WebGL2 transform feedback with
+- GPU tracer (`docs/js/gpu-tracer.js`): WebGL2 transform feedback with
   ping-pong bounce architecture. Default tracer; auto-switches to CPU
   when delay elements are added (`pickTracer()`). One TF dispatch per
   bounce, reading previous bounce's ray state from a ping-pong buffer

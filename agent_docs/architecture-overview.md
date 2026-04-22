@@ -15,11 +15,11 @@ No dependencies.
   three-column grid with a fixed-height top toolbar; side panels slide
   in as drawers on the mobile breakpoint (see the `@media` rule in
   `docs/style.css` for the cutoff).
-- `docs/spectrum.js` — Dan-Bruton wavelength→RGB, Sellmeier/Cauchy dispersion,
+- `docs/js/spectrum.js` — Dan-Bruton wavelength→RGB, Sellmeier/Cauchy dispersion,
   Beer-Lambert absorption, dichroic reflectance, `MATERIALS` table,
   `SCALES` table + `scaleFreq(base, scale, i, stepDeg)` for musical
   bucketing.
-- `docs/elements.js` — single source of truth for per-kind element
+- `docs/js/elements.js` — single source of truth for per-kind element
   properties. Exports `ELEMENTS` (9 kinds) and `ELEMENT_KINDS`.
   Each kind: `label`, `material`, optional `materials`, `props`
   (ordered descriptors with label/min/max/default/step/type/display/
@@ -27,14 +27,14 @@ No dependencies.
   templates: `SPIN`, `ABSORB`, `DELAY`, `COLOR`. Consumed by
   `makeElement` in scene.js, property panel in ui.js, resize/pinch
   in ui.js. `LABEL_BY_KIND` derived from `ELEMENTS[kind].label`.
-- `docs/scene.js` — data model, local/world polygon geometry, JSON
+- `docs/js/scene.js` — data model, local/world polygon geometry, JSON
   save/load. `makeElement` reads defaults from the `ELEMENTS` schema
   in `elements.js`. `createScene()` initialises `scene.runtime`
   (transient per-frame state: `micLevels`, `wlPerSource`) and
   increments `scene.generation` (used by the tracer to detect scene
   replacement and auto-reset persistence).
-- `docs/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
-- `docs/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
+- `docs/js/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
+- `docs/js/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
   rendered into a **HDR `RGBA16F` FBO** via `EXT_color_buffer_float`
   (additive blend in linear space, soft falloff), (2) tonemapped blit to
   screen + per-element bounding-quad pass that re-samples the same FBO
@@ -45,19 +45,19 @@ No dependencies.
   mini-spectrum painted next to each sensor tick so the wavelength
   distribution is always visible on the canvas even when the right panel
   is scrolled or short.
-- `docs/ui.js` — pointer events (mouse + touch unified), property panel,
+- `docs/js/ui.js` — pointer events (mouse + touch unified), property panel,
   save/load, preset dropdown, undo/redo, keyboard shortcuts.
-- `docs/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.
+- `docs/js/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.
   Filters system-realtime messages (status >= 0xF0, e.g. Active Sensing)
   before processing/logging MIDI input.
-- `docs/synth.js` — additive sensor synth (~190 lines); main-thread
+- `docs/js/synth.js` — additive sensor synth (~190 lines); main-thread
   API (enable, disable, rebuild, setCarrier, setBase, etc.) and
   MessagePort plumbing. Fetches the worklet source from
   `synth-worklet.js`, patches `__PARAM_DEFAULTS__` with carrier
   parameter JSON, creates a Blob URL, and calls `addModule`. Cached
   after first load (`_WORKLET_SRC`). Try/catch cleans up AudioContext
   on fetch/addModule failure.
-- `docs/synth-worklet.js` — the `AudioWorkletProcessor`
+- `docs/js/synth-worklet.js` — the `AudioWorkletProcessor`
   ("chromavox-synth"). Eight standalone carrier functions dispatched
   via `_CARRIERS` map. Shared `ctx` object (cached on `this._ctx`,
   zero allocation per `process()` call). Global constant maps
@@ -65,7 +65,7 @@ No dependencies.
   Stereo output with constant-power panning. 2048-entry sine
   wavetable (`fsin`) with linear interpolation for sine partials
   and FM.
-- `docs/push.js` — Ableton Push 2/3 integration: 8x8 RGB pixel map,
+- `docs/js/midi-devices/push.js` — Ableton Push 2/3 integration: 8x8 RGB pixel map,
   dynamic palette management, sensor-to-pad color mapping, encoder-to-
   element dispatch, in-key layout computation, and Push display bridge.
   The Push hardware sends fixed notes 36-99; `push.js` computes
@@ -74,16 +74,25 @@ No dependencies.
   scale length. `_connectDisplay()` streams bench canvas and sensor
   spectrogram PNGs to the display sidecar via WebSocket (retry limited
   to 5 attempts).
-- `docs/akai-mpc.js` — Akai MPC Live II / One / X integration: 4x4
+- `docs/js/midi-devices/akai-mpc.js` — Akai MPC Live II / One / X integration: 4x4
   RGB pads via SysEx, Q-Link encoders, jog wheel. See
   `architecture-akai-controllers.md`.
-- `docs/akai-apc.js` — Akai APC Mini MK2 / APC64 integration: 8x8
+- `docs/js/midi-devices/akai-apc.js` — Akai APC Mini MK2 / APC64 integration: 8x8
   RGB pads via SysEx (with palette fallback), faders with pickup mode,
   in-key layout matching Push. See `architecture-akai-controllers.md`.
-- `docs/carriers.js` — carrier parameter descriptors (UI, persistence,
+- `docs/js/midi-devices/keyboard.js` — generic MIDI keyboard fallback:
+  no LEDs, no display, linear `note - mic._kbdMidiBase` pad mapping.
+  Its `static matches()` always returns true, so the router picks it
+  when no specific controller matches.
+- `docs/js/midi-devices/router.js` — `MidiRouter`: owns singleton
+  instances of all four devices, dispatches by name via each device's
+  `static matches(name)`, and copies the active device's `padMapper`
+  to `mic._padMapper`. main.js talks to this one object instead of
+  branching on controller type.
+- `docs/js/carriers.js` — carrier parameter descriptors (UI, persistence,
   automation, worklet defaults). Single source of truth for all
   carrier modes.
-- `docs/main.js` — wiring + dirty-flag render loop + device pickers +
+- `docs/js/main.js` — wiring + dirty-flag render loop + device pickers +
   localStorage persistence (auto-save on `markDirty`, restore on load).
   Spectrum readout smoothing (`_displayBins`, `_peakMax`, `_blurBuf`)
   lives on the `Renderer` instance, updated via

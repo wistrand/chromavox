@@ -250,7 +250,7 @@ function noteEnvelope(time, note) {
 
 ### Phase 1: Playback only (MVP)
 
-1. **`docs/song.js`** — Song loader + playback engine.
+1. **`docs/js/song.js`** — Song loader + playback engine.
    - `loadSong(json)` → parsed song object
    - `SongPlayer` class with `play()`, `pause()`, `stop()`, `seek(t)`
    - Per-frame `update(dt)` called from the RAF loop

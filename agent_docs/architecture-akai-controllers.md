@@ -1,7 +1,7 @@
 # Architecture: Akai Controllers
 
-Two modules: `docs/akai-mpc.js` (MPC Live II / One / X) and
-`docs/akai-apc.js` (APC Mini MK2 / APC64). Both follow the same
+Two modules: `docs/js/midi-devices/akai-mpc.js` (MPC Live II / One / X) and
+`docs/js/midi-devices/akai-apc.js` (APC Mini MK2 / APC64). Both follow the same
 interface pattern as `push.js` — own the MIDI output port, manage pad
 LED colors, and dispatch encoder/fader CCs to element properties via
 the shared `onCC` callback.
@@ -25,18 +25,21 @@ pixels: Uint8Array
 
 ## Controller detection
 
-`main.js` detects the device by MIDI port name and instantiates the
-matching module. A mapper-type indicator in the MIDI options panel
-shows which layout is active:
+`MidiRouter` (`docs/js/midi-devices/router.js`) picks the matching
+device by port name — each device class exposes `static matches(name)`
+and the router iterates `[mpc, apc, push, keyboard]`, first match wins.
+A mapper-type indicator in the MIDI options panel shows which layout
+is active:
 
 - Port name includes `MPC` → `MPCController`, mapper `MPC 4x4`
 - Port name includes `APC` → `APCController`, mapper `APC 8x8`
 - Port name includes `Push` → Push, mapper `Push in-key`
+- otherwise → `KeyboardDevice`, mapper `keyboard (linear)`
 - Other MIDI keyboard → linear note mapper, mapper `keyboard (linear)`
 
 ---
 
-## MPC module (`docs/akai-mpc.js`)
+## MPC module (`docs/js/midi-devices/akai-mpc.js`)
 
 ### Hardware
 
@@ -87,7 +90,7 @@ trail. Simpler than Push's polygon animation given the 4x4 grid.
 
 ---
 
-## APC module (`docs/akai-apc.js`)
+## APC module (`docs/js/midi-devices/akai-apc.js`)
 
 ### Hardware
 

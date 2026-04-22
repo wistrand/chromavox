@@ -1,6 +1,6 @@
 # Architecture: Ray Tracer
 
-`docs/raytracer.js` produces per-frame segment records for the WebGL2
+`docs/js/raytracer.js` produces per-frame segment records for the WebGL2
 renderer and updates per-sensor spectrum bins. Segments are 12-float
 entries (`[p1x, p1y, p2x, p2y, c1rgb*I1, I1, c2rgb*I2, I2]`) expanded
 by the renderer into instanced SDF quads with per-fragment soft
@@ -72,7 +72,7 @@ edges), cutting dispatch count for curved-element scenes.
 ## Notes
 
 - Max bounces, per-surface glass loss, and absorption cutoff are module
-  constants at the top of `docs/raytracer.js` (`MAX_BOUNCES`,
+  constants at the top of `docs/js/raytracer.js` (`MAX_BOUNCES`,
   `GLASS_LOSS`, `BASE_INTENSITY`). Prefer reading those instead of
   quoting numbers.
 - Particle floor: `PARTICLE_EPS`. Records below this intensity are
@@ -121,7 +121,7 @@ edges), cutting dispatch count for curved-element scenes.
 
 - Sellmeier `n²(λ) = 1 + Σ Bᵢ λ²/(λ²−Cᵢ)` with λ in µm for real
   materials; Cauchy `n = A + B/λ²` for synthetic. Coefficients live
-  in `MATERIALS` in `docs/spectrum.js`.
+  in `MATERIALS` in `docs/js/spectrum.js`.
 - **Equilateral-prism TIR constraint**: for a ray to pass through a
   60° prism, `n < 2` is required. `diamond` exceeds 2 and always
   TIRs; `hyper` is tuned below 2.

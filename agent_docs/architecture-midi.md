@@ -39,23 +39,40 @@ MIDI source is selected). Max 40 lines, auto-scrolls. System realtime
 messages (status >= 0xF0, e.g. Active Sensing) are filtered before
 processing.
 
-## Emitter mapping
+## Router and device mapping
 
-`mic.directLevels(n, mode, base, step)` handles MIDI specially.
-The mapper type depends on the detected controller:
+Controller detection and dispatch live in `MidiRouter`
+(`docs/js/midi-devices/router.js`). The router owns singleton instances
+of each device class and picks the first that matches the input port's
+name:
 
-- **Push**: `padNoteToEmitter(note)` from `push.js`. Uses the in-key
-  layout formula: `row = floor((note - 36) / 8)`, `col = (note - 36) % 8`,
-  `degree = row * rowOffset + col`. `rowOffset` from `fourthOffset()`.
-- **MPC**: `mpcPadNoteToEmitter(note)` from `akai-mpc.js`. 1:1 mapping
-  (note - 36) for the 4x4 grid.
-- **APC**: `apcPadNoteToEmitter(note)` from `akai-apc.js`. Same in-key
-  layout as Push but with note offset 0 (not 36).
-- **Generic MIDI keyboard**: linear note-to-emitter mapper. Maps the
-  incoming note range to the emitter count linearly.
+```
+devices = [MPCController, APCController, PushController, KeyboardDevice]
+```
 
-The mapper type indicator in the MIDI options panel shows which layout
-is active (e.g. "Mapper: Push in-key", "Mapper: keyboard (linear)").
+Each device class exposes:
+
+- `static matches(name)` — name test (MPC: `'MPC'`; APC: `'APC'`; Push:
+  `/push/i`; `KeyboardDevice.matches` always returns true → fallback).
+- `static label` — human-readable mapper name shown in the MIDI options
+  panel (e.g. "Push in-key", "MPC 4x4", "keyboard (linear)").
+- `padMapper` — function or `null`, copied to `mic._padMapper` after
+  attach. KeyboardDevice builds its mapper in `attach(_, _, mic)` so
+  it can close over the current `mic._kbdMidiBase`.
+
+`mic.directLevels(n, mode, base, step)` uses `mic._padMapper` to map
+pad notes to emitter indices:
+
+- **Push**: `padMapper === null` → falls back to the default
+  `padNoteToEmitter` (in-key layout:
+  `row = floor((note - 36) / 8)`, `col = (note - 36) % 8`,
+  `degree = row * rowOffset + col`, `rowOffset` from `fourthOffset()`).
+- **MPC**: `(note) => note - 36` for the 4x4 grid.
+- **APC**: `apcPadNoteToEmitter` — same in-key layout as Push but with
+  note offset 0.
+- **Generic keyboard** (`KeyboardDevice`): linear
+  `note - mic._kbdMidiBase`; base is resynced from the current "Base"
+  Hz selector via `keyboard.onAttach` (wired in `main.js`).
 
 All mappers bypass the FFT entirely — no spectral leakage, no bucket
 bleed, exact pad/key-to-emitter mapping.
@@ -97,10 +114,12 @@ a browser permission prompt on first use.
 ## Lifecycle
 
 - `mic.enable('midi')`: request MIDI access, attach handler, set active.
-  main.js then calls `attachPush()` which creates the Push output
-  connection.
+  main.js then calls `attachPush()` (thin wrapper over `midi.attach(...)`
+  on the `MidiRouter` instance) which picks the matching device and
+  writes `mic._padMapper` + the mapper-label element.
 - `mic.disable()`: detach handler, clear notes, set inactive.
-  main.js calls `detachPush()` first to clear LEDs.
+  main.js calls `detachPush()` first, which calls `midi.detach()` (clears
+  LEDs on all controller devices and unsets `mic._padMapper`).
 - Source change: `detachPush()` → `mic.disable()` → `mic.enable(newSrc)` →
   `attachPush()` (if new source is MIDI).
 
@@ -117,7 +136,7 @@ bands instead of using the global `u_wlMin`/`u_wlMax` uniforms.
 - No AudioContext, no AnalyserNode, no FFT.
 - No audio monitoring of MIDI notes (unlike the keyboard source which
   plays sine oscillators through the analyser).
-- No MIDI output — that's the controller module's job (push.js,
-  akai-mpc.js, or akai-apc.js).
+- No MIDI output — that's the controller module's job
+  (`docs/js/midi-devices/push.js`, `akai-mpc.js`, or `akai-apc.js`).
 - No CC-to-element mapping — that's wired in main.js via the
   controller's `onCC` callback.

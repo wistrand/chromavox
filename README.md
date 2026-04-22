@@ -52,16 +52,16 @@ extensionless paths resolve to the matching `.html`.
 
 - `docs/index.html` — static landing page (centered logo, no links).
 - `docs/play.html`, `docs/style.css` — app shell and panels.
-- `docs/spectrum.js` — wavelength→RGB, Sellmeier/Cauchy dispersion,
+- `docs/js/spectrum.js` — wavelength→RGB, Sellmeier/Cauchy dispersion,
   Beer-Lambert absorption, dichroic reflectance, material table.
-- `docs/scene.js` — data model, polygon geometry, JSON save/load.
-- `docs/raytracer.js` — CPU tracer, per-frame vertex buffer, sensor bins.
-- `docs/renderer.js` — WebGL2 passes: additive rays, alpha overlay.
-- `docs/ui.js` — pointer input, property panel, save/load, presets,
+- `docs/js/scene.js` — data model, polygon geometry, JSON save/load.
+- `docs/js/raytracer.js` — CPU tracer, per-frame vertex buffer, sensor bins.
+- `docs/js/renderer.js` — WebGL2 passes: additive rays, alpha overlay.
+- `docs/js/ui.js` — pointer input, property panel, save/load, presets,
   undo/redo, keyboard shortcuts.
-- `docs/mic.js` — audio input (mic or synthetic) + FFT bucket extraction.
-- `docs/synth.js` — additive sensor synth.
-- `docs/main.js` — wiring, render loop, device pickers.
+- `docs/js/mic.js` — audio input (mic or synthetic) + FFT bucket extraction.
+- `docs/js/synth.js` — additive sensor synth.
+- `docs/js/main.js` — wiring, render loop, device pickers.
 - `docs/presets/` — preset scenes + `index.json` list. Includes
   `slow-glass.json` (6 sources, 256 rays, slow-glass block + 2 mirrors).
 - `serve.js` — zero-dep static server rooted at `docs/`.

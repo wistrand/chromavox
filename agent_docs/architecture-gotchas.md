@@ -4,7 +4,7 @@
 
 - `gl.lineWidth` is driver-clamped to 1 px on nearly all WebGL
   implementations. Rays avoid this by rendering as instanced SDF
-  quads (`docs/renderer.js`). Overlay elements (bench outline,
+  quads (`docs/js/renderer.js`). Overlay elements (bench outline,
   emitter/sensor ticks, element polygons, per-sensor mini-spectrum)
   still use line primitives; emitter ticks stack a few parallel 1 px
   lines vertically to look thicker.
@@ -17,7 +17,7 @@
   behaviour.
 - Element interiors are drawn as bounding-box quads; the fragment
   shader runs a polygon-SDF loop up to `MAX_EDGES` (defined in
-  `docs/renderer.js`) to clip and sample the underlying ray FBO with
+  `docs/js/renderer.js`) to clip and sample the underlying ray FBO with
   a distortion offset. Polygons with more edges than that will be
   silently clipped — bump `MAX_EDGES` (and verify the uniform array
   fits within the GPU's component limit) if you add a new element
@@ -28,6 +28,19 @@
   element pass and the overlay pass), before the compositor can clear
   the backbuffer. This avoids the per-frame extra blit cost that
   `preserveDrawingBuffer` imposed.
+
+- **Adaptive quality and the idle RAF loop**. `renderer.updateQuality`
+  samples frame-to-frame deltas into a 30-entry rolling window.
+  Chromavox's RAF loop intentionally parks when nothing changes, so
+  the first frame after a wake (user edit, tab refocus, mic enable)
+  naturally measures the idle duration — potentially seconds. Two
+  guards prevent a spurious tier jump: (a) per-frame delta is clamped
+  to 200 ms before being pushed into the window; (b) `_qFrameTimes`
+  is cleared whenever the tier changes, so recovery isn't lagged by
+  stale data at the previous tier. Without these, tier 2+ triggers
+  the "bezel" disappearing bug — the per-element SDF pass is
+  completely skipped (`renderer.js` guard at `if (this.qualityTier <
+  2)`), leaving only the overlay outline lines.
 
 ## Physics
 

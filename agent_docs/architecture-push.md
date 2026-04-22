@@ -1,6 +1,6 @@
 # Architecture: Ableton Push 2/3 Integration
 
-`docs/push.js` — owns the MIDI output port, 8x8 RGB pixel map,
+`docs/js/midi-devices/push.js` — owns the MIDI output port, 8x8 RGB pixel map,
 dynamic palette management, sensor-to-pad color mapping, and
 encoder-to-element dispatch. Separated from `mic.js` so the mic
 module stays a generic MIDI note/CC source.
@@ -249,10 +249,13 @@ USB. See `notes/push3-display.md` for protocol details.
 
 ## Related: Akai controllers
 
-`docs/akai-mpc.js` (MPC) and `docs/akai-apc.js` (APC Mini MK2) follow
-the same interface pattern. See `architecture-akai-controllers.md`.
-`main.js` detects the device by MIDI port name and instantiates the
-matching controller.
+`docs/js/midi-devices/akai-mpc.js` (MPC) and
+`docs/js/midi-devices/akai-apc.js` (APC Mini MK2) follow the same
+interface pattern. See `architecture-akai-controllers.md`. A
+generic-keyboard fallback lives in
+`docs/js/midi-devices/keyboard.js`. All four devices are dispatched
+by `MidiRouter` (`docs/js/midi-devices/router.js`) via each class's
+`static matches(name)` test.
 
 ## Future extensions
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-`docs/gpu-tracer.js` is a WebGL2 transform-feedback ray tracer using
+`docs/js/gpu-tracer.js` is a WebGL2 transform-feedback ray tracer using
 a ping-pong bounce architecture. Default tracer when no delay elements
 are present; `main.js` auto-switches to the CPU tracer when delay
 elements are added (`pickTracer()` in the frame loop). The left panel
