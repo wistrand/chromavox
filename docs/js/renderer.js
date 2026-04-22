@@ -821,79 +821,141 @@ export class Renderer {
   resetReadout() {
     this._displayBins = new Float32Array(0);
     this._peakMax = 1e-6;
+    this._readoutImg = null;
+    this._readoutCtx = null;
   }
 
   updateReadout(scene, tracer) {
     const host = document.getElementById('sensor-readout');
     if (!host) return;
-    const bars = host.children;
-    // Rebuild if count mismatch — prevents silent bail on sensor change.
-    if (bars.length !== scene.sensorCount) {
+    const CANVAS_W = 128;
+    const sensorCount = scene.sensorCount;
+    if (sensorCount <= 0) return;
+    // Size rows to the actual panel height so extreme downscaling can't
+    // hide sensor rows behind separator lines. Cap at 14 (the previous
+    // fixed value) so tall panels don't allocate unreasonably large
+    // ImageData. Minimum 1 row per sensor.
+    const panelH = Math.max(sensorCount, host.clientHeight | 0);
+    const ROW_H = Math.max(1, Math.min(14, (panelH / sensorCount) | 0));
+    const wantH = sensorCount * ROW_H;
+    let c = host.firstElementChild;
+    // Rebuild if missing, wrong type, or size changed (sensor count or panel size).
+    if (!c || c.tagName !== 'CANVAS' || c.height !== wantH || c.width !== CANVAS_W) {
       host.innerHTML = '';
-      for (let i = 0; i < scene.sensorCount; i++) {
-        const bar = document.createElement('div');
-        bar.className = 'sensor-bar';
-        const c = document.createElement('canvas');
-        c.width = 128; c.height = 14;
-        bar.appendChild(c);
-        host.appendChild(bar);
-      }
-      return; // skip this frame, draw next
+      c = document.createElement('canvas');
+      c.id = 'sensor-readout-canvas';
+      c.width = CANVAS_W; c.height = wantH;
+      host.appendChild(c);
+      this._readoutImg = null; // force reallocation
+      return;                  // draw next frame
     }
     if (!tracer.sensorBins) return;
     const binCount = tracer.binCount;
-    const totalBins = scene.sensorCount * binCount;
+    const sensorCount = scene.sensorCount;
+    const totalBins = sensorCount * binCount;
 
     if (this._displayBins.length !== totalBins) {
       this._displayBins = new Float32Array(totalBins);
       this._peakMax = 1e-6;
     }
     if (this._blurBuf.length < binCount) this._blurBuf = new Float32Array(binCount);
+    // One Uint8ClampedArray for the entire stack. Reallocated only on
+    // canvas-size change (sensor count or ROW_H).
+    if (!this._readoutImg || this._readoutImg.width !== CANVAS_W || this._readoutImg.height !== wantH) {
+      const ctx = c.getContext('2d');
+      this._readoutImg = ctx.createImageData(CANVAS_W, wantH);
+      this._readoutCtx = ctx;
+    }
+    // Per-bin wavelength → RGB lookup, only depends on binCount. Cache
+    // and reuse across all sensors each frame.
+    if (!this._readoutWlRgb || this._readoutWlRgb.length !== binCount * 3) {
+      this._readoutWlRgb = new Float32Array(binCount * 3);
+    }
+    if (this._readoutWlRgbBins !== binCount) {
+      const wlMin = 380, wlMax = 780;
+      for (let b = 0; b < binCount; b++) {
+        const wl = wlMin + (b + 0.5) / binCount * (wlMax - wlMin);
+        const rgb = wavelengthToRGB(wl);
+        this._readoutWlRgb[b * 3    ] = rgb[0];
+        this._readoutWlRgb[b * 3 + 1] = rgb[1];
+        this._readoutWlRgb[b * 3 + 2] = rgb[2];
+      }
+      this._readoutWlRgbBins = binCount;
+    }
 
     // Temporal IIR: displayBins lerps toward sensorBins.
     const IIR = 0.3;
+    const displayBins = this._displayBins;
+    const rawBins = tracer.sensorBins;
     for (let i = 0; i < totalBins; i++) {
-      this._displayBins[i] += (tracer.sensorBins[i] - this._displayBins[i]) * IIR;
+      displayBins[i] += (rawBins[i] - displayBins[i]) * IIR;
     }
 
     // Slow-decaying peak normalization.
     let curMax = 1e-6;
     for (let i = 0; i < totalBins; i++) {
-      if (this._displayBins[i] > curMax) curMax = this._displayBins[i];
+      if (displayBins[i] > curMax) curMax = displayBins[i];
     }
     this._peakMax = Math.max(curMax, this._peakMax * 0.95);
+    const invPeak = 1 / this._peakMax;
 
-    for (let s = 0; s < scene.sensorCount; s++) {
-      // Flip: DOM bar 0 (top of panel) = sensor N-1 (top of bench).
-      const si = scene.sensorCount - 1 - s;
-      const c = bars[s].querySelector('canvas');
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, c.width, c.height);
+    const data = this._readoutImg.data;
+    const blur = this._blurBuf;
+    const wlRgb = this._readoutWlRgb;
+    // Border color between sensor rows (matches old .sensor-bar border-top: var(--border) = #242a33).
+    const borderR = 0x24, borderG = 0x2a, borderB = 0x33;
+
+    for (let s = 0; s < sensorCount; s++) {
+      // Flip: row 0 (top of canvas) = sensor N-1 (top of bench).
+      const si = sensorCount - 1 - s;
+      const rowStartY = s * ROW_H;
 
       // Gaussian blur across bins: [0.25, 0.5, 0.25] kernel.
       const base = si * binCount;
-      const blur = this._blurBuf;
       for (let b = 0; b < binCount; b++) {
-        const prev = b > 0 ? this._displayBins[base + b - 1] : this._displayBins[base + b];
-        const cur  = this._displayBins[base + b];
-        const next = b < binCount - 1 ? this._displayBins[base + b + 1] : cur;
+        const prev = b > 0 ? displayBins[base + b - 1] : displayBins[base + b];
+        const cur  = displayBins[base + b];
+        const next = b < binCount - 1 ? displayBins[base + b + 1] : cur;
         blur[b] = prev * 0.25 + cur * 0.5 + next * 0.25;
       }
 
-      const wlMin = 380, wlMax = 780;
-      for (let b = 0; b < binCount; b++) {
-        const v = blur[b] / this._peakMax;
-        if (v <= 0) continue;
-        const wl = wlMin + (b + 0.5) / binCount * (wlMax - wlMin);
-        const rgb = wavelengthToRGB(wl);
-        const a = Math.min(1, v);
-        ctx.fillStyle = `rgba(${(rgb[0] * 255)|0},${(rgb[1] * 255)|0},${(rgb[2] * 255)|0},${a})`;
-        const x = (b / binCount) * c.width;
-        const w = c.width / binCount + 1;
-        ctx.fillRect(x, 0, w, c.height);
+      // Build one row of RGBA bytes for this sensor (128 px wide), then
+      // copy it down for the full ROW_H. Color per pixel = bin's
+      // wavelength color scaled by blur[b] / peak (black if zero).
+      const rowOff = rowStartY * CANVAS_W * 4;
+      const scale = CANVAS_W / binCount;
+      for (let x = 0; x < CANVAS_W; x++) {
+        const b = Math.min(binCount - 1, (x / scale) | 0);
+        const v = blur[b] * invPeak;
+        const a = v <= 0 ? 0 : (v >= 1 ? 1 : v);
+        const r = (wlRgb[b * 3    ] * a * 255) | 0;
+        const g = (wlRgb[b * 3 + 1] * a * 255) | 0;
+        const bl = (wlRgb[b * 3 + 2] * a * 255) | 0;
+        const o = rowOff + x * 4;
+        data[o    ] = r;
+        data[o + 1] = g;
+        data[o + 2] = bl;
+        data[o + 3] = 255;
+      }
+      // Copy the built row down to the remaining ROW_H-1 pixel rows.
+      const rowBytes = CANVAS_W * 4;
+      for (let y = 1; y < ROW_H; y++) {
+        const dstOff = rowOff + y * rowBytes;
+        data.copyWithin(dstOff, rowOff, rowOff + rowBytes);
+      }
+      // Separator line at the top of each sensor block (except the
+      // first). Only when ROW_H >= 3 — at smaller sizes the separator
+      // would consume the entire visible sensor row and hide the
+      // spectrum, so we drop it and let color boundaries do the work.
+      if (s > 0 && ROW_H >= 3) {
+        for (let x = 0; x < CANVAS_W; x++) {
+          const o = rowOff + x * 4;
+          data[o] = borderR; data[o + 1] = borderG; data[o + 2] = borderB; data[o + 3] = 255;
+        }
       }
     }
+
+    this._readoutCtx.putImageData(this._readoutImg, 0, 0);
   }
 }
 

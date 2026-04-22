@@ -1023,14 +1023,15 @@ export class UI {
   rebuildSensorReadout() {
     const host = document.getElementById('sensor-readout');
     host.innerHTML = '';
-    for (let i = 0; i < this.scene.sensorCount; i++) {
-      const bar = document.createElement('div');
-      bar.className = 'sensor-bar';
-      const c = document.createElement('canvas');
-      c.width = 128; c.height = 14;
-      bar.appendChild(c);
-      host.appendChild(bar);
-    }
+    // One canvas for the full sensor stack. Renderer writes directly
+    // into the backing ImageData (see updateReadout). Internal size is
+    // 128 × (sensorCount * ROW_H); CSS stretches to the panel.
+    const c = document.createElement('canvas');
+    c.id = 'sensor-readout-canvas';
+    const rowH = 14;
+    c.width = 128;
+    c.height = Math.max(1, this.scene.sensorCount * rowH);
+    host.appendChild(c);
   }
 
   // Exposed for main.js spin enforcement.
