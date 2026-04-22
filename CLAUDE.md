@@ -96,6 +96,48 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   (`chromavox-<slug>.json` via `filenameFromTitle` in `ui.js`) and
   `main.js` sets `document.title = 'Chromavox - ' + autoTitle(scene)`
   on init and on every `markDirty`.
+- MusicXML import: `docs/js/musicxml.js` converts MusicXML → song JSON
+  at runtime. UI: `⇪` button next to the song selector (file picker)
+  plus drag-and-drop onto `#stage` (dashed outline feedback via
+  `.drop-target`). Dropped files auto-play; picked files stay manual.
+  Handles UTF-16 BOM (Finale exports are UTF-16 BE), content-sniffs
+  `<` vs `{` so the same handler accepts native Chromavox song JSON
+  too. Multi-part merging (voice + piano + everything else is unioned
+  into one note stream). If score metadata mentions "piano" the
+  imported song defaults to `carrier: "piano"`, otherwise sine.
+  Decodes common ABC/TeX backslash escapes (`\"a` → ä, `\aa` → å) in
+  titles; takes `<movement-title>` first line only.
+- Freeverb master reverb lives in the worklet (`_applyReverb` on
+  `ChromavoxSynth`), inserted between voice summation and the `ftanh`
+  soft-limiter. Jezar's tuning: 8 parallel comb filters + 4 serial
+  allpass per channel, 23-sample right-channel stereo-spread. Three
+  params in `this.P`: `reverbMix` (0–1, wet), `reverbSize` (comb
+  feedback 0.28..0.98), `reverbDamping` (LP in feedback 0..0.4).
+  Fully bypasses when both mix target and smoothed wet are < 1e-4.
+  30 ms wet-mix smoothing avoids clicks on toggle. Denormal guard on
+  comb LP states each block. UI is a Reverb slider under Audio out.
+  Automatable in songs via `param: "reverbMix"` (routes through the
+  same `synth.setParam` pipeline).
+- Song player mutates `scene.elements` in place (not rebuild-per-frame)
+  so per-element accumulated state — notably `el.rot` driven by the
+  main-loop spin integrator — survives across frames. Rotation lerp
+  is skipped for elements with `el.spin`; the spin integrator owns
+  `rot` in that case.
+- `SongPlayer.load()` fires `onStateChange('stopped')` at the end so
+  switching songs while playing resets the play button icon, seek
+  bar, and time readout. Previously the state flipped silently and
+  the UI stayed stuck on the previous song's pause icon.
+- Song-file drop and welcome overlay: `#stage` accepts drag-dropped
+  song files (JSON or MusicXML, UTF-8 or UTF-16) and auto-plays on
+  drop. The welcome overlay itself is clickable (same effect as
+  pressing ▶) so tapping "Press ▶ to play" actually plays. Both
+  gestures count as user-interaction so the AudioContext starts.
+- Song bend-lerp automation: `param: "bend"` in `song.automation`
+  lerps `mic._globalBend` over time. User touching the wl-bend slider
+  sets `songPlayer.bendPaused = true` (same semantics as touching an
+  element sets `keyframesPaused`) — only the bend lane is suppressed,
+  other automation keeps running. MIDI channel-0 pitch bend triggers
+  the same pause via `mic.onGlobalBend`.
 - Transient per-frame state lives on `scene.runtime` (created by
   `createScene()`): `{ micLevels, wlPerSource }`. `serializeScene`
   excludes runtime (explicit field list). `Object.assign(scene, fresh)`
@@ -204,8 +246,10 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   constant-power pan per voice (sensor 0 → left, N-1 → right,
   `cos/sin(pan * PI/2)` pan law). Sine wavetable (`fsin`): 2048-entry
   LUT with linear interpolation for sine partials and FM; noise and
-  karplus use `Math.random()` (Mulberry32 PRNG reverted due to
-  inter-voice correlation). Eight carrier modes: `sine`
+  karplus use `Math.random()` per sample per voice (shared Mulberry32
+  `_rng()` reserved for vocoder shared excitation and karplus note-on
+  burst where inter-voice correlation is structurally impossible).
+  Nine carrier modes: `sine`
   (harmonic partials, inverted bin-to-partial mapping: blue→high
   partials, red→fundamental), `noise` (unity-gain Csound `resonz`
   bandpass; `bp = (y0-y2)*(1-r²)/2`, variable Q via slider, default
@@ -218,12 +262,23 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   excitation at 100 Hz → 4th-order bandpass per voice, 24 dB/oct;
   auto-Q from spacing, envelope applied PRE-filter; Excite/Attack/
   Release sliders), `karplus` (Karplus-Strong delay line per voice,
-  Damping + Excite sliders, continuous + transient excitation).
+  Damping + Excite sliders, continuous + transient excitation), and
+  `piano` (modal synthesis with 12 slightly-inharmonic partials per
+  voice; rising edges in `voiceGain` inject strike energy into per-
+  partial peaks, then each partial decays exponentially at its own
+  rate — low partials ring long, high die fast, bass scales longer
+  than treble; inharmonicity `B ∝ (261/f)²` scaled by `pnoStretch`
+  slider; velocity-dependent brightness via `pnoBrightness`;
+  `pnoDecay` scales ring time. Per-partial state persists between
+  blocks so voices stay alive while peaks ring after `voiceGain`
+  drops — the active-voice gate checks `v.pianoPeak[]` when the
+  carrier is piano).
   Spectral centroid (inverted: blue→1.0, red→0.0) modulates per-
   carrier parameters (acid→cutoff, noise→freq, fm→ratio,
-  supersaw→detune, pulse→duty, karplus→excitation filter). Carrier
-  params defined in `docs/js/carriers.js`. Partials slider visible only
-  in sine mode. Voices with
+  supersaw→detune, pulse→duty, vocoder→Q, karplus→excitation filter,
+  piano→upper-partial brightness). Carrier params defined in
+  `docs/js/carriers.js`. Partials slider visible only in sine mode.
+  Voices with
   all gains < 1e-5 are skipped (voice stealing). Rebuild sends
   frequency array + `fullScale` via `MessagePort`. `synth.enable()`
   is async (awaits `audioWorklet.addModule`). Log-mode voice

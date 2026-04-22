@@ -92,6 +92,16 @@ No dependencies.
 - `docs/js/carriers.js` — carrier parameter descriptors (UI, persistence,
   automation, worklet defaults). Single source of truth for all
   carrier modes.
+- `docs/js/song.js` — `SongPlayer` class and keyframe-driven playback.
+  Mutates `scene.elements` in place each frame (preserves per-element
+  accumulated state — `el.rot` from the spin integrator — across the
+  lerp). Skips rotation lerp for elements with `el.spin`.
+- `docs/js/musicxml.js` — runtime MusicXML → Chromavox song JSON
+  converter (~200 lines). Zero deps, uses built-in `DOMParser`.
+  Handles chords, ties, backup/forward, per-measure divisions, ABC-
+  style backslash-diacritic escapes in titles. Multi-part merging
+  (unions all `<part>` note streams). Auto-selects the `piano`
+  carrier when score metadata mentions "piano".
 - `docs/js/main.js` — wiring + dirty-flag render loop + device pickers +
   localStorage persistence (auto-save on `markDirty`, restore on load).
   Spectrum readout smoothing (`_displayBins`, `_peakMax`, `_blurBuf`)

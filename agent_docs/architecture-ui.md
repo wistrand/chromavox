@@ -194,6 +194,31 @@ Scene auto-saves to `localStorage` (key `'chromavox-scene'`) on every
 `markDirty`. On page load, `main.js` restores from localStorage if
 available, otherwise calls `createScene()`.
 
+### Runtime song import
+
+Two paths, sharing `importSongFile(f)` in `main.js`:
+
+- **`⇪` button** next to the song selector (transport bar). Opens a
+  hidden `<input type="file">` accepting `.json`, `.xml`,
+  `.musicxml`. Loads the file but does not auto-play (manual flow).
+- **Drop onto `#stage`** — dragging a file over the stage adds
+  `.drop-target` (dashed cyan outline). On drop, the file is read
+  and — on success — `playBtn.click()` fires so the song auto-plays.
+  The drop gesture counts as user interaction so the AudioContext
+  starts. The `songSelect` dropdown clears to reflect that the
+  loaded song isn't one of the catalogued ones.
+
+The helper reads the file as `ArrayBuffer`, sniffs a BOM
+(`FE FF` → UTF-16 BE, `FF FE` → UTF-16 LE) so Finale's UTF-16
+MusicXML exports decode correctly, then content-sniffs `<` vs `{`
+to choose between `musicxmlToSong(text)` (`docs/js/musicxml.js`)
+and `JSON.parse(text)`. Errors bubble up via `alert()`.
+
+The welcome overlay (rendered from the loaded song's `welcome`
+field) is clickable — clicking or tapping anywhere on it calls
+`playBtn.click()`, so the user-prompt "Press ▶ to play" actually
+plays when pressed.
+
 Clear button `Object.assign`s a fresh `createScene()` over the scene
 (not just `elements = []`), calls `syncControls` +
 `rebuildSensorReadout`, and removes the localStorage entry. The fresh

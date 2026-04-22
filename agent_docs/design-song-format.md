@@ -147,15 +147,25 @@ Array of parameter automation lanes. Each lane:
 
 - `param`: parameter name (string). Supported:
   - `volume` — master synth volume (0-1)
-  - `carrier` — carrier mode string (discrete: "sine"/"noise"/"acid")
-  - `acidRes`, `acidEnv` — acid filter parameters (0-1)
+  - `carrier` — carrier mode string (discrete, e.g. "sine", "piano",
+    "acid", "vocoder", "karplus", "noise", "fm", "supersaw", "pulse")
   - `partials` — partial count (1-8, stepped)
   - `mode` — scale mode (discrete)
   - `base` — base frequency Hz
   - `bend` — global wavelength bend, -1..+1 (same as the `wl-bend`
     slider). Lerp between points gives smooth pitch-bend automation
     (folk-song "singing" glide, siren sweeps, etc.). The UI slider
-    is updated in sync.
+    is updated in sync. **User interaction with the wl-bend slider
+    (or MIDI channel-0 pitch bend) sets `songPlayer.bendPaused =
+    true`, stopping just the bend lane's automation for the rest of
+    playback. Parallel to element edits setting `keyframesPaused`.**
+  - `reverbMix`, `reverbSize`, `reverbDamping` — Freeverb master
+    reverb. `reverbMix` is a wet-amount (0..1). Audio-rate smoothing
+    (~30 ms) inside the worklet avoids clicks when automation jumps.
+  - Any carrier-specific param: `acidRes`, `acidEnv`, `acidCutoff`,
+    `acidDecay`, `acidDrive`, `fmRatio`, `fmDepth`, `ssDetune`,
+    `pulseWidth`, `noiseQ`, `vocExcite`, `vocAttack`, `vocRelease`,
+    `kpDamping`, `kpExcite`, `pnoDecay`, `pnoBrightness`, `pnoStretch`.
   - Any element property via `element.id.property` syntax:
     `"prism1.rot"`, `"mirror1.x"` — overrides keyframe interpolation
 - `points`: array of `[time, value]` pairs, sorted by time.
@@ -307,3 +317,72 @@ keyframe data — no dependency on existing scene state.
 
 The `global` block overrides UI settings during playback. On stop,
 previous settings restore (saved before play starts).
+
+## Runtime import
+
+Songs can be loaded at runtime without shipping them with the app:
+
+- **File picker** — `⇪` button in the transport bar. Opens a native
+  file input. Loads the file but **does not auto-play**.
+- **Drag-and-drop** — drop a file onto `#stage` (the bench area).
+  The dashed cyan outline confirms the drop zone. **Auto-plays** on
+  successful load; the drop gesture counts as a user interaction so
+  the AudioContext starts immediately.
+
+Both paths run through the same `importSongFile(f)` helper in
+`main.js`, which:
+
+1. Reads the file as an `ArrayBuffer`.
+2. Sniffs the first two bytes for a BOM (`FE FF` → UTF-16 BE,
+   `FF FE` → UTF-16 LE; Finale exports are UTF-16). Everything else
+   is decoded as UTF-8; the UTF-8 BOM (`EF BB BF`) is stripped
+   automatically by the decoder.
+3. Content-sniffs the first non-whitespace char: `<` → MusicXML,
+   `{` → native Chromavox song JSON. Anything else → error alert.
+4. For MusicXML, converts via `musicxmlToSong(text)`
+   (`docs/js/musicxml.js`). For native JSON, `JSON.parse`.
+5. Calls `loadSongJson(json)` — clears the song-select dropdown,
+   applies the first keyframe, enables transport controls.
+
+### MusicXML converter scope
+
+`docs/js/musicxml.js` handles the audio-relevant subset of partwise
+MusicXML:
+
+- Note pitches (step + alter + octave → MIDI), rests, ties, chords
+  (`<chord/>`), multi-voice via `<backup>` and `<forward>` cursor
+  moves.
+- Per-measure `<divisions>` changes (ticks → seconds conversion
+  inline per note).
+- Tempo (first `<sound tempo>` or `<metronome><per-minute>` anywhere
+  in the document; tempo changes mid-piece are ignored).
+- Multi-part merging: every `<part>` in the document is parsed with
+  its own measure cursor and tie state, then unioned into one note
+  list. Piano lieder with voice + piano parts yield a full mixed
+  stream.
+- Common ABC/TeX backslash escapes in titles (`\"a` → ä, `\aa` → å,
+  etc.). See `decodeAbcEscapes` in `musicxml.js` for the full table.
+- Title taken from `<movement-title>` first line only (subtitles and
+  translations after a newline are dropped).
+
+Mapping:
+
+- Chromatic `mode` always (handles accidentals without lossy
+  scale-quantisation).
+- `base` Hz = one octave below the lowest note, aligned to an octave
+  boundary. Emitter count spans lowest→highest, capped at 64 (the
+  GPU tracer's `wlPerSource` texture width). Overflow drops low-
+  octave headroom first, then high notes if the piece still exceeds
+  64 semitones.
+- `carrier` defaults to `sine`, but auto-switches to `piano` if any
+  of `<movement-title>`, `<work-title>`, `<part-name>`,
+  `<instrument-name>`, `<part-abbreviation>`, `<score-instrument>`
+  contains the word "piano" (case-insensitive, word-bounded).
+- Empty `keyframes` — rays go straight from emitters to sensors, so
+  imported songs play the written pitches without optical modulation.
+  Users can add scene elements after import.
+
+Not handled (MVP scope): repeats, alternate endings, D.S. al Coda,
+tempo changes, ornaments, grace notes, triplet `<time-modification>`
+scaling. The timeline is whatever appears left-to-right in the
+`<measure>` elements.

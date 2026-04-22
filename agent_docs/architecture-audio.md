@@ -152,7 +152,7 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
   `_carrierNoise`, `_carrierPulse`, `_carrierVocoder`,
   `_carrierKarplus`), dispatched via a constant map
   `_CARRIERS = { sine: _carrierSine, ... }`. The voice loop calls
-  `_CARRIERS[this.carrier](v, ctx)` — no if/else chain. Eight modes:
+  `_CARRIERS[this.carrier](v, ctx)` — no if/else chain. Nine modes:
   - `sine` (default): harmonic partials with 1/k rolloff for
     neutral sawtooth-like timbre from white light. Bin-to-partial
     mapping is **inverted**: blue light (low wavelength bins) drives
@@ -203,6 +203,27 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
     mode triggers on rising gain edges (threshold `>= 0.05`).
     Variable lowpass filter in the feedback loop, with cutoff
     controlled by the Damping parameter.
+  - `piano`: modal synthesis with gain-edge attacks. Per-voice state
+    is 12 slightly-inharmonic partials with running peak amplitudes.
+    Strike model: rising edges in per-sample `voiceGain` inject
+    energy proportional to `_PIANO_MIX[n] * gainRise * velocity^exp`
+    into each partial's peak; between strikes each partial decays
+    exponentially at its own rate (low partials ring long, high die
+    fast). Frequency-dependent decay scaling via
+    `freqDecayFactor = (261/f)^0.7` so bass sustains longer than
+    treble. Inharmonicity coefficient `B = stretch · 0.0005 ·
+    (261/f)²` applied as `f_n = n·f·√(1 + B·n²)` — bass gets more
+    stretch, matching real piano tuning. Nyquist-safe: partials above
+    `0.95·nyq` have `dts[n]=0` and don't output. Voice stays alive
+    after `voiceGain` drops as long as any `v.pianoPeak[n] > 1e-5`,
+    so the modal tail rings naturally. Three sliders: **Decay**
+    (0.2–3× ring time), **Brightness** (velocity→partial slope),
+    **Stretch** (0 = organ, 1 = concert grand).
+    Per-voice state (`v.pianoPhases/pianoPeak/pianoDts/
+    pianoDecayPerSample`, each `Float32Array(12)`) is pre-allocated
+    in `_rebuildPartials` for hidden-class stability; `pianoDts` is
+    rebuilt on freq or stretch change (`pianoDtsFreq` +
+    `pianoDtsStretch` guards).
 - **Spectral centroid**: for all non-sine carriers, each voice
   computes a spectral centroid from its wavelength bins. The centroid
   is **inverted**: blue (short wavelength, low bins) → 1.0 (bright),
@@ -224,6 +245,10 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
     input widens it — a focused vowel vs. a breathy one. The base `Q`
     is a block constant on `ctx.vocQ`; carrier applies `qMod` per voice
     and recomputes `gainNorm = 1 / max(1, Q * 0.5)` per voice.
+  - `piano` → upper-partial brightness (`centroidBoost = 1 +
+    (centroid-0.5)·1.5`, applied only to new strike energy in
+    partials 4+). Blue-dominant strikes emphasise the upper modal
+    partials; red-dominant strikes produce a mellower tone.
 - **Partials**: adjustable 1–8 via the Partials slider (default 6).
   Each voice synthesises that many harmonic overtones with
   `Math.sin` directly (no wavetable). Harmonic gains come from
@@ -332,6 +357,55 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
 - **Sim rate** slider (Audio in dropdown): log-scaled multiplier
   on the particle advance `dt`. `4×` makes slow-glass drain 4× faster;
   `0.25×` makes it 4× more viscous. Default 1× (real time).
+
+## Freeverb master reverb
+
+Jezar Wakefield's Schroeder-style reverb, applied inside the worklet's
+`process()` **after** all voices have summed into `bufL/bufR` and
+**before** the output `ftanh` soft-limiter. Living pre-limiter means
+runaway comb-filter resonance gets smoothly caught by tanh rather than
+clipped after the fact.
+
+Topology:
+- 8 parallel comb filters per channel, each with a 1-pole LP in the
+  feedback path (the "damping" filter).
+- 4 serial allpass filters per channel, fixed feedback 0.5.
+- 23-sample stereo-spread offset added to every right-channel delay
+  length for decorrelation.
+- Input to reverb: `(bufL + bufR) · 0.015` (mono-sum, 36 dB attenuation
+  so feedback paths can't runaway from full-scale input).
+- Output mix: `bufL[i] = dry·inL + wet·outL` (same for R).
+
+Tuned delay lengths (samples, Jezar's primes at 44.1 kHz, used as-is
+at 48 kHz — tonal character shifts slightly but that's standard):
+- Combs: `1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617`
+- Allpass: `556, 441, 341, 225`
+
+Params (on worklet `this.P`, default 0):
+- `reverbMix` (0–1): wet amount.
+- `reverbSize` (0–1) → comb feedback `0.28 + size·0.7` (= 0.28…0.98).
+- `reverbDamping` (0–1) → LP coefficient in feedback, `damp·0.4`
+  (= 0..0.4). Higher damping kills high-frequency modes faster.
+
+Bypass: when both `reverbMix` target and `_rvWetSmooth` state are
+below `1e-4` the function returns immediately — no state advance, no
+cost. Audio-rate wet-mix smoothing (`~30 ms` time constant) prevents
+clicks when toggling the slider.
+
+Denormal guard: the 16 comb LP states are clamped to 0 at the end of
+each block if their absolute value drops below `1e-20`. Without it,
+long-silent reverb states drift into subnormal arithmetic (10–100×
+slowdown on x86).
+
+State is allocated once in `_initReverb()` from the constructor:
+stereo-paired `Float32Array` comb buffers and allpass buffers, plus
+`Uint32Array` write indices. No hot-path allocation.
+
+UI: single **Reverb** slider below **Volume** in the Audio-out options
+menu (`#synth-reverb` in `play.html`). Persisted via
+`UI_CONTROL_IDS → localStorage`. Automatable in songs via
+`{ "param": "reverbMix", "points": [...] }` — routes through the same
+`synth.setParam` pipeline the carrier params use.
 
 ## Spectrum readout smoothing
 
