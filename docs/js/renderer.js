@@ -851,7 +851,6 @@ export class Renderer {
     }
     if (!tracer.sensorBins) return;
     const binCount = tracer.binCount;
-    const sensorCount = scene.sensorCount;
     const totalBins = sensorCount * binCount;
 
     if (this._displayBins.length !== totalBins) {

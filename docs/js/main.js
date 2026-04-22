@@ -12,6 +12,7 @@ import { padNoteToEmitter } from './midi-devices/push.js';
 import { MidiRouter } from './midi-devices/router.js';
 import { scaleFreq } from './spectrum.js';
 import { SongPlayer } from './song.js';
+import { musicxmlToSong } from './musicxml.js';
 import { CARRIERS, ALL_PARAM_IDS } from './carriers.js';
 
 const STORAGE_KEY = 'chromavox-scene';
@@ -1680,25 +1681,61 @@ window.addEventListener('resize', () => {
   // pressing the ▶ button.
   if (welcomeEl) welcomeEl.addEventListener('click', () => playBtn.click());
 
+  function loadSongJson(json) {
+    songPlayer.load(json);
+    songPlayer.applyKeyframeAt(scene, 0);
+    dirty = true;
+    playBtn.disabled = false;
+    stopBtn.disabled = false;
+    seekSlider.disabled = false;
+    seekSlider.max = songPlayer.duration;
+    if (json.welcome) showWelcome(json.welcome);
+    else cv.hideWelcome();
+  }
+
   songSelect.addEventListener('change', async () => {
     const file = songSelect.value;
     if (!file) { songPlayer.stop(); cv.hideWelcome(); setDirty(); return; }
     try {
       const resp = await fetch('songs/' + file);
       const json = await resp.json();
-      songPlayer.load(json);
-      songPlayer.applyKeyframeAt(scene, 0);
-      dirty = true;
-      playBtn.disabled = false;
-      stopBtn.disabled = false;
-      seekSlider.disabled = false;
-      seekSlider.max = songPlayer.duration;
-      if (json.welcome) showWelcome(json.welcome);
-      else cv.hideWelcome();
+      loadSongJson(json);
     } catch (err) {
       console.error('Song load failed:', err);
     }
   });
+
+  // MusicXML import: convert the file to a song JSON at runtime and load
+  // it. No file is written to disk — the result lives only in memory for
+  // this session. User can save via the download flow if they want it.
+  const importBtn = document.getElementById('song-import');
+  const importFile = document.getElementById('song-import-file');
+  if (importBtn && importFile) {
+    importBtn.addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', async () => {
+      const f = importFile.files[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        // Content sniff: first non-whitespace char tells us the format.
+        // `<` → MusicXML; `{` → native Chromavox song JSON.
+        const head = text.trimStart()[0];
+        let json;
+        if (head === '<') json = musicxmlToSong(text);
+        else if (head === '{') json = JSON.parse(text);
+        else throw new Error('Unrecognised file — expected MusicXML (<…>) or Chromavox song JSON ({…})');
+        // Unselect any catalogued song so the dropdown doesn't claim to
+        // represent the imported one.
+        songSelect.value = '';
+        loadSongJson(json);
+      } catch (err) {
+        console.error('Song import failed:', err);
+        alert('Could not import song: ' + err.message);
+      } finally {
+        importFile.value = '';
+      }
+    });
+  }
 
   playBtn.addEventListener('click', () => {
     if (!songPlayer.song) return;
