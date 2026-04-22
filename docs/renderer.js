@@ -336,8 +336,70 @@ export class Renderer {
 
     this._benchW = 556;
     this._benchH = 900;
+
+    // Adaptive quality: progressively reduce visual fidelity when FPS
+    // drops, restore when it recovers. Tier 0 = full quality.
+    this.qualityTier = 0;
+    this._qFrameTimes = []; // rolling window of frame durations (ms)
+    this._qLastTime = 0;
+    this._qCheckInterval = 500; // ms between tier evaluations
+    this._qLastCheck = 0;
+    this._userRaysPer = 0; // original user-set raysPerSource (0 = not capped)
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  // Call at the start of each frame with the scene to update quality tier.
+  updateQuality(scene) {
+    const now = performance.now();
+    if (this._qLastTime > 0) {
+      this._qFrameTimes.push(now - this._qLastTime);
+      if (this._qFrameTimes.length > 30) this._qFrameTimes.shift();
+    }
+    this._qLastTime = now;
+
+    if (now - this._qLastCheck < this._qCheckInterval) return;
+    this._qLastCheck = now;
+    if (this._qFrameTimes.length < 5) return;
+
+    // Rolling average FPS from frame times.
+    const avgMs = this._qFrameTimes.reduce((a, b) => a + b, 0) / this._qFrameTimes.length;
+    const fps = 1000 / avgMs;
+
+    const prev = this.qualityTier;
+    // Hysteresis: enter at threshold, exit at threshold + 10fps.
+    if (fps < 10)      this.qualityTier = Math.max(this.qualityTier, 5);
+    else if (fps < 15)  this.qualityTier = Math.max(this.qualityTier, 4);
+    else if (fps < 20)  this.qualityTier = Math.max(this.qualityTier, 3);
+    else if (fps < 30)  this.qualityTier = Math.max(this.qualityTier, 2);
+    else if (fps < 45)  this.qualityTier = Math.max(this.qualityTier, 1);
+    // Recovery: drop tier when fps is well above the entry threshold.
+    if (fps > 55 && this.qualityTier >= 1) this.qualityTier = 0;
+    else if (fps > 40 && this.qualityTier >= 2) this.qualityTier = 1;
+    else if (fps > 30 && this.qualityTier >= 3) this.qualityTier = 2;
+    else if (fps > 25 && this.qualityTier >= 4) this.qualityTier = 3;
+    else if (fps > 20 && this.qualityTier >= 5) this.qualityTier = 4;
+
+    // Apply tier changes.
+    if (this.qualityTier !== prev) {
+      // Tier 3+: DPR = 1.
+      if (this.qualityTier >= 3 || (prev >= 3 && this.qualityTier < 3)) {
+        this.resize();
+      }
+      // Tier 4/5: cap raysPerSource.
+      if (this.qualityTier >= 4 && !this._userRaysPer) {
+        this._userRaysPer = scene.emitter.raysPerSource;
+      }
+      if (this.qualityTier >= 5) {
+        scene.emitter.raysPerSource = Math.min(scene.emitter.raysPerSource, 48);
+      } else if (this.qualityTier >= 4) {
+        scene.emitter.raysPerSource = Math.min(scene.emitter.raysPerSource, 128);
+      } else if (this._userRaysPer && this.qualityTier < 4) {
+        scene.emitter.raysPerSource = this._userRaysPer;
+        this._userRaysPer = 0;
+      }
+    }
   }
 
   setBenchSize(bw, bh) {
@@ -365,7 +427,7 @@ export class Renderer {
       readout.style.marginTop = Math.floor((stageH - h) / 2) + 'px';
     }
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = this.qualityTier >= 3 ? 1 : Math.min(window.devicePixelRatio || 1, 2);
     this.canvas.width = Math.max(2, Math.floor(w * dpr));
     this.canvas.height = Math.max(2, Math.floor(h * dpr));
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -462,14 +524,17 @@ export class Renderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     // --- Pass 2b: element interiors (distortion sampling the FBO) ---
-    gl.useProgram(this.elemProgram);
-    gl.uniform2f(this.elem.uBench, scene.bench.w, scene.bench.h);
-    gl.uniform1i(this.elem.uFbo, 0); // FBO texture still bound on unit 0
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
-    gl.enableVertexAttribArray(this.elem.aCorner);
-    gl.vertexAttribPointer(this.elem.aCorner, 2, gl.FLOAT, false, 0, 0);
-    for (const el of scene.elements) {
-      this.drawElement(el);
+    // Tier 2+: skip SDF pass entirely (saves per-pixel polygon distance calc).
+    if (this.qualityTier < 2) {
+      gl.useProgram(this.elemProgram);
+      gl.uniform2f(this.elem.uBench, scene.bench.w, scene.bench.h);
+      gl.uniform1i(this.elem.uFbo, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
+      gl.enableVertexAttribArray(this.elem.aCorner);
+      gl.vertexAttribPointer(this.elem.aCorner, 2, gl.FLOAT, false, 0, 0);
+      for (const el of scene.elements) {
+        this.drawElement(el);
+      }
     }
 
     // Hook for capturing the framebuffer before overlay ticks/lines.
@@ -612,7 +677,7 @@ export class Renderer {
       showMini = rr.width === 0 || rr.left >= window.innerWidth - 1;
     }
 
-    if (showMini && tracer && tracer.sensorBins && tracer.sensorCount === scene.sensorCount) {
+    if (showMini && this.qualityTier < 1 && tracer && tracer.sensorBins && tracer.sensorCount === scene.sensorCount) {
       const stripW = Math.min(72, bench.w * 0.06);
       const stripH = Math.min(6, senStripH * 0.45);
       const x0 = bench.w - 2 - stripW;

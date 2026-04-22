@@ -1288,7 +1288,16 @@ window.addEventListener('resize', () => {
       `Particles:  ${parts}\n` +
       `Pools:      ${pools}\n` +
       `Spinning:   ${spinning}` +
-      audioLines;
+      audioLines + '\n' +
+      `Quality:    ${renderer.qualityTier}\n` +
+      `            ${renderer.qualityTier > 0
+        ? [
+            renderer.qualityTier >= 1 ? '-spec' : '',
+            renderer.qualityTier >= 2 ? '-sdf' : '',
+            renderer.qualityTier >= 3 ? 'dpr1' : '',
+            renderer.qualityTier >= 4 ? 'r≤' + (renderer.qualityTier >= 5 ? 48 : 128) : '',
+          ].filter(Boolean).join(' ')
+        : ''}`;
   };
 }
 
@@ -1935,13 +1944,15 @@ function frame() {
 
   // Auto-switch GPU↔CPU tracer based on delay elements.
   pickTracer();
+  renderer.updateQuality(scene);
 
   // Phase 3 simulation: particles inside delay elements advance each
   // frame, so we must re-trace whenever the scene is dirty *or* any
   // pool holds in-flight particles. Outside those conditions RAF idles.
   const particlesInFlight = tracer.activeParticleCount() > 0;
-  const highlightChanged = highlightEmitter !== (renderer.highlightSegments ? renderer._lastHighlightEmitter : -1);
-  if (highlightChanged) { renderer._lastHighlightEmitter = highlightEmitter; dirty = true; }
+  // Highlight tracer disabled — full CPU retrace per mousemove is too
+  // expensive on mobile. The emitter hover effect is cosmetic.
+  const highlightChanged = false;
   if (dirty || particlesInFlight) {
     dirty = false;
     tracer.trace(scene);
@@ -1978,10 +1989,12 @@ function frame() {
 
     renderer.draw(scene, tracer);
     renderer.onPreOverlay = null;
+    // Readout runs when retraced or still decaying from a previous trace.
+    renderer.updateReadout(scene, tracer);
+  } else if (renderer._peakMax > 0.001) {
+    // Decay-only: readout IIR is settling, redraw bars without retrace.
+    renderer.updateReadout(scene, tracer);
   }
-  // Readout uses IIR smoothing — needs to run every active frame
-  // (not just when dirty) so bars decay smoothly to zero after input stops.
-  renderer.updateReadout(scene, tracer);
 
   if (synth.active) {
     if (synth.raysPer !== scene.emitter.raysPerSource) {

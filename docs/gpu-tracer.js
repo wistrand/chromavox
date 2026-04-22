@@ -911,9 +911,12 @@ export class GPUTracer {
       }
     }
 
-    // Save state modified by trace. The renderer expects these intact.
-    const prevRasterDiscard = gl.isEnabled(gl.RASTERIZER_DISCARD);
-    const prevVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+    // Save state modified by trace. Avoid gl.getParameter queries
+    // (pipeline stall on some mobile drivers). The renderer always sets
+    // RASTERIZER_DISCARD=off and binds its own VAOs before drawing, so
+    // we just need to restore those known-good defaults.
+    const prevRasterDiscard = false; // renderer never enables this
+    const prevVao = null;            // renderer binds per-draw
 
     gl.enable(gl.RASTERIZER_DISCARD);
 
