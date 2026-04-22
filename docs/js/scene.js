@@ -405,14 +405,57 @@ export function materialOptics(matKey) {
   return m;
 }
 
+// Plural forms for element kinds. `${count} ${_pluralKind[kind]}`.
+const _PLURAL_KIND = {
+  prism: 'prisms',
+  block: 'blocks',
+  'lens-convex': 'convex lenses',
+  'lens-concave': 'concave lenses',
+  mirror: 'mirrors',
+  'mirror-concave': 'concave mirrors',
+  'mirror-convex': 'convex mirrors',
+  circle: 'circles',
+  rabbit: 'rabbits',
+};
+function _kindPhrase(kind, count) {
+  const lbl = (ELEMENTS[kind]?.label || kind).toLowerCase();
+  if (count === 1) return lbl;
+  return `${count} ${_PLURAL_KIND[kind] || lbl}`;
+}
+
+// Compact auto-title from scene content. Examples:
+//   "empty"
+//   "3 prisms - sine"
+//   "3 prisms, 2 mirrors - vocoder"
+//   "3 prisms, 2 mirrors +1 more - acid"
+export function autoTitle(scene) {
+  const counts = {};
+  for (const el of scene.elements) counts[el.kind] = (counts[el.kind] || 0) + 1;
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  let parts;
+  if (entries.length === 0) parts = 'empty';
+  else {
+    const top = entries.slice(0, 2).map(([k, n]) => _kindPhrase(k, n));
+    parts = top.join(', ');
+    const rest = entries.length - 2;
+    if (rest > 0) parts += ` +${rest} more`;
+  }
+  const carrier = scene.synth?.carrier;
+  return carrier ? `${parts} - ${carrier}` : parts;
+}
+
 export function serializeScene(scene) {
-  return JSON.stringify({
+  const out = {
     version: scene.version,
+    title: autoTitle(scene),
+    date: new Date().toISOString(),
     bench: scene.bench,
     emitter: { ...scene.emitter, disabled: [...(scene.emitter.disabled ?? [])] },
     sensorCount: scene.sensorCount,
     elements: scene.elements.map(({ _selected, ...rest }) => rest),
-  }, null, 2);
+  };
+  if (scene.synth) out.synth = scene.synth;
+  return JSON.stringify(out, null, 2);
 }
 
 export function deserializeScene(text) {
@@ -444,5 +487,8 @@ export function deserializeScene(text) {
     }
     return el;
   });
+  if (data.synth) scene.synth = data.synth;
+  if (data.title) scene.title = data.title;
+  if (data.date) scene.date = data.date;
   return scene;
 }

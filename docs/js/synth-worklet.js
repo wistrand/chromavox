@@ -30,6 +30,20 @@ function fsin(x) {
   return _SIN_TBL[i % _SIN_N] + (_SIN_TBL[(i + 1) % _SIN_N] - _SIN_TBL[i % _SIN_N]) * f;
 }
 
+// Mulberry32 PRNG for non-inner-loop noise paths. Used only for vocoder
+// shared excitation (one PRNG, not per-voice) and karplus init bursts
+// (one-shot per note-on). Hot per-sample-per-voice paths (_carrierNoise,
+// _carrierKarplus continuous excitation) deliberately keep Math.random()
+// to avoid the inter-voice correlation artifact that surfaces when many
+// voices pull from the same PRNG sequence.
+let _rngState = 0xDEADBEEF | 0;
+function _rng() {
+  _rngState = (_rngState + 0x6D2B79F5) | 0;
+  let t = Math.imul(_rngState ^ (_rngState >>> 15), 1 | _rngState);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
 // --- Carrier functions. Each takes (v, ctx) where v is the voice
 // struct and ctx is the shared per-block context object. ---
 
@@ -54,19 +68,25 @@ function _carrierAcid(v, ctx) {
   const cutoffCeil = sampleRate * 0.45;
   let g = Math.tan(piInvSr * sCutoff);
   let g1 = g / (1 + g);
+  // Block-rate target cutoff: recomputed only at the 32-sample guard
+  // (same rate as g/g1). sCutoff's per-sample one-pole lerp smooths the
+  // stairstep. Math.exp is ~50 cycles; at 48kHz this saves ~6M cycles/sec.
+  let targetCutoff = Math.min(cutoffCeil,
+    baseCutoffHz * Math.exp(voiceGain * envScale * ln2));
   for (let i = 0; i < ctx.len; i++) {
     voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
     phase += dt;
     let saw = 2 * phase - 1;
     if (phase >= 1) { phase -= 1; saw = 2 * phase - 1; }
-    const t1 = phase / dt;
-    if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
-    const t2 = (1 - phase) / dt;
-    if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
-    const targetCutoff = Math.min(cutoffCeil,
-      baseCutoffHz * Math.exp(voiceGain * envScale * ln2));
+    if (phase < dt) { const t = phase / dt; saw += (1 - t) * (1 - t); }
+    else if (phase > 1 - dt) { const t = (1 - phase) / dt; saw += (1 - t) * (1 - t); }
     sCutoff += (targetCutoff - sCutoff) * envSmooth;
-    if ((i & 31) === 31) { g = Math.tan(piInvSr * sCutoff); g1 = g / (1 + g); }
+    if ((i & 31) === 31) {
+      targetCutoff = Math.min(cutoffCeil,
+        baseCutoffHz * Math.exp(voiceGain * envScale * ln2));
+      g = Math.tan(piInvSr * sCutoff);
+      g1 = g / (1 + g);
+    }
     const u = saw * 1.5 - k * ftanh(s3);
     const v1 = (u - s1) * g1; s1 += 2 * v1;
     const v2 = (s1 - s2) * g1; s2 += 2 * v2;
@@ -74,6 +94,11 @@ function _carrierAcid(v, ctx) {
     const _s = ftanh(s3 * driveAmt) * voiceGain;
     ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
   }
+  // Denormal guard: IIR states can decay into subnormal range during
+  // sustained silence, triggering a 10-100× slowdown on x86 without FTZ.
+  if (Math.abs(s1) < 1e-20) s1 = 0;
+  if (Math.abs(s2) < 1e-20) s2 = 0;
+  if (Math.abs(s3) < 1e-20) s3 = 0;
   v.sawPhase = phase; v.lp1 = s1; v.lp2 = s2; v.lp3 = s3;
   v.smoothCutoff = sCutoff; v.gains[0] = voiceGain;
 }
@@ -159,6 +184,9 @@ function _carrierNoise(v, ctx) {
     const _s = bp * voiceGain * 8;
     ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
   }
+  // Denormal guard on bandpass states.
+  if (Math.abs(y1) < 1e-20) y1 = 0;
+  if (Math.abs(y2) < 1e-20) y2 = 0;
   v.bp1 = y1; v.bp2 = y2; v.gains[0] = voiceGain;
 }
 
@@ -190,31 +218,50 @@ function _carrierPulse(v, ctx) {
 }
 
 function _carrierVocoder(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
   const voiceTarget = v.targetGains[0];
-  const freq = v.freq;
-  const ratio = ctx.sc > 1 ? Math.pow(6000 / 80, 1 / ctx.sc) : 2;
-  const Q = Math.max(1, 1 / (ratio - 1));
-  const w0 = ctx.twoPi * freq * ctx.invSr;
+  // Spectral centroid modulates Q: blue-dominant input (high centroid)
+  // tightens the formant filter; red-dominant input widens it. Range is
+  // roughly ±1 octave on Q — a focused vowel vs. a breathy one.
+  const qMod = Math.pow(2, (v.centroid - 0.5) * 2);
+  const Q = Math.max(1, ctx.vocQ * qMod);
+  // Per-voice biquad coefficients (depend on freq and Q).
+  const w0 = ctx.twoPi * v.freq * ctx.invSr;
   const sinW = Math.sin(w0), cosW = Math.cos(w0);
   const alpha = sinW / (2 * Q);
   const a0inv = 1 / (1 + alpha);
   const b0 = (sinW / 2) * a0inv, b2 = -(sinW / 2) * a0inv;
   const a1 = (-2 * cosW) * a0inv, a2 = (1 - alpha) * a0inv;
-  const atkCoeff = 1 - Math.exp(-1 / ((ctx.P.vocAttack ?? 5) * 0.001 * sampleRate));
-  const relCoeff = 1 - Math.exp(-1 / ((ctx.P.vocRelease ?? 20) * 0.001 * sampleRate));
-  let env = v.vocEnv;
-  const s1 = v.voc1, s2 = v.voc2;
+  const atkCoeff = ctx.vocAtk, relCoeff = ctx.vocRel;
   const gainNorm = 1 / Math.max(1, Q * 0.5);
-  for (let i = 0; i < ctx.len; i++) {
+  const vocExc = ctx.vocExc;
+  const bufL = ctx.bufL, bufR = ctx.bufR;
+  const panL = ctx.panL, panR = ctx.panR;
+  const len = ctx.len;
+  let env = v.vocEnv;
+  // DF-II Transposed: two states per biquad instead of four. b1 = 0 for BPF.
+  // y = b0*x + z1;  z1 = z2 - a1*y;  z2 = b2*x - a2*y
+  let z1a = v.voc1[0], z2a = v.voc1[1];
+  let z1b = v.voc2[0], z2b = v.voc2[1];
+  for (let i = 0; i < len; i++) {
     env += (voiceTarget - env) * (voiceTarget > env ? atkCoeff : relCoeff);
-    const exc = ctx.vocExc[i] * env;
-    let y = b0 * exc + b2 * s1[1] - a1 * s1[2] - a2 * s1[3];
-    s1[1] = s1[0]; s1[0] = exc; s1[3] = s1[2]; s1[2] = y;
-    const y2 = b0 * y + b2 * s2[1] - a1 * s2[2] - a2 * s2[3];
-    s2[1] = s2[0]; s2[0] = y; s2[3] = s2[2]; s2[2] = y2;
+    const exc = vocExc[i] * env;
+    const y = b0 * exc + z1a;
+    z1a = z2a - a1 * y;
+    z2a = b2 * exc - a2 * y;
+    const y2 = b0 * y + z1b;
+    z1b = z2b - a1 * y2;
+    z2b = b2 * y - a2 * y2;
     const _s = y2 * gainNorm * 4;
-    ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
+    bufL[i] += _s * panL; bufR[i] += _s * panR;
   }
+  // Denormal guard on biquad states.
+  if (Math.abs(z1a) < 1e-20) z1a = 0;
+  if (Math.abs(z2a) < 1e-20) z2a = 0;
+  if (Math.abs(z1b) < 1e-20) z1b = 0;
+  if (Math.abs(z2b) < 1e-20) z2b = 0;
+  v.voc1[0] = z1a; v.voc1[1] = z2a;
+  v.voc2[0] = z1b; v.voc2[1] = z2b;
   v.vocEnv = env; v.gains[0] = env;
 }
 
@@ -230,7 +277,7 @@ function _carrierKarplus(v, ctx) {
   const kpBuf = v.kpBuf, kpLen = kpBuf.length;
   let idx = v.kpIdx, prev = v.kpPrev;
   if (voiceTarget >= 0.05 && v.kpGainPrev < 0.05) {
-    for (let j = 0; j < kpLen; j++) kpBuf[j] += (Math.random() * 2 - 1) * voiceTarget * 0.5;
+    for (let j = 0; j < kpLen; j++) kpBuf[j] += (_rng() * 2 - 1) * voiceTarget * 0.5;
   }
   v.kpGainPrev = voiceTarget;
   const contExcite = (1 - exciteAmt) * 0.4;
@@ -256,16 +303,30 @@ function _carrierKarplus(v, ctx) {
 }
 
 function _carrierSine(v, ctx) {
-  for (let i = 0; i < ctx.len; i++) {
+  const phases = v.phases;
+  const gains = v.gains;
+  const targetGains = v.targetGains;
+  const nk = phases.length;
+  const bufL = ctx.bufL, bufR = ctx.bufR;
+  const panL = ctx.panL, panR = ctx.panR;
+  const smooth = ctx.smooth;
+  const twoPi = ctx.twoPi;
+  const len = ctx.len;
+  // Per-partial phase increment is constant across the block.
+  if (!v._sineDts || v._sineDts.length < nk) v._sineDts = new Float32Array(nk);
+  const dts = v._sineDts;
+  const baseInc = twoPi * v.freq * ctx.invSr;
+  for (let k = 0; k < nk; k++) dts[k] = baseInc * (k + 1);
+  for (let i = 0; i < len; i++) {
     let sample = 0;
-    for (let k = 0; k < v.phases.length; k++) {
-      v.gains[k] += (v.targetGains[k] - v.gains[k]) * ctx.smooth;
-      if (v.gains[k] < 1e-6 && v.targetGains[k] < 1e-6) continue;
-      sample += fsin(v.phases[k]) * v.gains[k];
-      v.phases[k] += ctx.twoPi * v.freq * (k + 1) * ctx.invSr;
-      if (v.phases[k] > ctx.twoPi) v.phases[k] -= ctx.twoPi;
+    for (let k = 0; k < nk; k++) {
+      gains[k] += (targetGains[k] - gains[k]) * smooth;
+      if (gains[k] < 1e-6 && targetGains[k] < 1e-6) continue;
+      sample += fsin(phases[k]) * gains[k];
+      phases[k] += dts[k];
+      if (phases[k] > twoPi) phases[k] -= twoPi;
     }
-    ctx.bufL[i] += sample * ctx.panL; ctx.bufR[i] += sample * ctx.panR;
+    bufL[i] += sample * panL; bufR[i] += sample * panR;
   }
 }
 
@@ -350,7 +411,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         kpBuf: new Float32Array(kpLen), kpIdx: 0, kpPrev: 0, kpGainPrev: 0,
         kpExLp: 0,
         // Vocoder: 4th-order bandpass = two cascaded biquads.
-        voc1: new Float32Array(4), voc2: new Float32Array(4), // [x1,x2,y1,y2] per biquad
+        voc1: new Float32Array(2), voc2: new Float32Array(2), // DF-IIT state [z1,z2] per biquad
         vocEnv: 0, vocPulsePhase: 0 });
     }
   }
@@ -451,7 +512,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       _vocExc = this._vocExcBuf;
       for (let i = 0; i < len; i++) {
         let exc = 0;
-        if (useNoise) exc += (Math.random() * 2 - 1) * noiseMix;
+        if (useNoise) exc += (_rng() * 2 - 1) * noiseMix;
         if (usePulse) {
           this._vocPhase += pdt;
           if (this._vocPhase >= 1) this._vocPhase -= 1;
@@ -469,11 +530,21 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // per process() call; panL/panR updated per voice.
     // Reuse ctx object across calls — update properties, no allocation.
     if (!this._ctx) this._ctx = { bufL: null, bufR: null, len: 0, smooth: 0,
-      centroidSmooth: 0, twoPi: 0, invSr: 0, sc: 0, P: null, vocExc: null, panL: 0, panR: 0 };
+      centroidSmooth: 0, twoPi: 0, invSr: 0, sc: 0, P: null, vocExc: null,
+      vocQ: 0, vocAtk: 0, vocRel: 0, panL: 0, panR: 0 };
     const ctx = this._ctx;
     ctx.bufL = bufL; ctx.bufR = bufR; ctx.len = len; ctx.smooth = smooth;
     ctx.centroidSmooth = centroidSmooth; ctx.twoPi = twoPi; ctx.invSr = invSr;
     ctx.sc = sc; ctx.P = this.P; ctx.vocExc = _vocExc;
+    // Vocoder per-block constants: depend on sc and P only (not per voice).
+    // vocQ is the unmodulated base; the carrier applies centroid-based
+    // per-voice scaling on top. Avoids N_voices × 2×Math.exp per block.
+    if (isVocoder) {
+      const ratio = sc > 1 ? Math.pow(6000 / 80, 1 / sc) : 2;
+      ctx.vocQ = Math.max(1, 1 / (ratio - 1));
+      ctx.vocAtk = 1 - Math.exp(-1 / ((this.P.vocAttack ?? 5) * 0.001 * sampleRate));
+      ctx.vocRel = 1 - Math.exp(-1 / ((this.P.vocRelease ?? 20) * 0.001 * sampleRate));
+    }
     const _halfPi = Math.PI * 0.5;
     for (let s = 0; s < voiceCount; s++) {
       const pan = voiceCount > 1 ? s / (voiceCount - 1) : 0.5;
@@ -486,8 +557,8 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       }
       if (!anyActive) {
         v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = -1;
-        if (v.voc1) { v.voc1[0] = v.voc1[1] = v.voc1[2] = v.voc1[3] = 0; }
-        if (v.voc2) { v.voc2[0] = v.voc2[1] = v.voc2[2] = v.voc2[3] = 0; }
+        if (v.voc1) { v.voc1[0] = v.voc1[1] = 0; }
+        if (v.voc2) { v.voc2[0] = v.voc2[1] = 0; }
         v.vocEnv = 0;
         continue;
       }

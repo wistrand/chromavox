@@ -1,8 +1,21 @@
 // UI: input handling, property panel, save/load.
 
-import { makeElement, worldEdges, pointInPolygon, overlapsAny, serializeScene, deserializeScene, createScene } from './scene.js';
+import { makeElement, worldEdges, pointInPolygon, overlapsAny, serializeScene, deserializeScene, createScene, autoTitle } from './scene.js';
 import { MATERIALS } from './spectrum.js';
 import { ELEMENTS } from './elements.js';
+
+// Turn a scene title into a filesystem-friendly filename.
+// Strips diacritics, replaces em-dashes and non-alphanumerics with a single
+// dash, trims, lowercases, then prefixes "chromavox-" and suffixes ".json".
+function filenameFromTitle(title) {
+  const slug = (title || '')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')    // strip combining diacritics
+    .replace(/[^a-zA-Z0-9]+/g, '-')     // collapse em-dash, commas, spaces, etc. into a single dash
+    .replace(/^-+|-+$/g, '')            // trim leading/trailing dashes
+    .toLowerCase();
+  return 'chromavox-' + (slug || 'scene') + '.json';
+}
 
 // Apply a mutation to an element, reverting if it causes overlap.
 // `mutate` is called with the element; `keys` lists the properties
@@ -145,6 +158,10 @@ export class UI {
     this.canvas = canvas;
     this.onChange = onChange;
     this.onSceneReset = onSceneReset || (() => {});
+    // Optional hook: called before serializing the scene for download.
+    // Use it to flush out-of-scene state (e.g. carrier DOM) into the
+    // scene object so the saved file matches live state.
+    this.beforeSerialize = null;
     this.selected = null;
     this.dragging = null;
     this.history = new History();
@@ -908,11 +925,12 @@ export class UI {
   // --- Save / load / clear ---
   bindSceneButtons() {
     document.getElementById('save').addEventListener('click', () => {
+      if (this.beforeSerialize) this.beforeSerialize();
       const text = serializeScene(this.scene);
       const blob = new Blob([text], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = 'chromavox.json';
+      a.href = url; a.download = filenameFromTitle(autoTitle(this.scene));
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     });

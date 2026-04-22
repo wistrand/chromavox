@@ -354,7 +354,14 @@ export class Renderer {
   updateQuality(scene) {
     const now = performance.now();
     if (this._qLastTime > 0) {
-      this._qFrameTimes.push(now - this._qLastTime);
+      // Clamp idle-wake gaps. Chromavox's RAF loop stops when nothing
+      // is happening; the first frame after resumption (user edit,
+      // mic enable, tab refocus) would otherwise register a multi-
+      // second "frame" and tank the rolling average. 200 ms caps the
+      // metric at ~5 FPS, already deep in the tier-5 region — any
+      // genuine render that slow still maxes out the tier ladder.
+      const delta = Math.min(200, now - this._qLastTime);
+      this._qFrameTimes.push(delta);
       if (this._qFrameTimes.length > 30) this._qFrameTimes.shift();
     }
     this._qLastTime = now;
@@ -383,6 +390,10 @@ export class Renderer {
 
     // Apply tier changes.
     if (this.qualityTier !== prev) {
+      // Drop the rolling window so the next evaluation is based on
+      // fresh data at the new tier. Avoids tier bouncing when a stale
+      // outlier from the previous tier is still in the window.
+      this._qFrameTimes.length = 0;
       // Tier 3+: DPR = 1.
       if (this.qualityTier >= 3 || (prev >= 3 && this.qualityTier < 3)) {
         this.resize();

@@ -1,6 +1,6 @@
 // Entry: wire scene, tracer, renderer, UI; run the frame loop.
 
-import { createScene, serializeScene, deserializeScene } from './scene.js';
+import { createScene, serializeScene, deserializeScene, autoTitle } from './scene.js';
 import { Tracer } from './raytracer.js';
 import { GPUTracer } from './gpu-tracer.js';
 import { Renderer } from './renderer.js';
@@ -33,6 +33,7 @@ try {
 }
 // Sync renderer to the scene's bench size.
 renderer.setBenchSize(scene.bench.w, scene.bench.h);
+document.title = 'Chromavox - ' + autoTitle(scene);
 const forceCPU = new URLSearchParams(location.search).has('cpu');
 const gpuTracer = forceCPU ? null : new GPUTracer(renderer.gl);
 const cpuTracer = new Tracer();
@@ -118,15 +119,58 @@ function restoreUiState() {
   } catch {}
 }
 
+// Copy the current carrier + its param slider values into scene.synth so
+// serializeScene picks them up. Safe to call early: if the carrier UI
+// isn't built yet, just no-op.
+function syncSceneSynth() {
+  const sel = document.getElementById('synth-carrier');
+  if (!sel) return;
+  const carrier = sel.value;
+  const cDef = CARRIERS[carrier];
+  if (!cDef) return;
+  const params = {};
+  for (const p of cDef.params) {
+    const el = document.getElementById('cp-' + p.id);
+    if (!el) continue;
+    const steps = p.step || 0.01;
+    params[p.id] = parseInt(el.value, 10) * steps;
+  }
+  scene.synth = { carrier, params };
+}
+
 const markDirty = () => {
   setDirty();
   if (cv.hideWelcome) cv.hideWelcome();
   // Any scene edit during song playback pauses keyframe lerps —
   // the user has taken ownership of element positions.
   if (songPlayer.playing) songPlayer.keyframesPaused = true;
+  syncSceneSynth();
+  document.title = 'Chromavox - ' + autoTitle(scene);
   try { localStorage.setItem(STORAGE_KEY, serializeScene(scene)); } catch {}
   saveUiState();
 };
+// Apply scene.synth (if present) to the carrier select, cp-* sliders,
+// and the worklet. Called after deserialize / scene reset.
+function applySceneSynth() {
+  const saved = scene.synth;
+  if (!saved) return;
+  const sel = document.getElementById('synth-carrier');
+  const cDef = saved.carrier && CARRIERS[saved.carrier];
+  if (sel && cDef) {
+    sel.value = saved.carrier;
+    sel.dispatchEvent(new Event('change'));
+  }
+  if (saved.params && cDef) {
+    for (const p of cDef.params) {
+      if (!(p.id in saved.params)) continue;
+      const inp = document.getElementById('cp-' + p.id);
+      if (!inp) continue;
+      const steps = p.step || 0.01;
+      inp.value = Math.round(saved.params[p.id] / steps);
+      inp.dispatchEvent(new Event('input'));
+    }
+  }
+}
 function resetDisplay() {
   renderer.setBenchSize(scene.bench.w, scene.bench.h);
   syncBenchAspectDropdown();
@@ -134,6 +178,8 @@ function resetDisplay() {
   tracer.resetPersistence();
   songPlayer.stop();
   document.getElementById('song-select').value = '';
+  applySceneSynth();
+  document.title = 'Chromavox - ' + autoTitle(scene);
 }
 let lastFrameTime = performance.now() / 1000;
 
@@ -277,6 +323,7 @@ function syncBaseSelect(hz) {
   if (best && sel.value !== best.value) sel.value = best.value;
 }
 const ui = new UI(scene, canvas, markDirty, resetDisplay);
+ui.beforeSerialize = syncSceneSynth;
 // restoreUiState is called after carrier param sliders are built (below).
 ui.syncControls();
 ui.rebuildSensorReadout();
@@ -1070,6 +1117,7 @@ for (const [cKey, cDef] of Object.entries(CARRIERS)) {
       const v = parseInt(inp.value, 10) * steps;
       span.textContent = displayFn(v);
       synth.setParam(p.id, v);
+      markDirty();
     });
   }
 }
@@ -1084,6 +1132,7 @@ function syncCarrierVisibility() {
 carrierSel.addEventListener('change', () => {
   synth.setCarrier(carrierSel.value);
   syncCarrierVisibility();
+  markDirty();
 });
 syncCarrierVisibility();
 
