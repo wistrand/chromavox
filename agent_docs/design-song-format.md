@@ -152,6 +152,10 @@ Array of parameter automation lanes. Each lane:
   - `partials` — partial count (1-8, stepped)
   - `mode` — scale mode (discrete)
   - `base` — base frequency Hz
+  - `bend` — global wavelength bend, -1..+1 (same as the `wl-bend`
+    slider). Lerp between points gives smooth pitch-bend automation
+    (folk-song "singing" glide, siren sweeps, etc.). The UI slider
+    is updated in sync.
   - Any element property via `element.id.property` syntax:
     `"prism1.rot"`, `"mirror1.x"` — overrides keyframe interpolation
 - `points`: array of `[time, value]` pairs, sorted by time.

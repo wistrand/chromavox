@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "title": "Visa från Utanmyra",
+  "welcome": "Visa från Utanmyra\nTraditional (Sweden)\n\nPopularized by Jan Johansson, 1964\nPress ▶ to play",
+  "bpm": 112,
+  "duration": 34.286,
+  "loop": true,
+
+  "_reference": "E minor, 4/4, 112 BPM. 16 bars + anacrusis. Chord progression: Em / F#7 / Bm / Em / Em / D7 / Bm / Em / B7 / Em / G / Em-G / B7 / Em-B7 / C-G / G-D / Em.",
+  "_scale": "Chromatic, base E2 (82.41 Hz). Needed chromatic because the melody has D#4 (raised 7th, from B dominant) and A#4 (chromatic neighbor in M3). Emitter N = E2 + N semitones. Melody uses emitters 19-34; bass uses 0-8.",
+
+  "global": {
+    "emitter": { "count": 35, "wlMin": 400, "wlMax": 700, "raysPerSource": 320 },
+    "sensorCount": 35,
+    "mode": "chromatic",
+    "base": 82.41,
+    "span": 1,
+    "carrier": "acid",
+    "volume": 0.24
+  },
+
+  "keyframes": [
+    {
+      "_": "Portrait bench (556x900, default). Prism at bottom (spinning); convex lens sweeps x=180→380→180 across the song as pitch modifier; small concave mirror on the left as a resonator.",
+      "time": 0,
+      "elements": [
+        { "id": "prism-bottom", "kind": "prism",         "x": 278,    "y": 810, "size": 158, "material": "flint",  "rot": 0,      "spin": 0.14 },
+        { "id": "lens-mid",     "kind": "lens-convex",   "x": 180,    "y": 450, "h": 130, "radius": 168, "material": "crown",  "rot": 0 },
+        { "id": "mirror-small", "kind": "mirror-concave","x": 195.25, "y": 646, "h": 32,  "radius": 80,  "material": "mirror", "rot": -18.08 }
+      ]
+    },
+    {
+      "time": 17.143,
+      "elements": [
+        { "id": "prism-bottom", "kind": "prism",         "x": 278,    "y": 810, "size": 158, "material": "flint",  "rot": 0,      "spin": 0.14 },
+        { "id": "lens-mid",     "kind": "lens-convex",   "x": 380,    "y": 450, "h": 130, "radius": 168, "material": "crown",  "rot": 0 },
+        { "id": "mirror-small", "kind": "mirror-concave","x": 195.25, "y": 646, "h": 32,  "radius": 80,  "material": "mirror", "rot": -18.08 }
+      ]
+    },
+    {
+      "time": 34.286,
+      "elements": [
+        { "id": "prism-bottom", "kind": "prism",         "x": 278,    "y": 810, "size": 158, "material": "flint",  "rot": 0,      "spin": 0.14 },
+        { "id": "lens-mid",     "kind": "lens-convex",   "x": 180,    "y": 450, "h": 130, "radius": 168, "material": "crown",  "rot": 0 },
+        { "id": "mirror-small", "kind": "mirror-concave","x": 195.25, "y": 646, "h": 32,  "radius": 80,  "material": "mirror", "rot": -18.08 }
+      ]
+    }
+  ],
+
+  "notes": [
+    {"_": "=== Emitter map (chromatic from E2=82.41 Hz) ==="},
+    {"_": "E2=0  F2=1  F#2=2  G2=3  G#2=4  A2=5  A#2=6  B2=7  C3=8  C#3=9  D3=10 D#3=11"},
+    {"_": "E3=12 F3=13 F#3=14 G3=15 G#3=16 A3=17 A#3=18 B3=19 C4=20 C#4=21 D4=22 D#4=23"},
+    {"_": "E4=24 F4=25 F#4=26 G4=27 G#4=28 A4=29 A#4=30 B4=31 C5=32 C#5=33 D5=34"},
+    {"_": "At 112 BPM: quarter=0.536s  8th=0.268s  dotted-8th=0.402s  16th=0.134s  half=1.071s  dotted-half=1.607s"},
+
+    {"_": "=== Bass: chord root on each bar downbeat (matching the harmony) ==="},
+    {"_": "M2 Em"},         { "time": 0.536,  "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M3 Em→F#7"},     { "time": 2.679,  "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M4 Bm"},         { "time": 4.821,  "emitter": 7, "vel": 0.55, "dur": 2.0 },
+    {"_": "M5 Em→B7"},      { "time": 6.964,  "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M6 Em"},         { "time": 9.107,  "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M7 Em→D7"},      { "time": 11.250, "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M8 Bm"},         { "time": 13.393, "emitter": 7, "vel": 0.55, "dur": 2.0 },
+    {"_": "M9 Em→B7"},      { "time": 15.536, "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M10 Em→B7"},     { "time": 17.679, "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M11 G"},         { "time": 19.821, "emitter": 3, "vel": 0.55, "dur": 2.0 },
+    {"_": "M12 Em→G"},      { "time": 21.964, "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M13 B7"},        { "time": 24.107, "emitter": 7, "vel": 0.55, "dur": 2.0 },
+    {"_": "M14 Em→B7"},     { "time": 26.250, "emitter": 0, "vel": 0.55, "dur": 2.0 },
+    {"_": "M15 C→G"},       { "time": 28.393, "emitter": 8, "vel": 0.55, "dur": 2.0 },
+    {"_": "M16 G→D"},       { "time": 30.536, "emitter": 3, "vel": 0.55, "dur": 2.0 },
+    {"_": "M17 Em (final)"},{ "time": 32.679, "emitter": 0, "vel": 0.60, "dur": 1.6 },
+
+    {"_": "=== Melody (transcribed from the MusicXML score) ==="},
+    {"_": "M1 anacrusis: B4 dotted-8th, A4 16th"},
+    { "time": 0.000, "emitter": 31, "vel": 0.75, "dur": 0.38 },
+    { "time": 0.402, "emitter": 29, "vel": 0.70, "dur": 0.12 },
+
+    {"_": "M2: G4 E4 D#4 | D#4 B3"},
+    { "time": 0.536, "emitter": 27, "vel": 0.75, "dur": 0.50 },
+    { "time": 1.071, "emitter": 24, "vel": 0.75, "dur": 0.50 },
+    { "time": 1.607, "emitter": 23, "vel": 0.75, "dur": 0.50 },
+    { "time": 2.143, "emitter": 23, "vel": 0.70, "dur": 0.38 },
+    { "time": 2.545, "emitter": 19, "vel": 0.65, "dur": 0.12 },
+
+    {"_": "M3: E4 (dotted half) | F#4 A#4"},
+    { "time": 2.679, "emitter": 24, "vel": 0.78, "dur": 1.55 },
+    { "time": 4.286, "emitter": 26, "vel": 0.75, "dur": 0.38 },
+    { "time": 4.688, "emitter": 30, "vel": 0.80, "dur": 0.12 },
+
+    {"_": "M4: B4 B4 B4 | A4 F#4"},
+    { "time": 4.821, "emitter": 31, "vel": 0.85, "dur": 0.50 },
+    { "time": 5.357, "emitter": 31, "vel": 0.80, "dur": 0.50 },
+    { "time": 5.893, "emitter": 31, "vel": 0.80, "dur": 0.50 },
+    { "time": 6.429, "emitter": 29, "vel": 0.75, "dur": 0.38 },
+    { "time": 6.830, "emitter": 26, "vel": 0.70, "dur": 0.12 },
+
+    {"_": "M5: G4 (half) F#4 | B4 A4"},
+    { "time": 6.964, "emitter": 27, "vel": 0.80, "dur": 1.02 },
+    { "time": 8.036, "emitter": 26, "vel": 0.75, "dur": 0.50 },
+    { "time": 8.571, "emitter": 31, "vel": 0.80, "dur": 0.38 },
+    { "time": 8.973, "emitter": 29, "vel": 0.75, "dur": 0.12 },
+
+    {"_": "M6: G4 E4 D#4 | D#4 B3 (same rhythm as M2)"},
+    { "time": 9.107,  "emitter": 27, "vel": 0.75, "dur": 0.50 },
+    { "time": 9.643,  "emitter": 24, "vel": 0.75, "dur": 0.50 },
+    { "time": 10.179, "emitter": 23, "vel": 0.75, "dur": 0.50 },
+    { "time": 10.714, "emitter": 23, "vel": 0.70, "dur": 0.38 },
+    { "time": 11.116, "emitter": 19, "vel": 0.65, "dur": 0.12 },
+
+    {"_": "M7: E4 (dotted half) | F#4 A4"},
+    { "time": 11.250, "emitter": 24, "vel": 0.78, "dur": 1.55 },
+    { "time": 12.857, "emitter": 26, "vel": 0.75, "dur": 0.38 },
+    { "time": 13.259, "emitter": 29, "vel": 0.75, "dur": 0.12 },
+
+    {"_": "M8: B4 B4 B4 | A4 F#4 (same as M4)"},
+    { "time": 13.393, "emitter": 31, "vel": 0.85, "dur": 0.50 },
+    { "time": 13.929, "emitter": 31, "vel": 0.80, "dur": 0.50 },
+    { "time": 14.464, "emitter": 31, "vel": 0.80, "dur": 0.50 },
+    { "time": 15.000, "emitter": 29, "vel": 0.75, "dur": 0.38 },
+    { "time": 15.402, "emitter": 26, "vel": 0.70, "dur": 0.12 },
+
+    {"_": "M9: G4 (half) F#4 (dotted quarter) F#4 (eighth)"},
+    { "time": 15.536, "emitter": 27, "vel": 0.80, "dur": 1.02 },
+    { "time": 16.607, "emitter": 26, "vel": 0.75, "dur": 0.76 },
+    { "time": 17.411, "emitter": 26, "vel": 0.70, "dur": 0.25 },
+
+    {"_": "M10: G4 E4 F#4 | G4 A4"},
+    { "time": 17.679, "emitter": 27, "vel": 0.78, "dur": 0.50 },
+    { "time": 18.214, "emitter": 24, "vel": 0.75, "dur": 0.50 },
+    { "time": 18.750, "emitter": 26, "vel": 0.75, "dur": 0.50 },
+    { "time": 19.286, "emitter": 27, "vel": 0.78, "dur": 0.38 },
+    { "time": 19.688, "emitter": 29, "vel": 0.80, "dur": 0.12 },
+
+    {"_": "M11: B4 (dotted half) B4 (quarter)"},
+    { "time": 19.821, "emitter": 31, "vel": 0.85, "dur": 1.55 },
+    { "time": 21.429, "emitter": 31, "vel": 0.80, "dur": 0.50 },
+
+    {"_": "M12: D5 B4 B4 G4"},
+    { "time": 21.964, "emitter": 34, "vel": 0.90, "dur": 0.50 },
+    { "time": 22.500, "emitter": 31, "vel": 0.80, "dur": 0.50 },
+    { "time": 23.036, "emitter": 31, "vel": 0.80, "dur": 0.50 },
+    { "time": 23.571, "emitter": 27, "vel": 0.75, "dur": 0.50 },
+
+    {"_": "M13: A4 (dotted half) | B4 A4"},
+    { "time": 24.107, "emitter": 29, "vel": 0.82, "dur": 1.55 },
+    { "time": 25.714, "emitter": 31, "vel": 0.78, "dur": 0.38 },
+    { "time": 26.116, "emitter": 29, "vel": 0.75, "dur": 0.12 },
+
+    {"_": "M14: G4 | F#4 E4 | D#4 D#4"},
+    { "time": 26.250, "emitter": 27, "vel": 0.75, "dur": 0.50 },
+    { "time": 26.786, "emitter": 26, "vel": 0.72, "dur": 0.38 },
+    { "time": 27.188, "emitter": 24, "vel": 0.70, "dur": 0.12 },
+    { "time": 27.321, "emitter": 23, "vel": 0.72, "dur": 0.50 },
+    { "time": 27.857, "emitter": 23, "vel": 0.70, "dur": 0.50 },
+
+    {"_": "M15: E4 (half) D5 (dotted quarter) B4 (eighth)"},
+    { "time": 28.393, "emitter": 24, "vel": 0.78, "dur": 1.02 },
+    { "time": 29.464, "emitter": 34, "vel": 0.90, "dur": 0.76 },
+    { "time": 30.268, "emitter": 31, "vel": 0.80, "dur": 0.25 },
+
+    {"_": "M16: G4 | B4 A4 | F#4 D4"},
+    { "time": 30.536, "emitter": 27, "vel": 0.75, "dur": 0.50 },
+    { "time": 31.071, "emitter": 31, "vel": 0.78, "dur": 0.38 },
+    { "time": 31.473, "emitter": 29, "vel": 0.72, "dur": 0.12 },
+    { "time": 31.607, "emitter": 26, "vel": 0.72, "dur": 0.50 },
+    { "time": 32.143, "emitter": 22, "vel": 0.70, "dur": 0.50 },
+
+    {"_": "M17: E4 (dotted half) — final"},
+    { "time": 32.679, "emitter": 24, "vel": 0.75, "dur": 1.55 }
+  ],
+
+  "automation": [
+    {"_": "Volume arc: rises through the first half, peaks at the high-D5 in M12, tapers to the end"},
+    { "param": "volume", "points": [[0, 0.18], [5, 0.24], [11, 0.26], [22, 0.30], [28, 0.26], [33, 0.20], [34.3, 0.18]] },
+
+    {"_": "Bend: gentle folk-singing glide. Small pitch droops at phrase ends"},
+    { "param": "bend", "points": [
+      [0.0,  0.00],
+      [2.5,  0.00],  [2.67, -0.06], [2.80,  0.00],
+      [11.0, 0.00],  [11.2, -0.06], [11.4,  0.00],
+      [19.5, 0.00],  [19.8,  0.04], [20.2,  0.00],
+      [29.3, 0.00],  [29.5, -0.04], [29.8,  0.00],
+      [33.8, 0.00],  [34.1, -0.08], [34.3, -0.08]
+    ] },
+
+    {"_": "Acid filter: opens gradually each phrase, darker on the reprise"},
+    { "param": "acidCutoff", "points": [[0, 0.50]] },
+    { "param": "acidRes",    "points": [[0, 0.45]] },
+    { "param": "acidEnv",    "points": [[0, 0.60]] },
+    { "param": "acidDecay",  "points": [[0, 0.48]] },
+    { "param": "acidDrive",  "points": [[0, 0.54]] }
+  ]
+}

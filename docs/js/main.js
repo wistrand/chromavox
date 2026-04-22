@@ -444,6 +444,9 @@ wlBendSlider.addEventListener('input', () => {
   const v = parseInt(wlBendSlider.value, 10);
   mic._globalBend = v / 100;
   wlBendLabel.textContent = v;
+  // User has taken ownership of bend — stop the song's bend automation
+  // lerps (parallel to how scene edits stop keyframe element lerps).
+  if (songPlayer.playing) songPlayer.bendPaused = true;
   setDirty();
 });
 // Called from the frame loop to sync slider with MIDI pitch bend.
@@ -515,11 +518,16 @@ function freqToNote(hz) {
   const oct = Math.floor(m / 12) - 1;
   return NOTE_NAMES[((m % 12) + 12) % 12] + oct;
 }
+// Labels need at least this many pixels of vertical room per entry to
+// stay legible; below that we skip rendering them entirely so they don't
+// crush into an unreadable blur.
+const MIN_LABEL_PX = 12;
 function rebuildEmitterLabels() {
   const host = document.getElementById('emitter-labels');
   if (!host) return;
   host.innerHTML = '';
   const n = scene.emitter.count;
+  if (n <= 0 || host.offsetHeight / n < MIN_LABEL_PX) return;
   const mode = document.getElementById('mic-mode').value;
   const base = currentBaseHz();
   const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
@@ -552,6 +560,7 @@ function rebuildSensorLabels() {
   if (!host) return;
   host.innerHTML = '';
   const n = scene.sensorCount;
+  if (n <= 0 || host.offsetHeight / n < MIN_LABEL_PX) return;
   const mode = synthMode();
   const base = synthBase();
   const stepDeg = synthStep();
@@ -1208,6 +1217,10 @@ micBtn.addEventListener('click', async () => {
 window.addEventListener('resize', () => {
   // Bench is canonical / letterboxed; no element rescaling on resize.
   renderer.resize();
+  // Labels depend on viewport height vs. emitter/sensor count — re-evaluate
+  // the min-px-per-label threshold when the viewport changes.
+  rebuildEmitterLabels();
+  rebuildSensorLabels();
   markDirty();
 });
 
@@ -1660,6 +1673,9 @@ window.addEventListener('resize', () => {
   cv.hideWelcome = function() {
     if (welcomeEl) welcomeEl.style.display = 'none';
   };
+  // Clicking anywhere on the welcome overlay starts playback, same as
+  // pressing the ▶ button.
+  if (welcomeEl) welcomeEl.addEventListener('click', () => playBtn.click());
 
   songSelect.addEventListener('change', async () => {
     const file = songSelect.value;
@@ -1719,6 +1735,17 @@ window.addEventListener('resize', () => {
   songPlayer.onParamChange = (param, value) => {
     if (param === 'volume' && !synth._volumeOverride) synth.setVolume(value);
     else if (param === 'carrier') synth.setCarrier(value);
+    else if (param === 'bend') {
+      // Wavelength bend: linear in [-1, +1]. Update mic state and the
+      // UI slider so the label + any MIDI-sync reads stay consistent.
+      mic._globalBend = Math.max(-1, Math.min(1, value));
+      const sv = Math.round(mic._globalBend * 100);
+      if (parseInt(wlBendSlider.value, 10) !== sv) {
+        wlBendSlider.value = sv;
+        wlBendLabel.textContent = sv;
+      }
+      setDirty();
+    }
     else synth.setParam(param, value);
   };
 

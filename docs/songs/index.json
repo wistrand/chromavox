@@ -1,5 +1,6 @@
 [
   { "label": "Chromavox Demo Song", "file": "intro.json", "default": true },
   { "label": "Ode to Joy", "file": "ode-to-joy.json" },
+  { "label": "Visa från Utanmyra", "file": "visa-fran-utanmyra.json" },
   { "label": "Demo", "file": "demo.json" }
 ]

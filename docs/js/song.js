@@ -18,6 +18,7 @@ export class SongPlayer {
     this.duration = 0;
     this._savedSettings = null;
     this.keyframesPaused = false; // true while user drags an element
+    this.bendPaused = false;      // true once the user touches the wl-bend slider
     this.onStateChange = null; // callback(state)
     this.onParamChange = null; // callback(param, value)
   }
@@ -34,6 +35,7 @@ export class SongPlayer {
     this.time = 0;
     this.state = 'stopped';
     this.keyframesPaused = false;
+    this.bendPaused = false;
     this._globalApplied = false;
   }
 
@@ -65,6 +67,7 @@ export class SongPlayer {
     this.state = 'stopped';
     this.time = 0;
     this.keyframesPaused = false;
+    this.bendPaused = false;
     this.onStateChange?.(this.state);
   }
 
@@ -152,24 +155,33 @@ export class SongPlayer {
     const mapB = new Map((kfB.elements || []).map(e => [e.id, e]));
     const allIds = new Set([...mapA.keys(), ...mapB.keys()]);
 
-    scene.elements = [];
+    // Index existing runtime elements by song-id so we can mutate them
+    // in place instead of rebuilding the array every frame. This
+    // preserves accumulated state — notably `el.rot` driven by spin,
+    // which the main-loop spin integrator updates outside the song
+    // player and which would be clobbered if we rebuilt from scratch.
+    const existing = new Map();
+    for (const el of scene.elements) existing.set(el.id, el);
+
+    const next = [];
     for (const id of allIds) {
       const a = mapA.get(id);
       const b = mapB.get(id);
+      let el = existing.get(id);
+      if (!el) el = this._makeRuntimeElement(a || b);
       if (a && b) {
-        scene.elements.push(this._lerpElement(a, b, t));
+        this._updateLerpElement(el, a, b, t);
+        el._opacity = 1;
       } else if (a) {
-        // Fading out
-        const el = this._makeRuntimeElement(a);
+        this._updateLerpElement(el, a, a, 0);
         el._opacity = 1 - t;
-        scene.elements.push(el);
       } else {
-        // Fading in
-        const el = this._makeRuntimeElement(b);
+        this._updateLerpElement(el, b, b, 0);
         el._opacity = t;
-        scene.elements.push(el);
       }
+      next.push(el);
     }
+    scene.elements = next;
   }
 
   _makeRuntimeElement(data) {
@@ -178,15 +190,21 @@ export class SongPlayer {
     return el;
   }
 
-  _lerpElement(a, b, t) {
-    const el = this._makeRuntimeElement(a);
+  // Update `el` in place with the lerp of keyframes a→b at parameter t.
+  // Called from _applyKeyframes; el may be a new runtime object or an
+  // existing one carried over from the previous frame.
+  _updateLerpElement(el, a, b, t) {
     el.x = a.x + (b.x - a.x) * t;
     el.y = a.y + (b.y - a.y) * t;
-    // Shortest-path angular lerp for rotation.
-    let da = b.rot - a.rot;
-    if (da > Math.PI) da -= 2 * Math.PI;
-    if (da < -Math.PI) da += 2 * Math.PI;
-    el.rot = a.rot + da * t;
+    // Rotation: skip the lerp for spinning elements — el.rot is owned
+    // by the main-loop spin integrator in that case, and overwriting
+    // it here would reset the accumulated angle each frame.
+    if (!el.spin) {
+      let da = b.rot - a.rot;
+      if (da > Math.PI) da -= 2 * Math.PI;
+      if (da < -Math.PI) da += 2 * Math.PI;
+      el.rot = a.rot + da * t;
+    }
     // Size fields: lerp whichever exist on both.
     for (const k of ['size', 'w', 'h', 'radius']) {
       if (typeof a[k] === 'number' && typeof b[k] === 'number') {
@@ -203,8 +221,6 @@ export class SongPlayer {
     }
     // Spin: use b's spin from midpoint.
     if (b.spin !== undefined) el.spin = t < 0.5 ? (a.spin || 0) : b.spin;
-    el._opacity = 1;
-    return el;
   }
 
   _lerpColor(hexA, hexB, t) {
@@ -255,6 +271,9 @@ export class SongPlayer {
   // --- Automation ---
   _applyAutomation() {
     for (const lane of this.song.automation) {
+      // Once the user has taken over bend via the wl-bend slider, stop
+      // applying automated bend lerps for the rest of this playback.
+      if (lane.param === 'bend' && this.bendPaused) continue;
       const val = this._evalAutomation(lane);
       if (val !== undefined) this.onParamChange?.(lane.param, val);
     }
