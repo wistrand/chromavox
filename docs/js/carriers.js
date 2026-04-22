@@ -73,6 +73,15 @@ export const CARRIERS = {
       { id: 'kpExcite',  label: 'Excite',  min: 0, max: 1, default: 0.50 },
     ],
   },
+  piano: {
+    label: 'piano',
+    params: [
+      { id: 'pnoDecay',      label: 'Decay',      min: 0.2, max: 3.0, default: 1.0,
+        display: v => v.toFixed(2) + 'x' },
+      { id: 'pnoBrightness', label: 'Brightness', min: 0,   max: 1,   default: 0.55 },
+      { id: 'pnoStretch',    label: 'Stretch',    min: 0,   max: 1,   default: 0.50 },
+    ],
+  },
 };
 
 // All param IDs across all carriers (for persistence, automation).

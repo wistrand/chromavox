@@ -1708,32 +1708,78 @@ window.addEventListener('resize', () => {
   // MusicXML import: convert the file to a song JSON at runtime and load
   // it. No file is written to disk — the result lives only in memory for
   // this session. User can save via the download flow if they want it.
+  // Read a dropped / picked file and load it into the song player.
+  // Detects byte-order mark so UTF-16 MusicXML (Finale etc.) works, then
+  // content-sniffs `<` (MusicXML) vs `{` (native Chromavox JSON).
+  // Returns true on success, false on failure (error already alerted).
+  async function importSongFile(f) {
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      let enc = 'utf-8';
+      if (bytes.length >= 2) {
+        if (bytes[0] === 0xFF && bytes[1] === 0xFE) enc = 'utf-16le';
+        else if (bytes[0] === 0xFE && bytes[1] === 0xFF) enc = 'utf-16be';
+      }
+      const text = new TextDecoder(enc).decode(bytes);
+      const head = text.trimStart()[0];
+      let json;
+      if (head === '<') json = musicxmlToSong(text);
+      else if (head === '{') json = JSON.parse(text);
+      else throw new Error('Unrecognised file — expected MusicXML (<…>) or Chromavox song JSON ({…})');
+      songSelect.value = ''; // the dropdown no longer represents the loaded song
+      loadSongJson(json);
+      return true;
+    } catch (err) {
+      console.error('Song import failed:', err);
+      alert('Could not import song: ' + err.message);
+      return false;
+    }
+  }
+
   const importBtn = document.getElementById('song-import');
   const importFile = document.getElementById('song-import-file');
   if (importBtn && importFile) {
     importBtn.addEventListener('click', () => importFile.click());
     importFile.addEventListener('change', async () => {
       const f = importFile.files[0];
-      if (!f) return;
-      try {
-        const text = await f.text();
-        // Content sniff: first non-whitespace char tells us the format.
-        // `<` → MusicXML; `{` → native Chromavox song JSON.
-        const head = text.trimStart()[0];
-        let json;
-        if (head === '<') json = musicxmlToSong(text);
-        else if (head === '{') json = JSON.parse(text);
-        else throw new Error('Unrecognised file — expected MusicXML (<…>) or Chromavox song JSON ({…})');
-        // Unselect any catalogued song so the dropdown doesn't claim to
-        // represent the imported one.
-        songSelect.value = '';
-        loadSongJson(json);
-      } catch (err) {
-        console.error('Song import failed:', err);
-        alert('Could not import song: ' + err.message);
-      } finally {
-        importFile.value = '';
-      }
+      if (f) await importSongFile(f);
+      importFile.value = '';
+    });
+  }
+
+  // Drag-and-drop onto the stage/bench. Accept the first dropped file
+  // with a plausible song-file extension (or first file when the user
+  // drops one without an extension). Visual feedback: the stage gets a
+  // `.drop-target` class while something is dragged over it.
+  const stage = document.getElementById('stage');
+  if (stage) {
+    const hasSongFile = (dt) => dt && dt.types && Array.from(dt.types).includes('Files');
+    const pickSongFile = (files) => {
+      if (!files || !files.length) return null;
+      const re = /\.(json|xml|musicxml)$/i;
+      for (const f of files) if (re.test(f.name)) return f;
+      return files[0]; // fall back to first (content-sniff will still work)
+    };
+    stage.addEventListener('dragover', (e) => {
+      if (!hasSongFile(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      stage.classList.add('drop-target');
+    });
+    stage.addEventListener('dragleave', (e) => {
+      // Only drop the class when the drag truly leaves the stage, not
+      // when it moves between child elements (which fire dragleave too).
+      if (e.target === stage) stage.classList.remove('drop-target');
+    });
+    stage.addEventListener('drop', async (e) => {
+      if (!hasSongFile(e.dataTransfer)) return;
+      e.preventDefault();
+      stage.classList.remove('drop-target');
+      const f = pickSongFile(e.dataTransfer.files);
+      // Autoplay on drop (not for the file-picker import path, which
+      // stays manual). The drop gesture itself counts as a user
+      // interaction, so browsers allow the AudioContext to start.
+      if (f && await importSongFile(f) && !songPlayer.playing) playBtn.click();
     });
   }
 

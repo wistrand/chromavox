@@ -156,6 +156,27 @@ test('worklet: karplus carrier produces non-zero output', () => {
   assert(max > 0.001, `karplus output too quiet: ${max}`);
 });
 
+test('worklet: piano carrier strikes then rings', () => {
+  const s = makeSynth('piano', 4, 220);
+  // Strike: feed a strong gain, run until peaks build up.
+  feedBins(s, 4, 0.9);
+  let attackMax = 0;
+  for (let i = 0; i < 20; i++) {
+    const buf = processBlock(s);
+    for (let j = 0; j < buf.length; j++) attackMax = Math.max(attackMax, Math.abs(buf[j]));
+  }
+  assert(attackMax > 0.001, `piano attack too quiet: ${attackMax}`);
+  // Release: zero bins. Voice gain drops fast but partial peaks should
+  // keep ringing — that's the modal-decay behaviour we implemented.
+  feedBins(s, 4, 0);
+  let ringMax = 0;
+  for (let i = 0; i < 40; i++) { // ~0.1s
+    const buf = processBlock(s);
+    for (let j = 0; j < buf.length; j++) ringMax = Math.max(ringMax, Math.abs(buf[j]));
+  }
+  assert(ringMax > 0.0001, `piano should still ring after voice gain drops: ${ringMax}`);
+});
+
 test('worklet: voice stealing (zero bins → silence)', () => {
   const s = makeSynth('sine', 4, 440);
   feedBins(s, 4, 0.5);

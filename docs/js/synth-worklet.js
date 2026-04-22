@@ -330,19 +330,123 @@ function _carrierSine(v, ctx) {
   }
 }
 
+// Piano: modal synthesis with gain-edge attacks. Each voice has 12
+// slightly-inharmonic partials. Rising edges in voiceGain inject
+// strike energy into the per-partial peak amplitude; between strikes
+// each partial decays exponentially at its own rate (low partials
+// ring long, high partials die fast). Frequency-dependent decay
+// scaling makes bass notes sustain longer than treble.
+//
+// Design notes in agent_docs/architecture-audio.md.
+const _PIANO_K = 12;
+const _PIANO_MIX = new Float32Array([1.0, 0.6, 0.38, 0.26, 0.20, 0.15, 0.11, 0.08, 0.055, 0.035, 0.022, 0.016]);
+// Base decay rates (60dB-down time = 6.9/rate seconds at decayScale=1,
+// freqDecayFactor=1). Lower index = longer ring.
+const _PIANO_DECAY = new Float32Array([0.7, 0.95, 1.3, 1.7, 2.2, 2.8, 3.5, 4.3, 5.2, 6.3, 7.5, 9.0]);
+
+function _carrierPiano(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
+  const voiceTarget = v.targetGains[0];
+  let voiceGain = v.gains[0];
+  const bufL = ctx.bufL, bufR = ctx.bufR;
+  const panL = ctx.panL, panR = ctx.panR;
+  const len = ctx.len;
+  const twoPi = ctx.twoPi;
+  const invSr = ctx.invSr;
+  const smooth = ctx.smooth;
+
+  const decayScale = ctx.P.pnoDecay ?? 1.0;
+  const brightness = ctx.P.pnoBrightness ?? 0.55;
+  const stretch    = ctx.P.pnoStretch    ?? 0.5;
+
+  const peaks  = v.pianoPeak;
+  const phases = v.pianoPhases;
+  const dts    = v.pianoDts;
+  const decs   = v.pianoDecayPerSample;
+
+  // Rebuild per-partial phase increments when freq or stretch changes.
+  // Inharmonicity B is proportional to (261/f)^2 — bass gets more stretch.
+  if (v.pianoDtsFreq !== v.freq || v.pianoDtsStretch !== stretch) {
+    const B = stretch * 0.0005 * (261 / v.freq) * (261 / v.freq);
+    const nyqRad = Math.PI; // samples are 2π per sample-rate
+    for (let n = 0; n < _PIANO_K; n++) {
+      const nn = n + 1;
+      const fn = nn * v.freq * Math.sqrt(1 + B * nn * nn);
+      const inc = twoPi * fn * invSr;
+      dts[n] = inc < nyqRad * 0.95 ? inc : 0;
+    }
+    v.pianoDtsFreq = v.freq;
+    v.pianoDtsStretch = stretch;
+  }
+
+  // Per-partial decay factor (one-pole). Recomputed per block — cheap
+  // (12 × Math.exp) and reacts to slider changes without extra wiring.
+  const freqDecayFactor = Math.pow(261 / v.freq, 0.7);
+  for (let n = 0; n < _PIANO_K; n++) {
+    const rate = _PIANO_DECAY[n] / (decayScale * freqDecayFactor);
+    decs[n] = Math.exp(-rate * invSr);
+  }
+
+  // Centroid → upper-partial brightness. Blue (high centroid) emphasises
+  // partials 4+; red dampens them. Applied only to new strike energy.
+  const centroidBoost = 1 + (v.centroid - 0.5) * 1.5;
+  const velExpBase = 0.7 + brightness * 1.2;
+
+  let prevGain = v.pianoPrevGain;
+  const STRIKE_SCALE = 1.4;
+  const OUT_SCALE = 3.0;
+
+  for (let i = 0; i < len; i++) {
+    voiceGain += (voiceTarget - voiceGain) * smooth;
+    const gainRise = voiceGain - prevGain;
+    prevGain = voiceGain;
+
+    // Strike: accumulate energy into partial peaks during any rising edge.
+    if (gainRise > 0) {
+      const velBase = voiceGain + 0.05; // avoid 0^x
+      for (let n = 0; n < _PIANO_K; n++) {
+        if (dts[n] === 0) continue; // silenced (above Nyquist)
+        const partialWeight = Math.pow(velBase, velExpBase * (1 + n * 0.08));
+        const boost = n > 2 ? centroidBoost : 1;
+        peaks[n] += _PIANO_MIX[n] * gainRise * partialWeight * boost * STRIKE_SCALE;
+      }
+    }
+
+    // Sum output and apply decay.
+    let sample = 0;
+    for (let n = 0; n < _PIANO_K; n++) {
+      peaks[n] *= decs[n];
+      if (peaks[n] > 1e-6) sample += fsin(phases[n]) * peaks[n];
+      phases[n] += dts[n];
+      if (phases[n] > twoPi) phases[n] -= twoPi;
+    }
+    sample *= OUT_SCALE;
+
+    bufL[i] += sample * panL;
+    bufR[i] += sample * panR;
+  }
+
+  // Denormal guard on per-partial peaks. Without this, silently-ringing
+  // voices can spend blocks in subnormal arithmetic.
+  for (let n = 0; n < _PIANO_K; n++) if (peaks[n] < 1e-20) peaks[n] = 0;
+  v.pianoPrevGain = prevGain;
+  v.gains[0] = voiceGain;
+}
+
 // Carrier dispatch table.
 const _CARRIERS = {
   acid: _carrierAcid, fm: _carrierFM, supersaw: _carrierSupersaw,
   noise: _carrierNoise, pulse: _carrierPulse, vocoder: _carrierVocoder,
-  karplus: _carrierKarplus, sine: _carrierSine,
+  karplus: _carrierKarplus, sine: _carrierSine, piano: _carrierPiano,
 };
 
 // Carriers that use a single gain band (gainK=1) vs sine's multi-partial.
-const _SINGLE_BAND = { noise:1, acid:1, fm:1, supersaw:1, pulse:1, karplus:1, vocoder:1 };
+const _SINGLE_BAND = { noise:1, acid:1, fm:1, supersaw:1, pulse:1, karplus:1, vocoder:1, piano:1 };
 
-// Per-carrier gain smoothing time constants (seconds).
+// Per-carrier gain smoothing time constants (seconds). Piano uses a
+// moderately fast smoothing so attacks stay crisp without clicking.
 const _SMOOTH_SEC = { karplus: 0.005, pulse: 0.03, acid: 0.04,
-  noise: 0.06, fm: 0.06, supersaw: 0.06, vocoder: 0.06 };
+  noise: 0.06, fm: 0.06, supersaw: 0.06, vocoder: 0.06, piano: 0.015 };
 
 class ChromavoxSynth extends AudioWorkletProcessor {
   constructor() {
@@ -412,7 +516,13 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         kpExLp: 0,
         // Vocoder: 4th-order bandpass = two cascaded biquads.
         voc1: new Float32Array(2), voc2: new Float32Array(2), // DF-IIT state [z1,z2] per biquad
-        vocEnv: 0, vocPulsePhase: 0 });
+        vocEnv: 0, vocPulsePhase: 0,
+        // Piano: 12 modal partials. Peaks persist between blocks and
+        // keep ringing after voiceGain drops, so the active-voice gate
+        // in process() consults these too.
+        pianoPhases: new Float32Array(12), pianoPeak: new Float32Array(12),
+        pianoDts: new Float32Array(12), pianoDecayPerSample: new Float32Array(12),
+        pianoDtsFreq: 0, pianoDtsStretch: -1, pianoPrevGain: 0 });
     }
   }
   process(inputs, outputs) {
@@ -554,6 +664,13 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       let anyActive = false;
       for (let k = 0; k < v.gains.length; k++) {
         if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
+      }
+      // Piano: partial peaks persist between blocks and keep ringing
+      // after voiceGain drops — keep the voice running until they decay.
+      if (!anyActive && this.carrier === 'piano' && v.pianoPeak) {
+        for (let n = 0; n < 12; n++) {
+          if (v.pianoPeak[n] > 1e-5) { anyActive = true; break; }
+        }
       }
       if (!anyActive) {
         v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = -1;

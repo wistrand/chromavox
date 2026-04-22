@@ -3,20 +3,22 @@
 // Handles the audio-relevant subset of partwise MusicXML: notes with
 // pitches (step + alter + octave), rests, ties, chords (<chord/>),
 // backup/forward cursor moves for multi-voice, tempo (first occurrence
-// via <sound tempo> or <metronome>), and divisions-per-quarter.
+// via <sound tempo> or <metronome>), per-measure <divisions> changes,
+// and multi-part merging (voice + piano + anything else are unioned
+// into one event stream).
 //
 // Deliberately NOT handled (MVP scope):
 //   - Repeats / alternate endings / D.S. al Coda — timeline is whatever
 //     appears left-to-right in the measures.
-//   - Tempo changes mid-piece.
-//   - Multiple <part>s (takes the first).
+//   - Tempo changes mid-piece (first tempo only).
 //   - Ornaments, grace notes, triplet <time-modification> (grace
 //     notes are skipped; triplets just play at their written duration,
 //     which is usually wrong but audible).
 //
 // Pitch mapping: emits a chromatic song. Base Hz is auto-picked so the
 // lowest note sits one octave above the base, giving room for any
-// lower ornamentation. Emitter count spans lowest-to-highest pitch.
+// lower ornamentation. Emitter count spans lowest-to-highest pitch,
+// capped at 64 (the GPU tracer's wlPerSource texture width).
 //
 // Scene: empty keyframes — rays go straight from emitters to sensors,
 // so imported songs play the written pitches without modulation. The
@@ -65,38 +67,38 @@ function readFloat(parent, sel, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function musicxmlToSong(text) {
-  const doc = new DOMParser().parseFromString(text, 'text/xml');
-  const perr = doc.getElementsByTagName('parsererror');
-  if (perr.length) throw new Error('MusicXML parse error: ' + perr[0].textContent.trim());
+// Find the first tempo declaration anywhere in the document. MusicXML
+// can put it either as `<sound tempo="…">` (direct measure child or
+// inside `<direction>`) or as `<metronome><per-minute>…`.
+function findTempo(doc) {
+  for (const s of doc.querySelectorAll('sound[tempo]')) {
+    const t = parseFloat(s.getAttribute('tempo'));
+    if (Number.isFinite(t) && t > 0) return t;
+  }
+  const m = doc.querySelector('metronome per-minute');
+  if (m) {
+    const t = parseFloat(m.textContent);
+    if (Number.isFinite(t) && t > 0) return t;
+  }
+  return 120;
+}
 
-  // Song title: prefer movement-title, then work-title. Some scores
-  // embed subtitles or translations after a newline inside the same
-  // element; take just the first line.
-  const rawTitle = readText(doc.documentElement, 'movement-title')
-                || readText(doc.documentElement, 'work-title')
-                || 'Imported song';
-  const title = decodeAbcEscapes(rawTitle.split(/[\r\n]/, 1)[0].trim()) || 'Imported song';
+// Walk one <part>, appending notes to `rawNotes` (time + duration in
+// seconds, pitch as MIDI). Divisions can change per measure; tempo is
+// the document-wide value passed in.
+function parsePart(part, tempo, rawNotes) {
+  let divisions = 1;
+  const activeTies = new Map();
+  let measureStart = 0; // seconds
 
-  const part = doc.querySelector('part');
-  if (!part) throw new Error('MusicXML: no <part> found');
-
-  // Parser state.
-  let divisions = 1;   // ticks per quarter note
-  let tempo = 120;     // BPM
-  let tempoSet = false;
-
-  const rawNotes = [];                 // { time: ticks, pitch: midi, duration: ticks }
-  const activeTies = new Map();        // midi → index into rawNotes
-  let absEnd = 0;                      // absolute end-of-piece in ticks
-
-  const measures = part.getElementsByTagName('measure');
-  let measureStart = 0;
-
-  for (const m of measures) {
+  for (const m of part.getElementsByTagName('measure')) {
     let cursor = measureStart;
-    let prevStart = measureStart;      // start of the most recent non-chord note (for <chord/>)
-    let maxCursor = cursor;            // latest reached in this measure (for voices that overshoot)
+    let prevStart = measureStart;
+    let maxCursor = cursor;
+
+    // Helper to convert current-measure ticks to seconds using the
+    // divisions value active at this point.
+    const toSec = (ticks) => ticks * 60 / (tempo * divisions);
 
     for (let i = 0; i < m.children.length; i++) {
       const el = m.children[i];
@@ -106,26 +108,13 @@ export function musicxmlToSong(text) {
         const div = readInt(el, 'divisions', 0);
         if (div > 0) divisions = div;
 
-      } else if (tag === 'sound') {
-        const t = el.getAttribute('tempo');
-        if (t && !tempoSet) { tempo = parseFloat(t); tempoSet = true; }
-
-      } else if (tag === 'direction') {
-        if (!tempoSet) {
-          const perMin = readFloat(el, 'metronome per-minute', NaN);
-          const sndT = el.querySelector('sound')?.getAttribute('tempo');
-          if (Number.isFinite(perMin)) { tempo = perMin; tempoSet = true; }
-          else if (sndT) { tempo = parseFloat(sndT); tempoSet = true; }
-        }
-
       } else if (tag === 'note') {
         const isChord = !!el.querySelector(':scope > chord');
         const isGrace = !!el.querySelector(':scope > grace');
-        const duration = readInt(el, ':scope > duration', 0);
+        if (isGrace) continue;
+        const durSec = toSec(readInt(el, ':scope > duration', 0));
         const isRest = !!el.querySelector(':scope > rest');
         const pitchEl = el.querySelector(':scope > pitch');
-
-        if (isGrace) continue; // grace notes: ignore (zero duration, skipped)
 
         const noteStart = isChord ? prevStart : cursor;
 
@@ -147,32 +136,74 @@ export function musicxmlToSong(text) {
 
             if (tieStop && activeTies.has(midi)) {
               const idx = activeTies.get(midi);
-              rawNotes[idx].duration += duration;
+              rawNotes[idx].duration += durSec;
               if (!tieStart) activeTies.delete(midi);
             } else {
-              rawNotes.push({ time: noteStart, pitch: midi, duration });
+              rawNotes.push({ time: noteStart, pitch: midi, duration: durSec });
               if (tieStart) activeTies.set(midi, rawNotes.length - 1);
             }
           }
         }
 
         if (!isChord) prevStart = noteStart;
-        if (!isChord) cursor += duration;
+        if (!isChord) cursor += durSec;
         if (cursor > maxCursor) maxCursor = cursor;
 
       } else if (tag === 'backup') {
-        const d = readInt(el, ':scope > duration', 0);
-        cursor -= d;
+        cursor -= toSec(readInt(el, ':scope > duration', 0));
 
       } else if (tag === 'forward') {
-        const d = readInt(el, ':scope > duration', 0);
-        cursor += d;
+        cursor += toSec(readInt(el, ':scope > duration', 0));
         if (cursor > maxCursor) maxCursor = cursor;
       }
     }
 
     measureStart = maxCursor;
-    if (measureStart > absEnd) absEnd = measureStart;
+  }
+
+  return measureStart; // time of the part's final barline, in seconds
+}
+
+export function musicxmlToSong(text) {
+  const doc = new DOMParser().parseFromString(text, 'text/xml');
+  const perr = doc.getElementsByTagName('parsererror');
+  if (perr.length) throw new Error('MusicXML parse error: ' + perr[0].textContent.trim());
+
+  // Song title: prefer movement-title, then work-title. Some scores
+  // embed subtitles or translations after a newline inside the same
+  // element; take just the first line.
+  const rawTitle = readText(doc.documentElement, 'movement-title')
+                || readText(doc.documentElement, 'work-title')
+                || 'Imported song';
+  const title = decodeAbcEscapes(rawTitle.split(/[\r\n]/, 1)[0].trim()) || 'Imported song';
+
+  const parts = doc.querySelectorAll('part');
+  if (!parts.length) throw new Error('MusicXML: no <part> found');
+
+  // Carrier default: if anything in the score's metadata mentions
+  // "piano" — title, part names, instrument names, score-instrument
+  // names — pick the piano carrier. Covers "Piano Sonata", part-name
+  // "Piano", and similar. Otherwise fall back to sine.
+  const metaTexts = [title];
+  for (const sel of ['score-part part-name', 'score-part instrument-name',
+                     'score-part part-abbreviation', 'score-part score-instrument']) {
+    for (const el of doc.querySelectorAll(sel)) {
+      if (el.textContent) metaTexts.push(el.textContent);
+    }
+  }
+  const isPianoScore = metaTexts.some(t => /\bpiano\b/i.test(t));
+  const defaultCarrier = isPianoScore ? 'piano' : 'sine';
+
+  const tempo = findTempo(doc);
+
+  // Union notes from every part. Each part is parsed independently
+  // with its own measure cursor / divisions / tie state, so voice +
+  // piano + whatever else stream into one note list.
+  const rawNotes = [];
+  let endTime = 0;
+  for (const part of parts) {
+    const partEnd = parsePart(part, tempo, rawNotes);
+    if (partEnd > endTime) endTime = partEnd;
   }
 
   if (rawNotes.length === 0) throw new Error('MusicXML: no audible notes found');
@@ -183,37 +214,48 @@ export function musicxmlToSong(text) {
     if (n.pitch < minMidi) minMidi = n.pitch;
     if (n.pitch > maxMidi) maxMidi = n.pitch;
   }
-  // Base = one octave below the lowest note, aligned to the note's
-  // octave boundary. Gives headroom and makes emitter 12 = "the
-  // lowest note in the piece" which is a nice mental model.
-  const baseMidi = Math.floor(minMidi / 12) * 12 - 12;
+  // Base = one octave below the lowest note, aligned to an octave
+  // boundary. Emitter count spans lowest→highest, capped at 64 (the
+  // GPU tracer's wlPerSource texture width). When clipped, the notes
+  // above the cap are dropped — we raise the base too so we don't
+  // waste emitters on sub-bass registers.
+  let baseMidi = Math.floor(minMidi / 12) * 12 - 12;
+  let emitterCount = (maxMidi - baseMidi) + 1;
+  if (emitterCount > 64) {
+    // Prefer to drop low-octave headroom first, then high notes if
+    // the piece's span is still wider than 64 semitones.
+    const overflow = emitterCount - 64;
+    baseMidi += overflow;
+    if (baseMidi > minMidi) baseMidi = minMidi; // never start above the lowest note
+    emitterCount = Math.min(64, (maxMidi - baseMidi) + 1);
+  }
+  emitterCount = Math.max(1, emitterCount);
   const baseHz = 440 * Math.pow(2, (baseMidi - 69) / 12);
-  // Emitter count: span of the piece + 1 for inclusive upper bound,
-  // capped at 64 (the emitter-count slider max).
-  const emitterCount = Math.max(1, Math.min(64, (maxMidi - baseMidi) + 1));
-
-  // Ticks → seconds.
-  const secPerTick = 60 / (tempo * divisions);
 
   const notes = [];
+  let outOfRange = 0;
   for (const n of rawNotes) {
     const emitter = n.pitch - baseMidi;
-    if (emitter < 0 || emitter >= emitterCount) continue;
+    if (emitter < 0 || emitter >= emitterCount) { outOfRange++; continue; }
     notes.push({
-      time: Number((n.time * secPerTick).toFixed(4)),
+      time: Number(n.time.toFixed(4)),
       emitter,
       vel: 0.7,
-      dur: Math.max(0.05, Number((n.duration * secPerTick).toFixed(4))),
+      dur: Math.max(0.05, Number(n.duration.toFixed(4))),
     });
   }
   notes.sort((a, b) => a.time - b.time);
 
-  const durationSec = (absEnd * secPerTick) + 0.5;
+  const durationSec = endTime + 0.5;
+
+  const welcome = outOfRange > 0
+    ? title + `\n(imported from MusicXML; ${outOfRange} of ${rawNotes.length} notes out of range)\nPress ▶ to play`
+    : title + '\n(imported from MusicXML)\nPress ▶ to play';
 
   return {
     version: 1,
     title,
-    welcome: title + '\n(imported from MusicXML)\nPress ▶ to play',
+    welcome,
     bpm: Math.round(tempo),
     duration: Number(durationSec.toFixed(3)),
     loop: false,
@@ -223,7 +265,7 @@ export function musicxmlToSong(text) {
       mode: 'chromatic',
       base: Number(baseHz.toFixed(2)),
       span: 1,
-      carrier: 'sine',
+      carrier: defaultCarrier,
       volume: 0.25,
     },
     keyframes: [{ time: 0, elements: [] }],
