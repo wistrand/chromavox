@@ -156,6 +156,39 @@ test('worklet: karplus carrier produces non-zero output', () => {
   assert(max > 0.001, `karplus output too quiet: ${max}`);
 });
 
+test('worklet: reverb off → silent after input stops', () => {
+  const s = makeSynth('sine', 4, 440);
+  feedBins(s, 4, 0.5);
+  for (let i = 0; i < 20; i++) processBlock(s);
+  feedBins(s, 4, 0);
+  // Let voice gain decay. With no reverb there should be no tail.
+  for (let i = 0; i < 500; i++) processBlock(s);
+  let max = 0;
+  for (let i = 0; i < 5; i++) {
+    const buf = processBlock(s);
+    for (let j = 0; j < buf.length; j++) max = Math.max(max, Math.abs(buf[j]));
+  }
+  assert(max < 0.001, `expected silence with reverb off, got: ${max}`);
+});
+
+test('worklet: reverb on → tail continues after input stops', () => {
+  const s = makeSynth('sine', 4, 440);
+  // Turn reverb on before feeding signal.
+  s.port.onmessage({ data: { type: 'reverbMix', value: 0.7 } });
+  feedBins(s, 4, 0.5);
+  for (let i = 0; i < 40; i++) processBlock(s); // build tail + settle smoothed wet
+  feedBins(s, 4, 0);
+  // Let voice gain decay fully.
+  for (let i = 0; i < 200; i++) processBlock(s);
+  // Now sample the tail — Freeverb should still be ringing.
+  let max = 0;
+  for (let i = 0; i < 5; i++) {
+    const buf = processBlock(s);
+    for (let j = 0; j < buf.length; j++) max = Math.max(max, Math.abs(buf[j]));
+  }
+  assert(max > 0.0001, `expected reverb tail, got: ${max}`);
+});
+
 test('worklet: piano carrier strikes then rings', () => {
   const s = makeSynth('piano', 4, 220);
   // Strike: feed a strong gain, run until peaks build up.

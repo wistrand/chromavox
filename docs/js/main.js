@@ -81,7 +81,7 @@ const UI_STORAGE_KEY = 'chromavox-ui';
 const UI_CONTROL_IDS = [
   'mic-source', 'mic-device', 'midi-device', 'mic-mode', 'mic-base',
   'chromatic-span', 'mic-smoothing', 'bucket-color', 'synth-independent',
-  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-carrier',
+  'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-reverb', 'synth-carrier',
   ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
   'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
@@ -1084,6 +1084,21 @@ volSlider.addEventListener('input', () => {
   // User-set volume overrides song automation.
   synth._volumeOverride = true;
 });
+
+// Reverb wet-mix slider. Routes through the existing carrier-param
+// channel so the value lands in worklet `this.P.reverbMix`, which the
+// Freeverb block reads each sample.
+const reverbSlider = document.getElementById('synth-reverb');
+const reverbLabel = document.getElementById('synth-reverb-val');
+if (reverbSlider && reverbLabel) {
+  const applyReverb = () => {
+    const v = parseInt(reverbSlider.value, 10);
+    synth.setParam('reverbMix', v / 100);
+    reverbLabel.textContent = v;
+  };
+  reverbSlider.addEventListener('input', applyReverb);
+  applyReverb();
+}
 
 // --- Carrier param UI (generated from carriers.js schema) ---
 const carrierSel = document.getElementById('synth-carrier');

@@ -448,6 +448,20 @@ const _SINGLE_BAND = { noise:1, acid:1, fm:1, supersaw:1, pulse:1, karplus:1, vo
 const _SMOOTH_SEC = { karplus: 0.005, pulse: 0.03, acid: 0.04,
   noise: 0.06, fm: 0.06, supersaw: 0.06, vocoder: 0.06, piano: 0.015 };
 
+// Freeverb (Jezar Wakefield) constants. Delay lengths are the tuned
+// primes from the original C++ reference at 44.1 kHz; we use them as
+// given — tonal character shifts slightly at other sample rates but
+// this is the standard approach. Right-channel delays add a
+// "stereo-spread" offset for decorrelation.
+const _FV_COMB_LENS = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
+const _FV_AP_LENS   = [556, 441, 341, 225];
+const _FV_STEREO_SPREAD = 23;
+const _FV_INPUT_GAIN = 0.015;      // input attenuation, prevents runaway in combs
+const _FV_AP_FB      = 0.5;        // fixed allpass feedback per Jezar
+const _FV_FB_OFFSET  = 0.28;       // roomSize=0 → comb feedback 0.28
+const _FV_FB_SCALE   = 0.7;        // roomSize=1 → feedback 0.98
+const _FV_DAMP_SCALE = 0.4;        // damping=1 → LP coef 0.4
+
 class ChromavoxSynth extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -460,6 +474,12 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.carrier = 'sine';
     // Carrier params — defaults injected from carriers.js at build time.
     this.P = __PARAM_DEFAULTS__;
+    // Freeverb reverb params (live in the same P namespace as carrier
+    // params so the existing setParam/automation path works for them).
+    if (this.P.reverbMix === undefined)     this.P.reverbMix = 0;
+    if (this.P.reverbSize === undefined)    this.P.reverbSize = 0.5;
+    if (this.P.reverbDamping === undefined) this.P.reverbDamping = 0.5;
+    this._initReverb();
     this.port.onmessage = e => {
       const d = e.data;
       if (d.type === 'bins') {
@@ -483,6 +503,112 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     if (fullScale) this.fullScale = fullScale;
     this._freqs = freqs;
     this._rebuildPartials();
+  }
+
+  _initReverb() {
+    this._rvCombL = []; this._rvCombR = [];
+    this._rvApL   = []; this._rvApR   = [];
+    this._rvCombLIdx = new Uint32Array(8);
+    this._rvCombRIdx = new Uint32Array(8);
+    this._rvCombLLp  = new Float32Array(8);
+    this._rvCombRLp  = new Float32Array(8);
+    this._rvApLIdx   = new Uint32Array(4);
+    this._rvApRIdx   = new Uint32Array(4);
+    for (let i = 0; i < 8; i++) {
+      this._rvCombL.push(new Float32Array(_FV_COMB_LENS[i]));
+      this._rvCombR.push(new Float32Array(_FV_COMB_LENS[i] + _FV_STEREO_SPREAD));
+    }
+    for (let i = 0; i < 4; i++) {
+      this._rvApL.push(new Float32Array(_FV_AP_LENS[i]));
+      this._rvApR.push(new Float32Array(_FV_AP_LENS[i] + _FV_STEREO_SPREAD));
+    }
+    // Smoothed wet mix — ramps to target over ~30 ms to avoid clicks
+    // when reverb is toggled on/off during playback.
+    this._rvWetSmooth = 0;
+  }
+
+  // Freeverb-style reverb applied in place over bufL/bufR for `len`
+  // samples. Runs AFTER voice summation and BEFORE the master tanh
+  // limiter so runaway comb resonance gets caught smoothly.
+  _applyReverb(bufL, bufR, len) {
+    const mixTarget = this.P.reverbMix ?? 0;
+    // Fully bypass when both target and smoothed state are near zero —
+    // no tail to render, no state to advance, free when disabled.
+    if (mixTarget < 1e-4 && this._rvWetSmooth < 1e-4) return;
+
+    const size = this.P.reverbSize ?? 0.5;
+    const damp = this.P.reverbDamping ?? 0.5;
+    const feedback = _FV_FB_OFFSET + size * _FV_FB_SCALE;
+    const dampLP = damp * _FV_DAMP_SCALE;
+    const ommDamp = 1 - dampLP;
+    const wetSmoothCoef = 1 - Math.exp(-1 / (0.03 * sampleRate)); // ~30 ms ramp
+
+    // Hoist state into locals for the inner loop.
+    const combLs = this._rvCombL, combRs = this._rvCombR;
+    const combLIdx = this._rvCombLIdx, combRIdx = this._rvCombRIdx;
+    const combLLp = this._rvCombLLp, combRLp = this._rvCombRLp;
+    const apLs = this._rvApL, apRs = this._rvApR;
+    const apLIdx = this._rvApLIdx, apRIdx = this._rvApRIdx;
+    let wet = this._rvWetSmooth;
+
+    for (let i = 0; i < len; i++) {
+      wet += (mixTarget - wet) * wetSmoothCoef;
+      const dry = 1 - wet;
+      const inL = bufL[i], inR = bufR[i];
+      const mono = (inL + inR) * _FV_INPUT_GAIN;
+
+      let outL = 0, outR = 0;
+
+      // Eight parallel comb filters per channel, each with a 1-pole LP
+      // in the feedback path (that's what "damping" does).
+      for (let k = 0; k < 8; k++) {
+        const bL = combLs[k];
+        const iL = combLIdx[k];
+        const yL = bL[iL];
+        const lpL = yL * ommDamp + combLLp[k] * dampLP;
+        combLLp[k] = lpL;
+        bL[iL] = mono + lpL * feedback;
+        combLIdx[k] = (iL + 1) % bL.length;
+        outL += yL;
+
+        const bR = combRs[k];
+        const iR = combRIdx[k];
+        const yR = bR[iR];
+        const lpR = yR * ommDamp + combRLp[k] * dampLP;
+        combRLp[k] = lpR;
+        bR[iR] = mono + lpR * feedback;
+        combRIdx[k] = (iR + 1) % bR.length;
+        outR += yR;
+      }
+
+      // Four serial allpass filters per channel. Feedback is fixed.
+      for (let k = 0; k < 4; k++) {
+        const bL = apLs[k];
+        const iL = apLIdx[k];
+        const yL = bL[iL];
+        bL[iL] = outL + yL * _FV_AP_FB;
+        outL = -outL + yL;
+        apLIdx[k] = (iL + 1) % bL.length;
+
+        const bR = apRs[k];
+        const iR = apRIdx[k];
+        const yR = bR[iR];
+        bR[iR] = outR + yR * _FV_AP_FB;
+        outR = -outR + yR;
+        apRIdx[k] = (iR + 1) % bR.length;
+      }
+
+      bufL[i] = dry * inL + wet * outL;
+      bufR[i] = dry * inR + wet * outR;
+    }
+
+    // Denormal guard on comb LP states. Reverb states drift toward
+    // 1e-38 during long silence and hit subnormal arithmetic.
+    for (let k = 0; k < 8; k++) {
+      if (Math.abs(combLLp[k]) < 1e-20) combLLp[k] = 0;
+      if (Math.abs(combRLp[k]) < 1e-20) combRLp[k] = 0;
+    }
+    this._rvWetSmooth = wet;
   }
   _rebuildPartials() {
     this.voices = [];
@@ -685,6 +811,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       fn(v, ctx);
     }
     this._lastActiveCount = _activeCount;
+    // Freeverb (Jezar-style Schroeder): post-sum, pre-limiter. Fully
+    // bypasses when reverbMix is 0 and the smoothed tail is empty.
+    this._applyReverb(bufL, bufR, len);
     // Soft limiter on both channels.
     for (let i = 0; i < len; i++) { bufL[i] = ftanh(bufL[i]); bufR[i] = ftanh(bufR[i]); }
     // Dropped-buffer detection: currentFrame should advance by exactly
