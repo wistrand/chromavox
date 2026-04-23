@@ -1,6 +1,7 @@
 // UI: input handling, property panel, save/load.
 
 import { makeElement, worldEdges, pointInPolygon, overlapsAny, serializeScene, deserializeScene, createScene, autoTitle } from './scene.js';
+import { autoPlace } from './auto-place.js';
 import { MATERIALS } from './spectrum.js';
 import { ELEMENTS } from './elements.js';
 
@@ -459,6 +460,11 @@ export class UI {
     });
     addMenu.querySelectorAll('.tool-menu-item').forEach(item => {
       const kind = item.dataset.tool;
+      // "Auto" is an action, not a placeable kind — no icon, dedicated handler.
+      if (kind === 'auto') {
+        item.addEventListener('click', () => { this.autoPlace(); closeMenu(); });
+        return;
+      }
       item.insertAdjacentHTML('afterbegin', buildElementIcon(kind));
       item.addEventListener('click', () => {
         setLastKind(kind);
@@ -887,25 +893,31 @@ export class UI {
         if (vs) vs.textContent = ' ' + fmtVal(uiVal());
       };
 
-      if (desc.resetable) {
-        const row = document.createElement('div');
-        row.style.display = 'flex'; row.style.gap = '4px';
-        inp.style.flex = '1';
-        const btn = document.createElement('button');
-        btn.textContent = '×'; btn.title = 'Reset';
-        row.appendChild(inp); row.appendChild(btn);
-        btn.addEventListener('click', () => {
-          this.beginEdit();
-          el[key] = hasConvert ? desc.toInternal(0) : 0;
-          this.endEdit();
-          inp.value = 0;
-          updateVal();
-          this.onChange();
-        });
-        rowLab = addRow(desc.label || key, row, fmtVal(uiVal()));
-      } else {
-        rowLab = addRow(desc.label || key, inp, fmtVal(uiVal()));
-      }
+      // All numeric sliders get a × reset button. Target is the
+      // schema default if present; otherwise 0 (keeps DELAY's null
+      // default behaving like the old "reset to zero").
+      const resetUi = desc.default == null
+        ? 0
+        : (hasConvert ? desc.fromInternal(desc.toInternal(desc.default)) : desc.default);
+      const resetInternal = hasConvert
+        ? (desc.default == null ? desc.toInternal(0) : desc.toInternal(resetUi))
+        : (desc.default == null ? 0 : desc.default);
+
+      const row = document.createElement('div');
+      row.style.display = 'flex'; row.style.gap = '4px';
+      inp.style.flex = '1';
+      const btn = document.createElement('button');
+      btn.textContent = '×'; btn.title = 'Reset';
+      row.appendChild(inp); row.appendChild(btn);
+      btn.addEventListener('click', () => {
+        this.beginEdit();
+        el[key] = resetInternal;
+        this.endEdit();
+        inp.value = resetUi;
+        updateVal();
+        this.onChange();
+      });
+      rowLab = addRow(desc.label || key, row, fmtVal(uiVal()));
 
       inp.addEventListener('input', () => {
         this.beginEdit();
@@ -968,7 +980,11 @@ export class UI {
       this.endEdit();
       this.onSceneReset();
       this.onChange();
-      try { localStorage.removeItem('chromavox-scene'); localStorage.removeItem('chromavox-ui'); } catch {}
+      try {
+        localStorage.removeItem('chromavox-scene');
+        localStorage.removeItem('chromavox-ui');
+        localStorage.removeItem('chromavox-song');
+      } catch {}
     });
 
     this.bindPresets();
@@ -1036,4 +1052,30 @@ export class UI {
 
   // Exposed for main.js spin enforcement.
   elementsOverlap(el, elements) { return overlapsAny(el, elements); }
+
+  // "Auto" placement: analyze the current song + scene and add one
+  // interesting element positioned to interact optically with existing
+  // ones while avoiding the melody band. May also tempo-sync-spin one
+  // existing element if nothing was spinning yet. Undo collapses the
+  // whole operation into a single history step.
+  autoPlace() {
+    const song = window.chromavox?.songPlayer?.song ?? null;
+    const result = autoPlace(this.scene, song);
+    if (result.error) {
+      window.chromavox?.statusToast?.('Auto: ' + result.error);
+      return;
+    }
+    this.beginEdit();
+    for (const adj of result.adjustments) {
+      const target = this.scene.elements.find(e => e.id === adj.id);
+      if (target) target.spin = adj.spin;
+    }
+    this.scene.elements.push(result.element);
+    this.select(result.element);
+    this.endEdit();
+    this.onChange();
+    if (result.label) {
+      window.chromavox?.statusToast?.('Auto: ' + result.label);
+    }
+  }
 }

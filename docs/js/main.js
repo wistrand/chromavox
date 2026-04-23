@@ -17,6 +17,7 @@ import { parseMidi, midiToSong, defaultEnabled } from './midi.js';
 import { CARRIERS, ALL_PARAM_IDS } from './carriers.js';
 
 const STORAGE_KEY = 'chromavox-scene';
+const SONG_STORAGE_KEY = 'chromavox-song';
 
 // App namespace — avoids scattered window._ globals. Also useful
 // for console debugging: chromavox.synth, chromavox.tracer, etc.
@@ -188,6 +189,7 @@ function resetDisplay() {
   tracer.resetPersistence();
   songPlayer.stop();
   document.getElementById('song-select').value = '';
+  try { localStorage.removeItem(SONG_STORAGE_KEY); } catch {}
   applySceneSynth();
   updateDocTitle();
 }
@@ -197,6 +199,26 @@ const mic = new MicModulator();
 const songPlayer = new SongPlayer();
 const synth = new SensorSynth();
 const midi = new MidiRouter();
+// Expose the song player so UI code (Auto placement) can see the
+// currently loaded song without passing it through every constructor.
+cv.songPlayer = songPlayer;
+
+// Brief status toast. Used by Auto placement and anywhere else a
+// short, non-blocking confirmation/failure message makes sense.
+cv.statusToast = function(message) {
+  const el = document.getElementById('status-toast');
+  if (!el) return;
+  el.textContent = message;
+  el.hidden = false;
+  // Force a reflow so the transition re-runs on repeated calls.
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(el._toastTimer);
+  el._toastTimer = setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => { if (!el.classList.contains('show')) el.hidden = true; }, 300);
+  }, 2500);
+};
 
 // Encoder CC → selected element property control.
 // CC 71-78 map to: x, y, rotation, spin, hue, delay, size/w, h/radius.
@@ -1766,7 +1788,8 @@ window.addEventListener('resize', () => {
   const seekSlider = document.getElementById('song-seek');
   const timeLabel = document.getElementById('song-time');
 
-  // Load song index. Auto-select + load the default song.
+  // Load song index, then auto-select + load either the persisted song
+  // (if any) or the catalog default.
   fetch('songs/index.json').then(r => r.json()).then(async index => {
     let defaultFile = null;
     for (const entry of index) {
@@ -1776,10 +1799,19 @@ window.addEventListener('resize', () => {
       songSelect.appendChild(opt);
       if (entry.default) defaultFile = entry.file;
     }
-    // Only auto-load the default song if there's no saved scene.
-    // User's saved work in localStorage takes precedence.
-    const hasSaved = !freshStart && !!localStorage.getItem(STORAGE_KEY);
-    if (defaultFile && !hasSaved) {
+    // Priority: saved song > saved scene (no song) > catalog default.
+    const rawSong = freshStart ? null : localStorage.getItem(SONG_STORAGE_KEY);
+    if (rawSong) {
+      try {
+        const saved = JSON.parse(rawSong);
+        if (saved && saved.song) {
+          restoreSongJson(saved.song, saved.selectValue || '');
+          return;
+        }
+      } catch {}
+    }
+    const hasSavedScene = !freshStart && !!localStorage.getItem(STORAGE_KEY);
+    if (defaultFile && !hasSavedScene) {
       songSelect.value = defaultFile;
       songSelect.dispatchEvent(new Event('change'));
     }
@@ -1801,10 +1833,7 @@ window.addEventListener('resize', () => {
   // pressing the ▶ button.
   if (welcomeEl) welcomeEl.addEventListener('click', () => playBtn.click());
 
-  function loadSongJson(json) {
-    songPlayer.load(json);
-    songPlayer.applyKeyframeAt(scene, 0);
-    dirty = true;
+  function _enableTransport() {
     playBtn.disabled = false;
     stopBtn.disabled = false;
     seekSlider.disabled = false;
@@ -1812,13 +1841,70 @@ window.addEventListener('resize', () => {
     seekSlider.max = songPlayer.duration;
     syncLoopBtn();
     updateDocTitle();
+  }
+
+  function _persistSong(json) {
+    try {
+      localStorage.setItem(SONG_STORAGE_KEY, JSON.stringify({
+        song: json,
+        selectValue: songSelect.value || '',
+      }));
+    } catch {}
+  }
+
+  function loadSongJson(json) {
+    songPlayer.load(json);
+    songPlayer.applyKeyframeAt(scene, 0);
+    dirty = true;
+    _enableTransport();
+    _persistSong(json);
     if (json.welcome) showWelcome(json.welcome);
     else cv.hideWelcome();
   }
 
+  // Restore path on page reload: load a persisted song but do NOT call
+  // applyKeyframeAt — scene was restored separately and must not be
+  // overwritten. `keyframesPaused = true` protects any scene edits the
+  // user made on top of the song (dragging elements, adding new ones)
+  // from being clobbered the moment they press play. Global config
+  // (emitter count, wavelength range, rays-per-source, sensor count,
+  // scale mode, base, span, carrier) is applied explicitly here — the
+  // fresh-import path gets this for free via `_applyKeyframes`, but
+  // we skip that here to preserve scene.elements. Without this the
+  // song would play against whatever carrier/scale the synth happened
+  // to have before reload, which sounds completely different.
+  function restoreSongJson(json, selectValue) {
+    songPlayer.load(json);
+    songPlayer.keyframesPaused = true;
+    if (selectValue) songSelect.value = selectValue;
+    const g = json.global;
+    if (g) {
+      if (g.emitter) {
+        if (g.emitter.count !== undefined) scene.emitter.count = g.emitter.count;
+        if (g.emitter.wlMin !== undefined) scene.emitter.wlMin = g.emitter.wlMin;
+        if (g.emitter.wlMax !== undefined) scene.emitter.wlMax = g.emitter.wlMax;
+        if (g.emitter.raysPerSource !== undefined) scene.emitter.raysPerSource = g.emitter.raysPerSource;
+      }
+      if (g.sensorCount !== undefined) scene.sensorCount = g.sensorCount;
+      scene.runtime.micLevels = new Float32Array(scene.emitter.count);
+      if (songPlayer.onGlobal) {
+        songPlayer.onGlobal(g);
+        songPlayer._globalApplied = true;
+      }
+    }
+    _enableTransport();
+    cv.hideWelcome();
+  }
+
   songSelect.addEventListener('change', async () => {
     const file = songSelect.value;
-    if (!file) { songPlayer.stop(); cv.hideWelcome(); setDirty(); return; }
+    if (!file) {
+      songPlayer.stop();
+      cv.hideWelcome();
+      try { localStorage.removeItem(SONG_STORAGE_KEY); } catch {}
+      setDirty();
+      return;
+    }
     try {
       const resp = await fetch('songs/' + file);
       const json = await resp.json();

@@ -37,6 +37,7 @@ export function assertThrows(fn, msg) {
     './raytracer.test.js',
     './synth-worklet.test.js',
     './midi.test.js',
+    './auto-place.test.js',
   ];
   for (const m of modules) {
     try {

@@ -60,17 +60,22 @@ export function makeElement(kind, x, y) {
 export function localPolygon(el) {
   switch (el.kind) {
     case 'diamond': {
-      // Point-cut diamond: 2D silhouette of an octahedron. Taller than
-      // wide (girdle-width ≈ 0.7 × height), pointed top and bottom.
-      // Four vertices, clockwise in y-down starting at the top point.
+      // Round brilliant cut side profile: flat table on top, slanted
+      // crown out to the widest girdle, tapering down to a single
+      // culet point. Ratios (table half-width, crown height, pavilion
+      // depth — all relative to size) are tunable via el.table, el.crown,
+      // el.pavilion; defaults come from the element schema.
       const s = el.size;
-      const h = s / 2;
-      const w = s * 0.35;
+      const w = s / 2;                          // girdle half-width
+      const tw = w * (el.table    ?? 0.53);     // table half-width (Tolkowsky ideal)
+      const hc = s * (el.crown    ?? 0.162);    // crown height (34.5° crown angle)
+      const hp = s * (el.pavilion ?? 0.431);    // pavilion depth (40.75° pavilion angle)
       return [
-        { x: 0,  y: -h },
-        { x: w,  y:  0 },
-        { x: 0,  y:  h },
-        { x: -w, y:  0 },
+        { x: -tw, y: -hc }, // table-left
+        { x:  tw, y: -hc }, // table-right
+        { x:   w, y:   0 }, // girdle-right
+        { x:   0, y:  hp }, // culet
+        { x:  -w, y:   0 }, // girdle-left
       ];
     }
     case 'prism': {

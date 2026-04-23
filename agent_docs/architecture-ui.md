@@ -58,6 +58,8 @@ absolute-positioned overlays starting below the header.
   action button (not a mode) — disabled when nothing is selected,
   click deletes the selected element and selects the next one.
   No separate Select button; selection is always the default behavior.
+  The last menu item is **Auto ✨** — an action, not a placeable kind
+  — see "Auto placement" below.
 - **Selection**: click/tap an element to select it, drag to move,
   Shift-drag (or right-button drag) rotates around the element's
   centre. Click/tap empty space to deselect. Hit test has a 15px
@@ -149,9 +151,114 @@ participates in undo/redo automatically.
 
 While an element is selected, a small `+12.3°` overlay (the
 `#rotation-label` div inside `#bench-viewport`) shows the current
-rotation. Position is computed in bench units (`(sel.x + 26, sel.y - 8)`
-scaled by `vp.clientWidth / scene.bench.w`) so it stays clear of the
-20-unit indicator line and 14-unit arc at any viewport scale.
+rotation. The label is anchored just past the tip of the 20-unit
+rotation indicator, in the same bearing as `el.rot` — so it reads as
+the annotation for the arc rather than a disconnected badge. Position
+is computed from `canvas.getBoundingClientRect()` converted into the
+label's `offsetParent` coord system so letterbox offsets, aspect
+changes, and fullscreen toggles can't shift the label relative to the
+indicator. Bench-space offset: `sel.x + cos(rot)·26` horizontal,
+`sel.y + sin(rot)·26` vertical (plus a 6 px vertical trim to center
+on the line).
+
+## Auto placement
+
+`docs/js/auto-place.js` implements the Add-menu **Auto ✨** action.
+Given the current scene and the loaded song (if any), it picks a new
+element kind, material, size, rotation, and position that:
+
+1. Doesn't overlap any existing element.
+2. Doesn't fall inside the song's *melody band* (the smoothed-peak
+   emitter range carrying most of the musical weight) so the line
+   isn't transposed or blocked.
+3. Prefers placements that interact optically with existing elements
+   (chain dispersion past another prism, circle at a convex lens's
+   focal point, cavity opposite a flat mirror, complementary-color
+   block beside an already-colored element, etc.).
+4. Is weight-randomised, so repeated presses on the same scene+song
+   yield different but coherent results.
+
+Song analysis (`analyzeSong`) returns a feature vector built from
+`song.notes`: per-emitter pitch-energy histogram `W[i] = Σ vel·dur`,
+pitch centroid and spread, bass/treble ratios, notes-per-second,
+average polyphony (= total note-seconds / duration), velocity σ, bpm,
+and the derived `melodyLo/Hi` + `quietLo/Hi` emitter ranges. The
+melody band is capped to ≤ N/2 emitters so polyphonic pieces don't
+veto the whole bench. The quiet band is the widest-minimum-energy
+window (width ≥ N/5) that does not overlap the melody band.
+
+Scene analysis (`analyzeScene`) flags the kinds present, whether
+anything is spinning, and whether any element has `el.color` set.
+Each synergy unlocks or boosts a candidate — e.g. an existing flat
+mirror boosts the "concave mirror cavity" candidate, an existing
+prism boosts the "colorful chain-dispersion prism", a colored element
+adds a "complementary-color block" candidate anchored to it.
+
+Prisms are deliberately favored — three prism flavors (rotating-bass,
+colorful-chain, dispersive-chord) cover most song moods. Circles and
+slow-glass / delay materials are **intentionally excluded** from
+Auto's candidate pool — they capture or muddy the melody. Blocks are
+kept only for the specific complementary-color-filter use case, with
+a low weight.
+
+**Mirrors are gated on a prism existing in the scene** and are always
+small (flat: w ≈ 40–70 bench units; concave: h ≈ 35–55). They anchor
+to the prism so placement orbits the dispersion fan — the intent is
+to catch part of the spectrum rather than dominate the bench. A
+standalone "scatter" mirror-convex was removed; it tended to wash the
+output rather than complement it.
+
+After per-candidate weighting, a **diversity multiplier** divides each
+score by `1 + existingCountOfThatKind`. Adding another prism to a
+scene that already has one is half as attractive; adding the same
+kind twice more is a third. This prevents the "press Auto four times,
+get four prisms stacked at the bass" failure mode — once a kind is
+placed, novel kinds dominate the weighted pick.
+
+Tempo-synced spin is deliberately gentle — one full rotation every 8,
+16, or 32 beats with a 45 deg/s hard cap. The goal is "drifting
+slowly" visual motion, not anything hectic.
+
+Candidate weights are jittered (±15%) and sorted; each is then tried
+in turn through three placement strategies:
+
+- **S1 Synergy-anchored** — for candidates with an `anchor`, propose
+  `(x, y)` downstream of the anchor along `anchor.rot` at a distance
+  = `anchorRadius + size/2 + pad`, with small bearing/distance
+  perturbations.
+- **S2 Quiet-band widest gap** — scan existing elements' x-extents
+  within the quiet band's y-range, propose the midpoints of the
+  widest empty gaps.
+- **S3 Gaussian around preferred center** — both `x` and `y` are
+  sampled from Box-Muller normal variates centered on the preferred
+  region (quiet-band midpoint for `quiet`, bass/treble mid-heights for
+  those hints, the anchor's position for anchored hints). Sigma is
+  half the quiet band's height (min 30 px) on y and `bench.w / 4` on
+  x. Proposals further from the center are automatically shrunk — the
+  size is multiplied by `1 − 0.5·min(1, ‖d/σ‖/2)` — so tail samples are
+  smaller and therefore more likely to fit in crowded scenes without
+  giving up.
+
+Each proposal is rejected if any of: `isInBench` (element AABB outside
+the bench rect), `violatesMelody` (AABB y-range intersects the melody
+band y-range), or `overlapsAny` (polygon intersects an existing
+element). Retry budget is built into the number of proposals
+generated per candidate (~20); candidates are then tried in weight
+order. On total failure a `status-toast` message is shown.
+
+Spin sync (point 1 of the design): if nothing in the scene is
+spinning and the song is loaded, the element furthest from the
+melody-band y-center is given a tempo-synced spin
+(`bpm/60 · 2π / beatsPerRotation` rad/s, random sign, random
+`beatsPerRotation ∈ {2,4,8}`). Applied together with the new element
+inside one `beginEdit/endEdit` so undo collapses the whole Auto
+operation to a single history step.
+
+The module is pure (no DOM). UI wiring is in `UI.autoPlace()` in
+`ui.js`, triggered from the `data-tool="auto"` menu item. `main.js`
+exposes the song player via `window.chromavox.songPlayer` so the UI
+method can reach it without constructor plumbing, and provides
+`window.chromavox.statusToast(message)` for the failure notification.
 
 ## Per-element color override
 
@@ -199,6 +306,23 @@ on every `markDirty`, and on `resetDisplay`.
 Scene auto-saves to `localStorage` (key `'chromavox-scene'`) on every
 `markDirty`. On page load, `main.js` restores from localStorage if
 available, otherwise calls `createScene()`.
+
+The currently-loaded song is separately persisted under
+`'chromavox-song'` as `{ song, selectValue }` — written by
+`_persistSong(json)` from `loadSongJson` (so catalog, MusicXML, and
+MIDI loads all persist), cleared on empty `songSelect` and on any
+scene reset (`resetDisplay`). On page load a persisted song is
+restored via `restoreSongJson(json, selectValue)`, which skips the
+first-keyframe-element apply (the scene was restored separately and
+must not be overwritten) and sets `keyframesPaused = true` so scene
+additions the user made on top of the song aren't clobbered when
+they press play. The song's `global` config (emitter count, wavelength
+range, rays-per-source, sensor count, scale mode, base, span, carrier)
+*is* applied explicitly — without it the song would play against
+whatever carrier/scale the synth happened to have before reload,
+which sounds completely different. Priority order at init: saved song
+> saved scene (no song) > catalog default. The welcome overlay is
+suppressed on restore.
 
 ### Runtime song import
 

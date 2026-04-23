@@ -178,7 +178,17 @@ export const ELEMENTS = {
     material: 'diamond',
     props: {
       rot:    { default: 0 },
-      size:   { label: 'Size', min: 30, max: 300, default: 110, step: 1 },
+      size:   { label: 'Size', min: 30, max: 300, default: 150, step: 1 },
+      // Brilliant-cut proportions (all fractions of the diameter `size`).
+      // Defaults are Tolkowsky's "Ideal Cut": table 53%, crown height
+      // 16.2% (crown angle 34.5°), pavilion depth 43.1% (pavilion angle
+      // 40.75°) → total depth 59.3% — the classic perfect-cut silhouette.
+      table:    { label: 'Table',    min: 0,    max: 0.95, default: 0.53,  step: 0.01,
+                  display: v => v.toFixed(2) },
+      crown:    { label: 'Crown',    min: 0,    max: 0.4,  default: 0.162, step: 0.001,
+                  display: v => v.toFixed(3) },
+      pavilion: { label: 'Pavilion', min: 0.05, max: 0.8,  default: 0.431, step: 0.001,
+                  display: v => v.toFixed(3) },
       spin:   { ...SPIN },
       delayK: { ...DELAY },
       color:  { ...COLOR },

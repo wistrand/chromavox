@@ -790,17 +790,25 @@ export class Renderer {
       this._selectedForLabel = null;
       if (sel) {
         const deg = ((sel.rot || 0) * 180 / Math.PI) % 360;
-        const vp = this.canvas.parentElement;
-        if (vp) {
-          const sx = vp.clientWidth / scene.bench.w;
-          const sy = vp.clientHeight / scene.bench.h;
-          rotLabel.textContent = `${deg >= 0 ? '+' : ''}${deg.toFixed(1)}°`;
-          // Offset in bench units so the label clears the rotation arc
-          // (radius 14) and indicator line (length 20) at any viewport scale.
-          rotLabel.style.left = ((sel.x + 26) * sx) + 'px';
-          rotLabel.style.top = ((sel.y - 8) * sy) + 'px';
-          rotLabel.hidden = false;
-        }
+        // Anchor to the canvas rect (in viewport pixels) and convert to
+        // the label's offsetParent-local coords. This stays correct
+        // regardless of letterbox size or which ancestor happens to be
+        // the positioning context.
+        const cRect = this.canvas.getBoundingClientRect();
+        const parent = rotLabel.offsetParent;
+        const pRect = parent
+          ? parent.getBoundingClientRect()
+          : { left: 0, top: 0 };
+        const sx = cRect.width / scene.bench.w;
+        const sy = cRect.height / scene.bench.h;
+        const rot = sel.rot || 0;
+        const R = 26; // bench-units, past the 20-unit indicator tip
+        const lx = sel.x + Math.cos(rot) * R;
+        const ly = sel.y + Math.sin(rot) * R;
+        rotLabel.textContent = `${deg >= 0 ? '+' : ''}${deg.toFixed(1)}°`;
+        rotLabel.style.left = ((cRect.left - pRect.left) + lx * sx) + 'px';
+        rotLabel.style.top  = ((cRect.top  - pRect.top ) + ly * sy - 6) + 'px';
+        rotLabel.hidden = false;
       } else {
         rotLabel.hidden = true;
       }

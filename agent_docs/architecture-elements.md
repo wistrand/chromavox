@@ -28,7 +28,10 @@ Each kind entry has:
 Property descriptor fields: `label`, `min`, `max`, `default`, `step`,
 `type` (`'color'` or `'range'` default), `display` (value → string
 formatter), `toInternal` / `fromInternal` (UI ↔ internal conversion,
-e.g. deg ↔ rad for spin), `resetable` (shows × reset button).
+e.g. deg ↔ rad for spin). All numeric sliders render a `×` reset
+button automatically — click resets to `desc.default` (or 0 when no
+default is declared, matching the old delay-null semantics). The
+legacy `resetable` flag is now unused but left on shared templates.
 
 Shared templates defined once and spread: `SPIN`, `ABSORB`, `DELAY`,
 `COLOR`. `delayK` default is `null` (inherits from material).
@@ -105,13 +108,26 @@ Check `makeElement` for the current values.
 
 ## Diamond
 
-`diamond` uses the brilliant point-cut shape — a rhombus polygon with
-half-height `h = size/2` and half-width `w = size * 0.35`. Material is
-`diamond` (high refractive index). At any meaningful angle the bounce
-geometry produces total internal reflection on every internal hit, so
-the element behaves as a closed light trap regardless of the entry
-angle (caveat: some chosen `el.color` filters can absorb the ray
-before it returns). Properties: `size`, `spin`, `delayK`, `color`,
+`diamond` uses a round-brilliant-cut side profile: flat table on top,
+slanted crown out to the widest girdle, tapering down to a single
+culet point. Five vertices. The three brilliant-cut proportions are
+exposed as sliders and default to standard ratios:
+
+- `table` (0..0.95, default **0.53**) — table width as a fraction of
+  the diameter.
+- `crown` (0..0.4, default **0.162**) — crown height as a fraction of
+  the diameter (34.5° crown angle).
+- `pavilion` (0.05..0.8, default **0.431**) — pavilion depth as a
+  fraction of the diameter (40.75° pavilion angle).
+
+Defaults are **Tolkowsky's Ideal Cut** — the classic perfect-cut
+proportions: total depth ≈ 59.3% of diameter, table ≈ 53%. Girdle
+half-width is always `size/2`. Material is `diamond` (high refractive
+index). At any meaningful angle the bounce geometry produces total
+internal reflection on every internal hit, so the element behaves as
+a closed light trap regardless of entry angle (caveat: some chosen
+`el.color` filters can absorb the ray before it returns). Properties:
+`size`, `table`, `crown`, `pavilion`, `spin`, `delayK`, `color`,
 `absorb`.
 
 ## Adding a new element kind
