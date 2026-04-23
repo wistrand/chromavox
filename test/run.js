@@ -36,6 +36,7 @@ export function assertThrows(fn, msg) {
     './scene.test.js',
     './raytracer.test.js',
     './synth-worklet.test.js',
+    './midi.test.js',
   ];
   for (const m of modules) {
     try {

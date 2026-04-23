@@ -13,6 +13,7 @@ import { MidiRouter } from './midi-devices/router.js';
 import { scaleFreq } from './spectrum.js';
 import { SongPlayer } from './song.js';
 import { musicxmlToSong } from './musicxml.js';
+import { parseMidi, midiToSong, defaultEnabled } from './midi.js';
 import { CARRIERS, ALL_PARAM_IDS } from './carriers.js';
 
 const STORAGE_KEY = 'chromavox-scene';
@@ -139,6 +140,14 @@ function syncSceneSynth() {
   scene.synth = { carrier, params };
 }
 
+// A loaded song's title (from JSON / imported MIDI / MusicXML) takes
+// precedence over scene-content auto-title so imported files show their
+// name in the window title.
+function updateDocTitle() {
+  const songTitle = songPlayer?.song?.title;
+  document.title = 'Chromavox - ' + (songTitle || autoTitle(scene));
+}
+
 const markDirty = () => {
   setDirty();
   if (cv.hideWelcome) cv.hideWelcome();
@@ -146,7 +155,7 @@ const markDirty = () => {
   // the user has taken ownership of element positions.
   if (songPlayer.playing) songPlayer.keyframesPaused = true;
   syncSceneSynth();
-  document.title = 'Chromavox - ' + autoTitle(scene);
+  updateDocTitle();
   try { localStorage.setItem(STORAGE_KEY, serializeScene(scene)); } catch {}
   saveUiState();
 };
@@ -180,7 +189,7 @@ function resetDisplay() {
   songPlayer.stop();
   document.getElementById('song-select').value = '';
   applySceneSynth();
-  document.title = 'Chromavox - ' + autoTitle(scene);
+  updateDocTitle();
 }
 let lastFrameTime = performance.now() / 1000;
 
@@ -1802,6 +1811,7 @@ window.addEventListener('resize', () => {
     if (loopBtn) loopBtn.disabled = false;
     seekSlider.max = songPlayer.duration;
     syncLoopBtn();
+    updateDocTitle();
     if (json.welcome) showWelcome(json.welcome);
     else cv.hideWelcome();
   }
@@ -1812,6 +1822,7 @@ window.addEventListener('resize', () => {
     try {
       const resp = await fetch('songs/' + file);
       const json = await resp.json();
+      hideMidiTrackPicker();
       loadSongJson(json);
     } catch (err) {
       console.error('Song load failed:', err);
@@ -1827,7 +1838,15 @@ window.addEventListener('resize', () => {
   // Returns true on success, false on failure (error already alerted).
   async function importSongFile(f) {
     try {
-      const bytes = new Uint8Array(await f.arrayBuffer());
+      const ab = await f.arrayBuffer();
+      const bytes = new Uint8Array(ab);
+      // Sniff MIDI header first — MIDI files are binary and start with "MThd".
+      if (bytes.length >= 4 && bytes[0] === 0x4D && bytes[1] === 0x54
+          && bytes[2] === 0x68 && bytes[3] === 0x64) {
+        const parsed = parseMidi(ab);
+        showMidiTrackPicker(parsed);
+        return true;
+      }
       let enc = 'utf-8';
       if (bytes.length >= 2) {
         if (bytes[0] === 0xFF && bytes[1] === 0xFE) enc = 'utf-16le';
@@ -1838,7 +1857,8 @@ window.addEventListener('resize', () => {
       let json;
       if (head === '<') json = musicxmlToSong(text);
       else if (head === '{') json = JSON.parse(text);
-      else throw new Error('Unrecognised file — expected MusicXML (<…>) or Chromavox song JSON ({…})');
+      else throw new Error('Unrecognised file — expected MIDI (MThd), MusicXML (<…>) or Chromavox song JSON ({…})');
+      hideMidiTrackPicker();
       songSelect.value = ''; // the dropdown no longer represents the loaded song
       loadSongJson(json);
       return true;
@@ -1847,6 +1867,153 @@ window.addEventListener('resize', () => {
       alert('Could not import song: ' + err.message);
       return false;
     }
+  }
+
+  // MIDI track-picker state: cached parsed file + current selection
+  // so toggling a track just regenerates the song without re-parsing.
+  const _midiPanel = document.getElementById('midi-tracks-window');
+  const _midiMeta = document.getElementById('midi-tracks-meta');
+  const _midiList = document.getElementById('midi-tracks-list');
+  const _midiClose = _midiPanel?.querySelector('.fw-close');
+  const _midiTitlebar = _midiPanel?.querySelector('.fw-titlebar');
+  const _midiReopenBtn = document.getElementById('midi-tracks-reopen');
+  let _midiParsed = null;
+  let _midiEnabled = null;
+  let _midiCarrier = null;
+
+  function _midiProgramName(prog) {
+    // Tiny GM-ish hint string. Full table isn't worth shipping; the
+    // track's own name is usually more informative anyway.
+    if (prog == null) return '';
+    if (prog <= 7) return 'Piano';
+    if (prog <= 15) return 'Chrom perc';
+    if (prog <= 23) return 'Organ';
+    if (prog <= 31) return 'Guitar';
+    if (prog <= 39) return 'Bass';
+    if (prog <= 47) return 'Strings';
+    if (prog <= 55) return 'Ensemble';
+    if (prog <= 63) return 'Brass';
+    if (prog <= 71) return 'Reed';
+    if (prog <= 79) return 'Pipe';
+    if (prog <= 87) return 'Synth lead';
+    if (prog <= 95) return 'Synth pad';
+    if (prog <= 103) return 'Synth FX';
+    if (prog <= 111) return 'Ethnic';
+    if (prog <= 119) return 'Perc';
+    return 'FX';
+  }
+
+  function _applyMidiSelection() {
+    if (!_midiParsed) return;
+    try {
+      const song = midiToSong(_midiParsed, {
+        enabledTracks: _midiEnabled,
+        carrier: _midiCarrier,
+      });
+      songSelect.value = '';
+      loadSongJson(song);
+      if (loopBtn) loopBtn.disabled = false;
+      // Autoplay the first time a MIDI is opened; subsequent toggles
+      // restart from 0 but don't start playback unless it was playing.
+      if (!songPlayer.playing) playBtn.click();
+    } catch (err) {
+      console.error('MIDI regenerate failed:', err);
+      alert('Could not build song from selected tracks: ' + err.message);
+    }
+  }
+
+  function _openMidiPanel() {
+    if (!_midiPanel) return;
+    _midiPanel.hidden = false;
+    if (!_midiPanel._positioned) {
+      _midiPanel.style.top = '64px';
+      _midiPanel.style.right = '12px';
+      _midiPanel.style.left = 'auto';
+      _midiPanel._positioned = true;
+    }
+  }
+
+  function showMidiTrackPicker(parsed) {
+    _midiParsed = parsed;
+    _midiEnabled = defaultEnabled(parsed);
+    _midiCarrier = 'supersaw';
+    if (_midiReopenBtn) _midiReopenBtn.hidden = false;
+    if (!_midiPanel) { _applyMidiSelection(); return; }
+
+    const totalSec = parsed.tracks.reduce((m, t) => Math.max(m, t.lastTick), 0) /
+      parsed.ticksPerQuarter * (parsed.tempoMap[0].tempoUs / 1e6);
+    const mins = Math.floor(totalSec / 60);
+    const secs = Math.floor(totalSec % 60);
+    const bpm = Math.round(60e6 / parsed.tempoMap[0].tempoUs);
+    _midiMeta.textContent =
+      `${parsed.title || 'MIDI'} · ${bpm} BPM · ${mins}:${secs.toString().padStart(2, '0')} · ${parsed.tracks.length} tracks`;
+
+    _midiList.innerHTML = '';
+    for (const t of parsed.tracks) {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = _midiEnabled.has(t.index);
+      cb.addEventListener('change', () => {
+        if (cb.checked) _midiEnabled.add(t.index); else _midiEnabled.delete(t.index);
+        _applyMidiSelection();
+      });
+      const name = document.createElement('span');
+      name.className = 'tname';
+      const ch = t.channel + 1;
+      const prog = _midiProgramName(t.program);
+      const chTag = t.channel === 9 ? ' (drum)' : '';
+      name.textContent = `${t.name}${chTag}${prog ? ' — ' + prog : ''} (ch${ch})`;
+      const count = document.createElement('span');
+      count.className = 'tcount';
+      count.textContent = t.noteCount + 'n';
+      label.append(cb, name, count);
+      _midiList.appendChild(label);
+    }
+    _openMidiPanel();
+    _applyMidiSelection();
+  }
+
+  // Close the panel but keep parsed state around so the ♪ button can
+  // reopen it.
+  function closeMidiTrackPicker() {
+    if (_midiPanel) _midiPanel.hidden = true;
+  }
+
+  // Drop cached state — called when a different (non-MIDI) song loads.
+  function hideMidiTrackPicker() {
+    closeMidiTrackPicker();
+    _midiParsed = null;
+    _midiEnabled = null;
+    _midiCarrier = null;
+    if (_midiReopenBtn) _midiReopenBtn.hidden = true;
+  }
+
+  if (_midiClose) _midiClose.addEventListener('click', closeMidiTrackPicker);
+  if (_midiReopenBtn) {
+    _midiReopenBtn.addEventListener('click', () => {
+      if (!_midiParsed) return;
+      _openMidiPanel();
+    });
+  }
+  // Drag support — same shape as the stats window.
+  if (_midiTitlebar && _midiPanel) {
+    let dragOff = null;
+    _midiTitlebar.addEventListener('pointerdown', e => {
+      if (e.target.closest('.fw-close')) return;
+      e.preventDefault();
+      _midiTitlebar.setPointerCapture(e.pointerId);
+      const r = _midiPanel.getBoundingClientRect();
+      dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+      _midiPanel.style.right = 'auto';
+    });
+    _midiTitlebar.addEventListener('pointermove', e => {
+      if (!dragOff) return;
+      _midiPanel.style.left = (e.clientX - dragOff.x) + 'px';
+      _midiPanel.style.top = (e.clientY - dragOff.y) + 'px';
+    });
+    _midiTitlebar.addEventListener('pointerup', () => { dragOff = null; });
+    _midiTitlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
   }
 
   const importBtn = document.getElementById('song-import');
@@ -1869,7 +2036,7 @@ window.addEventListener('resize', () => {
     const hasSongFile = (dt) => dt && dt.types && Array.from(dt.types).includes('Files');
     const pickSongFile = (files) => {
       if (!files || !files.length) return null;
-      const re = /\.(json|xml|musicxml)$/i;
+      const re = /\.(json|xml|musicxml|mid|midi)$/i;
       for (const f of files) if (re.test(f.name)) return f;
       return files[0]; // fall back to first (content-sniff will still work)
     };

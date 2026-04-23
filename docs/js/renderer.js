@@ -795,8 +795,10 @@ export class Renderer {
           const sx = vp.clientWidth / scene.bench.w;
           const sy = vp.clientHeight / scene.bench.h;
           rotLabel.textContent = `${deg >= 0 ? '+' : ''}${deg.toFixed(1)}°`;
-          rotLabel.style.left = (sel.x * sx + 24) + 'px';
-          rotLabel.style.top = (sel.y * sy - 6) + 'px';
+          // Offset in bench units so the label clears the rotation arc
+          // (radius 14) and indicator line (length 20) at any viewport scale.
+          rotLabel.style.left = ((sel.x + 26) * sx) + 'px';
+          rotLabel.style.top = ((sel.y - 8) * sy) + 'px';
           rotLabel.hidden = false;
         }
       } else {

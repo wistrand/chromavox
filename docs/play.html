@@ -238,6 +238,17 @@
     </div>
   </div>
 
+  <div id="midi-tracks-window" class="floating-window" hidden>
+    <div class="fw-titlebar">
+      <span class="fw-title">MIDI tracks</span>
+      <button class="fw-close" aria-label="Close">×</button>
+    </div>
+    <div class="fw-body">
+      <div id="midi-tracks-meta"></div>
+      <div id="midi-tracks-list"></div>
+    </div>
+  </div>
+
   <main id="stage">
     <div id="bench-viewport">
       <canvas id="gl"></canvas>
@@ -257,8 +268,9 @@
 
   <footer id="transport">
     <select id="song-select"><option value="">[song]</option></select>
-    <button id="song-import" title="Import song (.json or MusicXML .musicxml / .xml)">⇪</button>
-    <input id="song-import-file" type="file" accept=".json,application/json,.musicxml,.xml,application/vnd.recordare.musicxml+xml,text/xml" hidden>
+    <button id="song-import" title="Import song (.json, MusicXML .musicxml / .xml, or MIDI .mid)">⇪</button>
+    <input id="song-import-file" type="file" accept=".json,application/json,.musicxml,.xml,application/vnd.recordare.musicxml+xml,text/xml,.mid,.midi,audio/midi,audio/x-midi" hidden>
+    <button id="midi-tracks-reopen" title="MIDI tracks" hidden>♪</button>
     <button id="song-play" disabled>▶</button>
     <button id="song-stop" disabled>■</button>
     <button id="song-loop" title="Repeat" aria-pressed="false" disabled>⟳</button>

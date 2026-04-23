@@ -51,7 +51,7 @@ export const ELEMENTS = {
     label: 'Block',
     material: 'crown',
     props: {
-      rot:    { default: Math.PI / 6 },
+      rot:    { default: 75 * Math.PI / 180 },
       w:      { label: 'Width',  min: 40, max: 400, default: 180, step: 1 },
       h:      { label: 'Height', min: 20, max: 300, default: 80,  step: 1 },
       spin:   { ...SPIN },
@@ -162,6 +162,23 @@ export const ELEMENTS = {
     props: {
       rot:    { default: 0 },
       size:   { label: 'Size', min: 60, max: 300, default: 140, step: 1 },
+      spin:   { ...SPIN },
+      delayK: { ...DELAY },
+      color:  { ...COLOR },
+      absorb: { ...ABSORB },
+    },
+    resize: { keys: ['size'], min: { size: 20 } },
+    pinch:  { keys: ['size'], min: { size: 20 } },
+  },
+
+  diamond: {
+    label: 'Diamond',
+    // Default to the "diamond" material (high index, always TIRs in the
+    // equilateral case) to match the shape.
+    material: 'diamond',
+    props: {
+      rot:    { default: 0 },
+      size:   { label: 'Size', min: 30, max: 300, default: 110, step: 1 },
       spin:   { ...SPIN },
       delayK: { ...DELAY },
       color:  { ...COLOR },

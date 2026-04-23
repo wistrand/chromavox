@@ -59,6 +59,20 @@ export function makeElement(kind, x, y) {
 // Local-space polygon vertices for an element.
 export function localPolygon(el) {
   switch (el.kind) {
+    case 'diamond': {
+      // Point-cut diamond: 2D silhouette of an octahedron. Taller than
+      // wide (girdle-width ≈ 0.7 × height), pointed top and bottom.
+      // Four vertices, clockwise in y-down starting at the top point.
+      const s = el.size;
+      const h = s / 2;
+      const w = s * 0.35;
+      return [
+        { x: 0,  y: -h },
+        { x: w,  y:  0 },
+        { x: 0,  y:  h },
+        { x: -w, y:  0 },
+      ];
+    }
     case 'prism': {
       const s = el.size, h = s * Math.sqrt(3) / 2;
       return [

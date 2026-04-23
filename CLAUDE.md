@@ -514,3 +514,13 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
 - Responsive layout: three tiers — full 220px panels above 960px,
   slim 160px panels from 601–960px (foldables/small tablets), drawer
   mode below 600px (phones). `#stage` has `touch-action: none`.
+
+
+## Planning estimates
+
+Never estimate in human time (hours/days/weeks) — meaningless for an agent. 
+Use agent-cost units: turn count, tool-call count/mix, or context weight (light/medium/heavy).
+Order-of-magnitude only; no fake precision. If it's small, skip the estimate.
+
+Bad: "~500 lines, ~1-2 days."
+Good: "~500 lines across 3 files, ~10-15 turns, light context."
