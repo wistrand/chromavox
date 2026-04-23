@@ -136,6 +136,13 @@ worklet source via `readFileSync` + the same placeholder patching.
 `synth.js` itself is ~190 lines — just the main-thread API (enable,
 disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
 
+The AudioContext is constructed with `{ latencyHint: 'playback' }` —
+~50 ms extra output buffer is acceptable for a synth driven by scene
+geometry, and the larger buffer is more forgiving against block-rate
+hiccups. The graph is `workletNode → master → destination`; the
+`AnalyserNode` for the synth-spectrum debug window is branched off
+`master` as a passive tap (not in the live signal path).
+
 - **Voice pitch** uses the same base and step as the mic side, so
   input and output ladders line up. `synth.setBase(hz)` rebuilds
   voice frequencies for all modes (not just chromatic), so changing

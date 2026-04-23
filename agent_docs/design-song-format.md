@@ -337,12 +337,17 @@ Both paths run through the same `importSongFile(f)` helper in
    `FF FE` → UTF-16 LE; Finale exports are UTF-16). Everything else
    is decoded as UTF-8; the UTF-8 BOM (`EF BB BF`) is stripped
    automatically by the decoder.
-3. Content-sniffs the first non-whitespace char: `<` → MusicXML,
+3. Sniffs the first four bytes for the MIDI magic `MThd` (Standard
+   MIDI File). If matched, parses via `parseMidi(ab)`
+   (`docs/js/midi.js`) and opens the floating MIDI track-picker
+   window — see "MIDI file importer" below.
+4. Content-sniffs the first non-whitespace char: `<` → MusicXML,
    `{` → native Chromavox song JSON. Anything else → error alert.
-4. For MusicXML, converts via `musicxmlToSong(text)`
+5. For MusicXML, converts via `musicxmlToSong(text)`
    (`docs/js/musicxml.js`). For native JSON, `JSON.parse`.
-5. Calls `loadSongJson(json)` — clears the song-select dropdown,
-   applies the first keyframe, enables transport controls.
+6. Calls `loadSongJson(json)` — clears the song-select dropdown,
+   applies the first keyframe, enables transport controls. The song's
+   `title` field becomes the document title suffix (`Chromavox - …`).
 
 ### MusicXML converter scope
 
@@ -386,3 +391,37 @@ Not handled (MVP scope): repeats, alternate endings, D.S. al Coda,
 tempo changes, ornaments, grace notes, triplet `<time-modification>`
 scaling. The timeline is whatever appears left-to-right in the
 `<measure>` elements.
+
+### MIDI file importer
+
+`docs/js/midi.js` parses Standard MIDI Files (`.mid` / `.midi`) and
+converts them into Chromavox song JSON. Zero deps; Format 0 and
+Format 1 are supported (Format 2 is rare and rejected). Only
+TPQ-based timing — SMPTE division (`division & 0x8000`) is rejected.
+
+The parser surfaces per-track metadata for the UI: name, channel,
+program, note count, CC count, lowest/highest pitch, unique pitch
+count, first/last tick. Format 0 files are split by channel into
+virtual tracks so the UI has something meaningful to toggle. The
+tempo map collects all tempo-meta events across tracks and is used
+by `tickToSec(tick, tempoMap, tpq)` to convert positions to seconds.
+
+The transport's `⇪` button accepts MIDI as well as JSON / MusicXML;
+on a MIDI hit, `importSongFile` opens a floating "MIDI tracks" window
+(`#midi-tracks-window`) and stashes the parsed object so toggling a
+track regenerates the song without re-parsing. Defaults:
+
+- Drum channel (zero-indexed 9) is initially disabled.
+- Tracks with < 5 notes, < 2 unique pitches, or names matching
+  `/fx|noise|applause|cymbal|wind|sea|shore|clap|sfx|perc/i` are
+  initially disabled.
+- Carrier defaults to `supersaw`; volume defaults to 0.5.
+- Mode is `chromatic`; `base` Hz = one octave below the lowest note,
+  same emitter-count cap (64) and overflow strategy as MusicXML.
+- `loop: true`.
+
+The picker has a close (`×`) button that hides the window but keeps
+the cached parsed file in memory; a small `♪` icon next to the
+import button reopens the window with the same selection. Loading
+any other song (catalog, MusicXML, native JSON) drops the cached
+state and hides the `♪` icon.
