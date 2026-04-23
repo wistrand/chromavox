@@ -348,6 +348,10 @@ synthBtn.addEventListener('click', async () => {
       synth.setStep(synthStep());
       await synth.enable(scene.sensorCount, synthMode());
       _applyInitialPartials();
+      // Re-apply stats-enabled state to the freshly created worklet;
+      // defaults to off, so only post stats if the window is visible.
+      const statsWin = document.getElementById('stats-window');
+      if (statsWin && !statsWin.hidden) synth.setStatsEnabled?.(true);
       synthBtn.textContent = 'Audio out: on';
       synthBtn.classList.add('active');
       scheduleFrame();
@@ -1251,6 +1255,38 @@ window.addEventListener('resize', () => {
   const statsContent = document.getElementById('stats-content');
   const titlebar = statsWin.querySelector('.fw-titlebar');
 
+  // Clamp the window into the current viewport. Called after every
+  // positioning change (first show, drag, resize, orientation change)
+  // so the window never ends up unreachable — especially on mobile
+  // where a narrow viewport + wide stats content used to push the
+  // window's left edge off-screen.
+  function clampStatsWindow() {
+    if (statsWin.hidden) return;
+    const r = statsWin.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const pad = 4;
+    let left = r.left;
+    let top = r.top;
+    // If content is wider than the viewport, pin left/right to 4px on
+    // each side and let the content wrap or scroll inside.
+    if (r.width > vw - 2 * pad) {
+      statsWin.style.left = pad + 'px';
+      statsWin.style.right = pad + 'px';
+      statsWin.style.maxWidth = 'calc(100vw - ' + (2 * pad) + 'px)';
+    } else {
+      // Keep existing width; just clamp position.
+      if (left + r.width > vw - pad) left = vw - pad - r.width;
+      if (top + r.height > vh - pad) top = vh - pad - r.height;
+      if (left < pad) left = pad;
+      if (top < pad) top = pad;
+      statsWin.style.left = left + 'px';
+      statsWin.style.top = top + 'px';
+      statsWin.style.right = 'auto';
+      statsWin.style.maxWidth = '';
+    }
+  }
+
   // Position near top-right on first show.
   let positioned = false;
   function showStats() {
@@ -1262,11 +1298,22 @@ window.addEventListener('resize', () => {
     }
     statsWin.hidden = false;
     statsToggle.checked = true;
+    // Only ask the worklet for stats while the window is open; the
+    // postMessage is otherwise skipped to remove worklet → main-thread
+    // traffic during normal playback.
+    synth.setStatsEnabled?.(true);
+    // Defer one frame so the browser has measured the window's
+    // intrinsic width before we try to clamp.
+    requestAnimationFrame(clampStatsWindow);
   }
   function hideStats() {
     statsWin.hidden = true;
     statsToggle.checked = false;
+    synth.setStatsEnabled?.(false);
   }
+  // Re-clamp on viewport changes (orientation change, browser chrome
+  // show/hide on mobile).
+  window.addEventListener('resize', clampStatsWindow);
   statsToggle.addEventListener('change', () => {
     if (statsToggle.checked) showStats(); else hideStats();
   });
@@ -1287,19 +1334,46 @@ window.addEventListener('resize', () => {
     statsWin.style.left = (e.clientX - dragOff.x) + 'px';
     statsWin.style.top  = (e.clientY - dragOff.y) + 'px';
   });
-  titlebar.addEventListener('pointerup', () => { dragOff = null; });
-  titlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
+  titlebar.addEventListener('pointerup', () => { dragOff = null; clampStatsWindow(); });
+  titlebar.addEventListener('lostpointercapture', () => { dragOff = null; clampStatsWindow(); });
 
   // Update stats text each frame (only when visible).
   let _fpsFrames = 0, _fpsTime = performance.now(), _fpsVal = 0;
+  // RAF p99: ring buffer of recent RAF-to-RAF intervals (ms). When the
+  // main thread stalls (GC / layout / heavy frame), the interval spikes.
+  // Correlating that with worklet diagnostics tells us whether audio
+  // glitches follow main-thread pressure.
+  const _rafRing = new Float32Array(240);
+  let _rafRingIdx = 0, _rafRingFilled = 0;
+  let _rafPrev = performance.now();
+  let _rafP99 = 0, _rafMax = 0;
+  let _rafWindowTime = _rafPrev;
   cv.updateStats = function() {
     // FPS: update every 500ms
     _fpsFrames++;
     const now = performance.now();
+    // RAF-interval sample.
+    const rafDt = now - _rafPrev;
+    _rafPrev = now;
+    _rafRing[_rafRingIdx] = rafDt;
+    _rafRingIdx = (_rafRingIdx + 1) % _rafRing.length;
+    if (_rafRingFilled < _rafRing.length) _rafRingFilled++;
     if (now - _fpsTime >= 500) {
       _fpsVal = _fpsFrames / ((now - _fpsTime) / 1000);
       _fpsFrames = 0;
       _fpsTime = now;
+    }
+    // Recompute p99 and max over the whole ring every ~500 ms — cheap
+    // (one sort) and only when the window is visible.
+    if (now - _rafWindowTime >= 500 && !statsWin.hidden) {
+      const n = _rafRingFilled;
+      if (n > 0) {
+        const snapshot = Float32Array.from(_rafRing.subarray(0, n));
+        snapshot.sort();
+        _rafP99 = snapshot[Math.floor(n * 0.99)];
+        _rafMax = snapshot[n - 1];
+      }
+      _rafWindowTime = now;
     }
     if (statsWin.hidden) return;
     const segs = tracer.segmentCount;
@@ -1312,14 +1386,20 @@ window.addEventListener('resize', () => {
     const spinning = scene.elements.filter(e => e.spin).length;
     // Audio stats from worklet (updated ~2×/sec via MessagePort).
     const as = synth.stats;
+    const fmt = (x, d = 2) => (x == null ? '-' : x.toFixed(d));
     const audioLines = as
       ? `\nCarrier:    ${as.carrier}\n` +
         `Voices:     ${as.activeVoices}/${as.voices}\n` +
         `Block size: ${as.blockSize}\n` +
-        `Xruns:      ${as.droppedBuffers || 0}`
+        `Xruns:      ${as.droppedBuffers || 0}\n` +
+        `CPU/block:  ${fmt(as.maxBlockMs)}ms  drift: ${fmt(as.driftMs, 1)}ms\n` +
+        `Max step:   ${fmt(as.maxSampleStep, 3)}  D²: ${fmt(as.maxD2, 3)}\n` +
+        `Boundary:   ${fmt(as.maxBoundaryStep, 3)}  msgs: ${as.msgsPerBlockMax ?? 0}`
       : '\nAudio:      off';
+    const rafLine = `RAF p99:    ${_rafP99.toFixed(1)}ms  max: ${_rafMax.toFixed(1)}ms`;
     statsContent.textContent =
       `FPS:        ${_fpsVal.toFixed(0)}\n` +
+      `${rafLine}\n` +
       `Elements:   ${els}\n` +
       `Sources:    ${sources}\n` +
       `Sensors:    ${sensors}\n` +
@@ -1658,6 +1738,22 @@ window.addEventListener('resize', () => {
   const songSelect = document.getElementById('song-select');
   const playBtn = document.getElementById('song-play');
   const stopBtn = document.getElementById('song-stop');
+  const loopBtn = document.getElementById('song-loop');
+  // Reflect the current song's loop state on the button. Class toggles
+  // the CSS "pressed" look; aria-pressed keeps it accessible.
+  function syncLoopBtn() {
+    if (!loopBtn) return;
+    const on = !!(songPlayer.song && songPlayer.song.loop);
+    loopBtn.classList.toggle('active', on);
+    loopBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  if (loopBtn) {
+    loopBtn.addEventListener('click', () => {
+      if (!songPlayer.song) return;
+      songPlayer.song.loop = !songPlayer.song.loop;
+      syncLoopBtn();
+    });
+  }
   const seekSlider = document.getElementById('song-seek');
   const timeLabel = document.getElementById('song-time');
 
@@ -1703,7 +1799,9 @@ window.addEventListener('resize', () => {
     playBtn.disabled = false;
     stopBtn.disabled = false;
     seekSlider.disabled = false;
+    if (loopBtn) loopBtn.disabled = false;
     seekSlider.max = songPlayer.duration;
+    syncLoopBtn();
     if (json.welcome) showWelcome(json.welcome);
     else cv.hideWelcome();
   }

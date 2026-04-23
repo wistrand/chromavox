@@ -29,6 +29,19 @@ function fsin(x) {
   const f = t - i;
   return _SIN_TBL[i % _SIN_N] + (_SIN_TBL[(i + 1) % _SIN_N] - _SIN_TBL[i % _SIN_N]) * f;
 }
+// Fast variant that assumes the caller keeps phase in table-index
+// space — i.e. in [0, _SIN_N) — and handles its own wrap. Saves one
+// float modulo + three int modulos + a duplicate load per call vs
+// fsin(). Used by sine and piano, which both store their phases in
+// index units and wrap per sample. Boundary-safe because _SIN_TBL
+// has _SIN_N+1 entries with _SIN_TBL[_SIN_N] == _SIN_TBL[0] == 0.
+function fsinFast(x) {
+  const i = x | 0;
+  const f = x - i;
+  const a = _SIN_TBL[i];
+  const b = _SIN_TBL[i + 1];
+  return a + (b - a) * f;
+}
 
 // Mulberry32 PRNG for non-inner-loop noise paths. Used only for vocoder
 // shared excitation (one PRNG, not per-voice) and karplus init bursts
@@ -310,21 +323,22 @@ function _carrierSine(v, ctx) {
   const bufL = ctx.bufL, bufR = ctx.bufR;
   const panL = ctx.panL, panR = ctx.panR;
   const smooth = ctx.smooth;
-  const twoPi = ctx.twoPi;
   const len = ctx.len;
-  // Per-partial phase increment is constant across the block.
+  // Phases stored in table-index units [0, _SIN_N), not radians. dts is
+  // the per-sample index increment; wrap threshold is _SIN_N. This lets
+  // the inner loop call fsinFast (no modulos) instead of fsin.
   if (!v._sineDts || v._sineDts.length < nk) v._sineDts = new Float32Array(nk);
   const dts = v._sineDts;
-  const baseInc = twoPi * v.freq * ctx.invSr;
+  const baseInc = v.freq * ctx.invSr * _SIN_N;
   for (let k = 0; k < nk; k++) dts[k] = baseInc * (k + 1);
   for (let i = 0; i < len; i++) {
     let sample = 0;
     for (let k = 0; k < nk; k++) {
       gains[k] += (targetGains[k] - gains[k]) * smooth;
       if (gains[k] < 1e-6 && targetGains[k] < 1e-6) continue;
-      sample += fsin(phases[k]) * gains[k];
+      sample += fsinFast(phases[k]) * gains[k];
       phases[k] += dts[k];
-      if (phases[k] > twoPi) phases[k] -= twoPi;
+      if (phases[k] >= _SIN_N) phases[k] -= _SIN_N;
     }
     bufL[i] += sample * panL; bufR[i] += sample * panR;
   }
@@ -351,7 +365,6 @@ function _carrierPiano(v, ctx) {
   const bufL = ctx.bufL, bufR = ctx.bufR;
   const panL = ctx.panL, panR = ctx.panR;
   const len = ctx.len;
-  const twoPi = ctx.twoPi;
   const invSr = ctx.invSr;
   const smooth = ctx.smooth;
 
@@ -366,14 +379,16 @@ function _carrierPiano(v, ctx) {
 
   // Rebuild per-partial phase increments when freq or stretch changes.
   // Inharmonicity B is proportional to (261/f)^2 — bass gets more stretch.
+  // dts and phases are stored in table-index space [0, _SIN_N) so the
+  // inner loop can use fsinFast (no modulo).
   if (v.pianoDtsFreq !== v.freq || v.pianoDtsStretch !== stretch) {
     const B = stretch * 0.0005 * (261 / v.freq) * (261 / v.freq);
-    const nyqRad = Math.PI; // samples are 2π per sample-rate
+    const nyqIdx = _SIN_N * 0.5; // Nyquist in index units per sample
     for (let n = 0; n < _PIANO_K; n++) {
       const nn = n + 1;
       const fn = nn * v.freq * Math.sqrt(1 + B * nn * nn);
-      const inc = twoPi * fn * invSr;
-      dts[n] = inc < nyqRad * 0.95 ? inc : 0;
+      const inc = fn * invSr * _SIN_N;
+      dts[n] = inc < nyqIdx * 0.95 ? inc : 0;
     }
     v.pianoDtsFreq = v.freq;
     v.pianoDtsStretch = stretch;
@@ -416,9 +431,9 @@ function _carrierPiano(v, ctx) {
     let sample = 0;
     for (let n = 0; n < _PIANO_K; n++) {
       peaks[n] *= decs[n];
-      if (peaks[n] > 1e-6) sample += fsin(phases[n]) * peaks[n];
+      if (peaks[n] > 1e-6) sample += fsinFast(phases[n]) * peaks[n];
       phases[n] += dts[n];
-      if (phases[n] > twoPi) phases[n] -= twoPi;
+      if (phases[n] >= _SIN_N) phases[n] -= _SIN_N;
     }
     sample *= OUT_SCALE;
 
@@ -480,7 +495,31 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     if (this.P.reverbSize === undefined)    this.P.reverbSize = 0.5;
     if (this.P.reverbDamping === undefined) this.P.reverbDamping = 0.5;
     this._initReverb();
+    // Stats postMessage is suppressed unless the main thread has asked
+    // for it (typically when the stats window is open). Reduces
+    // worklet → main thread traffic to zero during normal playback.
+    this._statsEnabled = false;
+    // Diagnostic accumulators — reset at each stats post. Timing
+    // fields start null and stay null on platforms where
+    // performance.now isn't available in the worklet scope, so the
+    // UI can render "-" instead of a misleading 0.
+    this._maxBlockMs = null;
+    this._driftMs = null;
+    this._maxSampleStep = 0;
+    this._maxBoundaryStep = 0;
+    this._maxD2 = 0;
+    this._msgsThisBlockMax = 0;
+    this._msgsAccum = 0;
+    this._prevLastL = 0;
+    this._wallStart = 0;
+    this._audioStart = 0;
+    // Cache performance reference once — avoids re-checking every block.
+    this._perf = (typeof performance !== 'undefined' && performance.now) ? performance : null;
     this.port.onmessage = e => {
+      // Count inbound messages to surface message-path pressure —
+      // reported as "max messages between consecutive process() calls"
+      // per stats window.
+      this._msgsAccum = (this._msgsAccum | 0) + 1;
       const d = e.data;
       if (d.type === 'bins') {
         this.bins = d.bins;
@@ -490,7 +529,24 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         this.partials = d.value;
         this.P.partials = d.value;
         if (this.sensorCount > 0) this._rebuildPartials();
+      } else if (d.type === 'statsEnabled') {
+        this._statsEnabled = !!d.value;
+        // When turning stats on, prime the counter so the next process()
+        // block posts immediately (instead of waiting up to ~500 ms for
+        // the threshold to build up). User expects to see stats the
+        // moment the window opens.
+        if (this._statsEnabled) this._processCount = 187;
       } else if (d.type === 'carrier') {
+        // When switching to piano, align each voice's strike-edge
+        // reference to its current smoothed gain. Otherwise the first
+        // piano block sees gainRise = voiceGain - stale_pianoPrevGain
+        // and injects a phantom strike proportional to whatever the
+        // previous carrier's gain state was.
+        if (d.value === 'piano' && this.voices) {
+          for (const v of this.voices) {
+            v.pianoPrevGain = v.gains[0] || 0;
+          }
+        }
         this.carrier = d.value;
       } else if (d.type in this.P) {
         this.P[d.type] = d.value;
@@ -617,15 +673,18 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     if (!freqs) return;
     for (let i = 0; i < this.sensorCount; i++) {
       const f = freqs[i];
-      const phases = [];
-      const gains = [];
-      const targetGains = [];
+      // Count partials that fit under Nyquist, then allocate typed
+      // arrays of exactly that length. Float32Array (vs plain `[]`)
+      // gives stable element-kind on all JITs — particularly relevant
+      // on Firefox Mobile — and halves state memory per partial.
+      let nk = 0;
       for (let k = 1; k <= this.partials; k++) {
         if (f * k >= nyq) break;
-        phases.push(0);
-        gains.push(0);
-        targetGains.push(0);
+        nk++;
       }
+      const phases      = new Float32Array(nk);
+      const gains       = new Float32Array(nk);
+      const targetGains = new Float32Array(nk);
       // Bandpass IIR state for noise carrier (single 2-pole resonator).
       // Acid carrier: PolyBLEP saw phase + 3-pole TPT ladder filter state
       // + smoothed cutoff to avoid clicks from abrupt sweeps.
@@ -648,10 +707,30 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         // in process() consults these too.
         pianoPhases: new Float32Array(12), pianoPeak: new Float32Array(12),
         pianoDts: new Float32Array(12), pianoDecayPerSample: new Float32Array(12),
-        pianoDtsFreq: 0, pianoDtsStretch: -1, pianoPrevGain: 0 });
+        pianoDtsFreq: 0, pianoDtsStretch: -1, pianoPrevGain: 0,
+        // Coast counter — see the active-voice gate in process().
+        coast: 0 });
     }
   }
   process(inputs, outputs) {
+    // Two independent diagnostic gates:
+    //   _diag         — run signal-scan + message-rate accumulation
+    //   _diagTiming   — additionally sample performance.now() (timing,
+    //                   drift). Only set if the worklet scope exposes
+    //                   performance (Firefox Mobile historically hasn't).
+    const _diag = this._statsEnabled;
+    const _diagTiming = _diag && this._perf !== null;
+    const _t0 = _diagTiming ? this._perf.now() : 0;
+    // Roll up message-path pressure: how many port.onmessage calls
+    // landed between the previous process() and this one.
+    if (_diag) {
+      const mc = this._msgsAccum;
+      this._msgsAccum = 0;
+      if (mc > this._msgsThisBlockMax) this._msgsThisBlockMax = mc;
+    } else {
+      this._msgsAccum = 0;
+    }
+
     const out = outputs[0];
     if (!out || !out[0] || this.voices.length === 0) return true;
     const bufL = out[0];
@@ -706,8 +785,11 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           // Spectral centroid from wavelength bins, inverted so that
           // blue (short wavelength, low bins) → 1.0 (brighter/higher)
           // and red (long wavelength, high bins) → 0.0 (duller/lower).
+          // Normalise by max bin index (bc - 1). Guard bc >= 2 with
+          // Math.max so a degenerate single-bin configuration doesn't
+          // divide by zero and propagate NaN through the centroid.
           const rawCentroid = centroidDen > 1e-6
-            ? centroidNum / (centroidDen * (bc - 1)) : 0.5;
+            ? centroidNum / (centroidDen * Math.max(1, bc - 1)) : 0.5;
           const wlCentroid = 1 - rawCentroid;
           // Position centroid: sensor 0 = bottom = short wavelength = blue → 1.0.
           const posCentroid = sc > 1 ? 1 - s / (sc - 1) : 0.5;
@@ -798,6 +880,14 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           if (v.pianoPeak[n] > 1e-5) { anyActive = true; break; }
         }
       }
+      // Coast: keep running the carrier for a few blocks after dropping
+      // below the activity threshold. The per-sample gain smoothing
+      // then pulls gains[k] continuously through ~0, instead of the
+      // voice's output cliff-edging from "summed in" to "not summed in"
+      // at a block boundary. Firefox Mobile's output resampler
+      // specifically amplifies those cliffs into audible clicks.
+      if (anyActive) v.coast = 3;
+      else if (v.coast > 0) { v.coast--; anyActive = true; }
       if (!anyActive) {
         v.bp1 = 0; v.bp2 = 0; v.lp1 = 0; v.lp2 = 0; v.lp3 = 0; v.smoothCutoff = -1;
         if (v.voc1) { v.voc1[0] = v.voc1[1] = 0; }
@@ -816,6 +906,33 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this._applyReverb(bufL, bufR, len);
     // Soft limiter on both channels.
     for (let i = 0; i < len; i++) { bufL[i] = ftanh(bufL[i]); bufR[i] = ftanh(bufR[i]); }
+
+    // Diagnostic signal scan — only when stats are enabled. Scans the
+    // post-limiter buffer for discontinuities; correlates with audible
+    // clicks if they're generated inside the worklet. Skips scan
+    // entirely when closed so CPU cost is zero during normal use.
+    if (_diag) {
+      let maxStep = this._maxSampleStep;
+      let maxD2 = this._maxD2;
+      // First-order step within the block.
+      for (let i = 1; i < len; i++) {
+        const s = Math.abs(bufL[i] - bufL[i - 1]);
+        if (s > maxStep) maxStep = s;
+      }
+      // Second derivative (catches single-sample impulses that first-
+      // order misses when the signal itself has high-frequency content).
+      for (let i = 1; i < len - 1; i++) {
+        const d2 = Math.abs(2 * bufL[i] - bufL[i - 1] - bufL[i + 1]);
+        if (d2 > maxD2) maxD2 = d2;
+      }
+      // Block-boundary step: bufL[0] vs last sample of previous block.
+      const bStep = Math.abs(bufL[0] - this._prevLastL);
+      if (bStep > this._maxBoundaryStep) this._maxBoundaryStep = bStep;
+      this._maxSampleStep = maxStep;
+      this._maxD2 = maxD2;
+    }
+    this._prevLastL = bufL[len - 1];
+
     // Dropped-buffer detection: currentFrame should advance by exactly
     // 128 (render quantum) between calls. A gap > 128 = missed callback.
     if (this._prevFrame !== undefined) {
@@ -823,19 +940,62 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       if (gap > 128) this._droppedBuffers = (this._droppedBuffers || 0) + (gap / 128 - 1);
     }
     this._prevFrame = currentFrame;
-    // Stats: report every ~500ms.
-    this._processCount = (this._processCount || 0) + 1;
-    if (this._processCount >= 187) { // ~500ms at 48kHz/128 samples
-      this.port.postMessage({
-        type: 'stats',
-        voices: this.voices.length,
-        activeVoices: this._lastActiveCount || 0,
-        carrier: this.carrier,
-        blockSize: len,
-        droppedBuffers: this._droppedBuffers || 0,
-      });
-      this._droppedBuffers = 0;
-      this._processCount = 0;
+
+    // Diagnostic timing close-out — wall-clock block duration + audio-
+    // vs-wall drift. driftMs > 0 means the worklet is running slower
+    // than real time (falling behind) even when whole quanta aren't
+    // skipped. Only runs if performance.now() is available in this
+    // worklet scope.
+    if (_diagTiming) {
+      const now = this._perf.now();
+      const dt = now - _t0;
+      if (this._maxBlockMs === null || dt > this._maxBlockMs) this._maxBlockMs = dt;
+      if (this._wallStart === 0) {
+        this._wallStart = now;
+        this._audioStart = currentTime;
+      } else {
+        const wallElapsed = now - this._wallStart;
+        const audioElapsed = (currentTime - this._audioStart) * 1000;
+        this._driftMs = wallElapsed - audioElapsed;
+      }
+    } else if (this._wallStart !== 0) {
+      // Reset drift reference when timing is disabled — otherwise the
+      // next time stats opens we'd see a huge accumulated drift from
+      // the offline period.
+      this._wallStart = 0;
+    }
+
+    // Stats: report every ~500ms, but only when the main thread has
+    // explicitly opted in (stats window open). When the window is
+    // closed there is no worklet → main thread postMessage traffic.
+    if (this._statsEnabled) {
+      this._processCount = (this._processCount || 0) + 1;
+      if (this._processCount >= 187) { // ~500ms at 48kHz/128 samples
+        this.port.postMessage({
+          type: 'stats',
+          voices: this.voices.length,
+          activeVoices: this._lastActiveCount || 0,
+          carrier: this.carrier,
+          blockSize: len,
+          droppedBuffers: this._droppedBuffers || 0,
+          // Diagnostics (reset each stats fire).
+          maxBlockMs: this._maxBlockMs,
+          driftMs: this._driftMs,
+          maxSampleStep: this._maxSampleStep,
+          maxBoundaryStep: this._maxBoundaryStep,
+          maxD2: this._maxD2,
+          msgsPerBlockMax: this._msgsThisBlockMax,
+        });
+        this._droppedBuffers = 0;
+        // Reset timing fields to null so they remain distinguishable
+        // from "measured zero" on platforms without performance.now().
+        this._maxBlockMs = this._perf ? 0 : null;
+        this._maxSampleStep = 0;
+        this._maxBoundaryStep = 0;
+        this._maxD2 = 0;
+        this._msgsThisBlockMax = 0;
+        this._processCount = 0;
+      }
     }
     return true;
   }

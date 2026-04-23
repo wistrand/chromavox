@@ -620,12 +620,16 @@ export class Renderer {
     if (elDelay > 0) {
       tintStrength = Math.min(0.5, tintStrength + elDelay * 80);
     }
+    // Song-player fade-in/fade-out: elements carry `_opacity` in [0, 1]
+    // between keyframes. Scale the element-pass tint + glow so the
+    // body fades rather than snapping in/out at keyframe boundaries.
+    const opacity = typeof el._opacity === 'number' ? el._opacity : 1;
     gl.uniform3fv(this.elem.uTint, tint);
-    gl.uniform1f(this.elem.uTintStrength, tintStrength);
-    gl.uniform1f(this.elem.uMagnitude, this.distortEnabled ? look.magnitude : 0);
+    gl.uniform1f(this.elem.uTintStrength, tintStrength * opacity);
+    gl.uniform1f(this.elem.uMagnitude, (this.distortEnabled ? look.magnitude : 0) * opacity);
     gl.uniform1f(this.elem.uFalloff, look.falloff);
     gl.uniform3fv(this.elem.uEdgeGlow, edgeGlow);
-    gl.uniform1f(this.elem.uEdgeGlowAmp, look.edgeGlowAmp);
+    gl.uniform1f(this.elem.uEdgeGlowAmp, look.edgeGlowAmp * opacity);
     gl.uniform1f(this.elem.uEdgeWidth, look.edgeWidth);
     gl.uniform1f(this.elem.uOpaque, look.opaque ? 1.0 : 0.0);
 
@@ -723,7 +727,9 @@ export class Renderer {
     for (const el of scene.elements) {
       const { polygon } = worldEdges(el);
       const col = elementOutlineColor(el);
-      this.polyOutline(polygon, col[0], col[1], col[2], col[3]);
+      // Fade outline alpha with song-player fade-in/fade-out opacity.
+      const elOpacity = typeof el._opacity === 'number' ? el._opacity : 1;
+      this.polyOutline(polygon, col[0], col[1], col[2], col[3] * elOpacity);
       if (el._selected) {
         this._selectedForLabel = el;
         // Center dot (small diamond).

@@ -52,6 +52,15 @@ export class SensorSynth {
     this.workletNode.port.postMessage({ type: 'carrier', value: mode });
   }
 
+  // Enable/disable periodic stats postMessages from the worklet.
+  // Off by default; main.js flips it on when the stats window opens
+  // and off when it closes — eliminates worklet → main thread traffic
+  // during normal playback.
+  setStatsEnabled(on) {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: 'statsEnabled', value: !!on });
+  }
+
   setStep(stepSemi) {
     if (this.stepSemi === stepSemi) return;
     this.stepSemi = stepSemi;
@@ -84,7 +93,12 @@ export class SensorSynth {
     if (this.active) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error('AudioContext not supported');
-    this.ctx = new AC();
+    // latencyHint: 'playback' asks the browser for a larger, more
+    // forgiving output buffer — reduces sample-aligned glitches on
+    // mobile (Firefox Android in particular) at the cost of a few
+    // extra ms of output latency, which is fine for a synth whose
+    // user input is the visual scene and not key velocity.
+    this.ctx = new AC({ latencyHint: 'playback' });
     // Mobile browsers create AudioContext in suspended state.
     // Must resume within a user gesture.
     if (this.ctx.state === 'suspended') await this.ctx.resume();
@@ -128,9 +142,13 @@ export class SensorSynth {
     this.analyser.fftSize = 8192;
     this.analyser.smoothingTimeConstant = 0.6;
     this.freqFloat = new Float32Array(this.analyser.frequencyBinCount);
+    // Live audio path: worklet → master → destination.
+    // The analyser is a passive tap off master (not in the live path).
+    // Mobile Firefox has been observed to introduce glitches when an
+    // analyser sits between the gain and the destination.
     this.workletNode.connect(this.master);
+    this.master.connect(this.ctx.destination);
     this.master.connect(this.analyser);
-    this.analyser.connect(this.ctx.destination);
     this.rebuild(sensorCount);
     this.active = true;
   }

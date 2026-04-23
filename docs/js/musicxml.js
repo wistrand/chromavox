@@ -258,7 +258,10 @@ export function musicxmlToSong(text) {
     welcome,
     bpm: Math.round(tempo),
     duration: Number(durationSec.toFixed(3)),
-    loop: false,
+    // MusicXML imports default to looping — users typically drop a
+    // score and want it to keep playing until they stop it. Toggled
+    // via the repeat button in the transport.
+    loop: true,
     global: {
       emitter: { count: emitterCount, wlMin: 400, wlMax: 700, raysPerSource: 320 },
       sensorCount: emitterCount,
