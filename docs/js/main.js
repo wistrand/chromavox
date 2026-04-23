@@ -87,7 +87,7 @@ const UI_CONTROL_IDS = [
   ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
   'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
-  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'no-overlap', 'bench-aspect',
+  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'smoke-toggle', 'bloom-spread', 'no-overlap', 'bench-aspect',
 ];
 function saveUiState() {
   const state = {};
@@ -370,6 +370,26 @@ distortToggle.addEventListener('change', () => {
   renderer.distortEnabled = distortToggle.checked;
   markDirty();
 });
+
+const smokeToggle = document.getElementById('smoke-toggle');
+renderer.smokeEnabled = smokeToggle.checked;
+smokeToggle.addEventListener('change', () => {
+  renderer.smokeEnabled = smokeToggle.checked;
+  // Smoke is animated — kick the RAF loop so it can keep running.
+  scheduleFrame();
+  setDirty();
+});
+
+const bloomSlider = document.getElementById('bloom-spread');
+const bloomLabel = document.getElementById('bloom-spread-val');
+const applyBloomSpread = () => {
+  const v = parseFloat(bloomSlider.value);
+  renderer.bloomSpread = v;
+  bloomLabel.textContent = v.toFixed(2);
+  setDirty();
+};
+applyBloomSpread();
+bloomSlider.addEventListener('input', applyBloomSpread);
 
 const synthBtn = document.getElementById('synth-toggle');
 synthBtn.addEventListener('click', async () => {
@@ -2522,7 +2542,8 @@ function frame() {
   const needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
     || readoutDecaying
     || songPlayer.playing || (mic.active && mic.source !== 'touch')
-    || (mic._filePlaying);
+    || (mic._filePlaying)
+    || renderer.smokeEnabled; // animated background needs continuous frames
   if (needsFrame) scheduleFrame();
 }
 // Expose key objects for console debugging: chromavox.scene, chromavox.synth, etc.

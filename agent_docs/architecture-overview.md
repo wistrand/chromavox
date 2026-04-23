@@ -36,15 +36,30 @@ No dependencies.
 - `docs/js/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
 - `docs/js/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
   rendered into a **HDR `RGBA16F` FBO** via `EXT_color_buffer_float`
-  (additive blend in linear space, soft falloff), (2) tonemapped blit to
-  screen + per-element bounding-quad pass that re-samples the same FBO
-  with a polygon-SDF-driven offset for refractive distortion and material
-  tinting; both apply Reinhard tone-mapping when reading the HDR
-  texture, (3) alpha-blended overlay lines for the bench outline,
+  (additive blend in linear space, soft falloff). When
+  `renderer.smokeEnabled` is true, a separate **pre-pass** writes an
+  animated simplex-FBM smoke into its own RGBA8 texture — RGB = cool
+  blue-grey haze, **A = normalized density**; the HDR ray FBO stays
+  rays-only. When smoke is on, a **two-pass separable Gaussian** runs
+  on a half-resolution `RGBA16F` ping-pong (`bloomTexA` → `bloomTexB`)
+  — horizontal then vertical, 9-tap kernel, 1.6-texel tap spacing
+  ≈ 24 px halo at full res. HDR preserved end-to-end so bright ray
+  pile-ups bloom in their true color before the final Reinhard squash.
+  (2) Tonemapped blit to screen + per-element bounding-quad pass that
+  re-samples the ray FBO with a polygon-SDF-driven offset for
+  refractive distortion. Both apply Reinhard tone-mapping. When smoke
+  is enabled, both shaders produce
+  `smokeRGB + reinhard(rays) · mix(0.5, 1.0, density) + reinhard(bloom) · density`
+  — so dense smoke both lights rays up and gives them a smooth
+  Gaussian bloom halo (Tyndall/laser-in-fog look). Element interiors
+  deliberately skip the smoke + bloom composition and just show
+  `reinhard(rays_at_refracted_uv)` — the glass reads as a clean
+  light pipe with no atmosphere inside, so fog never leaks through
+  the body and rays through the lens don't carry a halo. (3) Alpha-blended overlay lines for the bench outline,
   element outlines, emitter/sensor ticks, and an inline per-sensor
   mini-spectrum painted next to each sensor tick so the wavelength
-  distribution is always visible on the canvas even when the right panel
-  is scrolled or short.
+  distribution is always visible on the canvas even when the right
+  panel is scrolled or short.
 - `docs/js/ui.js` — pointer events (mouse + touch unified), property panel,
   save/load, preset dropdown, undo/redo, keyboard shortcuts.
 - `docs/js/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.

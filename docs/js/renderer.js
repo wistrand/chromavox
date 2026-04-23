@@ -65,17 +65,144 @@ void main() {
   gl_Position = vec4(aCorner * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
+// Animated 2D simplex-noise smoke drawn into the HDR ray FBO *before*
+// the ray pass. Rays then additively accumulate on top, so the smoke
+// reads as a faint drifting backdrop rather than a foreground effect.
+// Implementation: Ashima Arts simplex noise + 3-octave FBM with a
+// horizontal drift velocity modulated by time.
+const SMOKE_VS = `#version 300 es
+in vec2 aCorner;
+out vec2 vUV;
+void main() {
+  vUV = aCorner;
+  gl_Position = vec4(aCorner * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const SMOKE_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform float uTime;
+uniform vec2 uAspect; // (bench.w, bench.h)
+uniform float uIntensity;
+out vec4 outColor;
+
+// Ashima Arts simplex noise (2D). Output ~[-1, 1].
+vec3 _perm(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
+float snoise(vec2 v) {
+  const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+                     -0.577350269189626, 0.024390243902439);
+  vec2 i  = floor(v + dot(v, C.yy));
+  vec2 x0 = v - i + dot(i, C.xx);
+  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+  vec4 x12 = x0.xyxy + C.xxzz;
+  x12.xy -= i1;
+  i = mod(i, 289.0);
+  vec3 p = _perm(_perm(i.y + vec3(0.0, i1.y, 1.0))
+                     + i.x + vec3(0.0, i1.x, 1.0));
+  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy),
+                          dot(x12.zw, x12.zw)), 0.0);
+  m = m * m; m = m * m;
+  vec3 x = 2.0 * fract(p * C.www) - 1.0;
+  vec3 h = abs(x) - 0.5;
+  vec3 ox = floor(x + 0.5);
+  vec3 a0 = x - ox;
+  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+  vec3 g;
+  g.x  = a0.x * x0.x + h.x * x0.y;
+  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+  return 130.0 * dot(m, g);
+}
+
+// FBM with a tiny per-octave drift. Kept slow so layers don't slide
+// against each other fast enough to read as chop or ripples.
+float fbm(vec2 p, float t) {
+  float v = 0.0;
+  float a = 0.5;
+  vec2 shift = vec2(0.0);
+  float dir = 1.0;
+  for (int i = 0; i < 3; i++) {
+    v += a * snoise(p + shift);
+    p *= 2.03;
+    a *= 0.5;
+    shift += dir * vec2(t * 0.012, -t * 0.008);
+    dir = -dir;
+  }
+  return v;
+}
+
+void main() {
+  // Large feature size — plumes fill a good fraction of the bench so
+  // the smoke reads as diffuse haze rather than small churning detail.
+  // Breathing modulator is slow (~110 s period) and gentle so the
+  // field doesn't pulse visibly.
+  float scaleMod = 1.0 + 0.25 * sin(uTime * 0.057);
+  vec2 p0 = vUV * uAspect / (300.0 * scaleMod);
+
+  // Extremely slow rotation — mostly to avoid the drift feeling like a
+  // conveyor belt, not to make the field visibly spin.
+  float ang = uTime * 0.008;
+  float cs = cos(ang), sn = sin(ang);
+  vec2 p = mat2(cs, -sn, sn, cs) * p0;
+
+  // Gentle drift. Both axes modulated by their own slow sines so the
+  // motion is never a steady vector. Faster numbers made it feel like
+  // water currents; these are 4× slower.
+  p.x += uTime * 0.018 * (1.0 + 0.4 * sin(uTime * 0.05));
+  p.y += uTime * 0.011 * (1.0 + 0.5 * sin(uTime * 0.07 + 1.3));
+
+  // Domain warp using off-axis offsets, keeping the warp direction
+  // unaligned with the noise grid so we don't get the straight edges
+  // that axis-aligned warps produce. Amplitude dropped (0.85 → 0.3) so
+  // the warp nudges the field rather than stretching it into rivers.
+  float wt = uTime * 0.045;
+  vec2 warp = vec2(
+    snoise(p * 1.4 + vec2( wt * 0.8,  wt * 0.4)),
+    snoise(p * 1.4 + vec2(-wt * 0.3,  wt * 0.9) + 17.3)
+  );
+  float n = fbm(p + warp * 0.30, uTime);
+
+  // Soft, wide smoothstep — no hard plume edges. This is the main
+  // "faded smoke" lever: the wider the range, the more washed-out the
+  // result looks.
+  float m = smoothstep(-0.6, 0.95, n);
+
+  // Lightly tinted grey. Both endpoints are darker and closer
+  // together than before so the smoke sits as a backdrop, never
+  // competing with the rays.
+  vec3 lo = vec3(0.010, 0.013, 0.020);
+  vec3 hi = vec3(0.09, 0.11, 0.15);
+  vec3 col = mix(lo, hi, m);
+  // RGB = smoke color; A = normalized density [0,1] used as the
+  // "how visible are rays here" mask in the blit + element passes.
+  outColor = vec4(col * uIntensity, m);
+}`;
+
 const BLIT_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
 uniform sampler2D uTex;
+uniform sampler2D uSmoke;
+uniform sampler2D uBloom; // half-res separable-Gaussian blur of rays (HDR)
+uniform int uUseSmoke;    // 1 = smoke backdrop + density-gated bloom, 0 = pass-through
 out vec4 outColor;
+
+vec3 reinhard(vec3 c) { return c / (1.0 + c); }
+
 void main() {
-  // Reinhard tone-map the HDR ray FBO to [0,1] for display. Channels
-  // sum freely past 1 in the FBO; the curve compresses softly so colors
-  // stay distinct instead of clamping to white.
-  vec3 hdr = texture(uTex, vUV).rgb;
-  outColor = vec4(hdr / (1.0 + hdr), 1.0);
+  vec3 raysSharp = reinhard(texture(uTex, vUV).rgb);
+  if (uUseSmoke == 1) {
+    vec4 s = texture(uSmoke, vUV);
+    float d = s.a;
+    // Bloom comes from the separately-blurred half-res ray buffer —
+    // proper smooth Gaussian halo, no mipmap box artifacts. Density
+    // scales opacity; the kernel is fixed-radius, a consistent soft
+    // "laser in fog" halo regardless of smoke thickness.
+    vec3 bloom = reinhard(texture(uBloom, vUV).rgb) * d;
+    float gain = mix(0.5, 1.0, d);
+    outColor = vec4(s.rgb + raysSharp * gain + bloom, 1.0);
+  } else {
+    outColor = vec4(raysSharp, 1.0);
+  }
 }`;
 
 // Element shader: draws a bounding quad in world space, discards pixels
@@ -116,6 +243,9 @@ uniform float uEdgeWidth;
 uniform float uOpaque;       // 1.0 → ignore FBO (opaque tint); 0.0 → refractive sample
 uniform vec2 uBench;
 uniform sampler2D uFbo;
+uniform sampler2D uSmoke;
+uniform sampler2D uBloom;
+uniform int uUseSmoke;       // 1 → modulate ray sample by smoke density + bloom at the refracted UV
 out vec4 outColor;
 
 void main() {
@@ -174,6 +304,11 @@ void main() {
     vec2 uv = clamp(vUV + offsetUV, vec2(0.0), vec2(1.0));
     vec3 hdr = texture(uFbo, uv).rgb;
     baseRgb = hdr / (1.0 + hdr);
+    // Smoke + bloom are intentionally NOT applied inside the element:
+    // the glass reads as a clean light pipe, not as a window into the
+    // haze. The mental model is that the element's interior has no
+    // atmosphere, so rays don't scatter off anything (no halo) and
+    // there's no fog to show through the body.
   } else {
     baseRgb = vec3(0.0);
   }
@@ -198,6 +333,42 @@ void main() {
   } else {
     outColor = vec4(rgb + vec3(1.0) * rim, 1.0);
   }
+}`;
+
+// Separable Gaussian blur program — one pass horizontal, one vertical.
+// `uTexel` carries the step direction + magnitude (one texel in that
+// direction, multiplied outside by 1.0 for the pure texel spacing).
+// 9-tap kernel, sigma ≈ 2 half-res pixels; weights sum to 1.0.
+const BLUR_VS = `#version 300 es
+in vec2 aCorner;
+out vec2 vUV;
+void main() {
+  vUV = aCorner;
+  gl_Position = vec4(aCorner * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const BLUR_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uTex;
+uniform vec2 uTexel;   // one texel offset in the current pass's direction
+uniform float uSpread; // tap spacing multiplier — slider-controlled
+out vec4 outColor;
+void main() {
+  // 9-tap normalized Gaussian. Spread multiplier controls kernel width:
+  // 1.0 → ~8 px full-res halo, 2.5 → ~32 px, 4.0 → ~50 px. Past ~4.5
+  // the finite tap count shows banding, so clamp the UI slider there.
+  vec2 d = uTexel * uSpread;
+  vec3 acc = texture(uTex, vUV).rgb * 0.227027;
+  acc += texture(uTex, vUV + d * 1.0).rgb * 0.1945946;
+  acc += texture(uTex, vUV - d * 1.0).rgb * 0.1945946;
+  acc += texture(uTex, vUV + d * 2.0).rgb * 0.1216216;
+  acc += texture(uTex, vUV - d * 2.0).rgb * 0.1216216;
+  acc += texture(uTex, vUV + d * 3.0).rgb * 0.054054;
+  acc += texture(uTex, vUV - d * 3.0).rgb * 0.054054;
+  acc += texture(uTex, vUV + d * 4.0).rgb * 0.016216;
+  acc += texture(uTex, vUV - d * 4.0).rgb * 0.016216;
+  outColor = vec4(acc, 1.0);
 }`;
 
 const OVERLAY_VS = `#version 300 es
@@ -259,9 +430,58 @@ export class Renderer {
 
     this.blitProgram = buildProgram(gl, BLIT_VS, BLIT_FS);
     this.blit = {
-      aCorner: gl.getAttribLocation(this.blitProgram, 'aCorner'),
-      uTex:    gl.getUniformLocation(this.blitProgram, 'uTex'),
+      aCorner:    gl.getAttribLocation(this.blitProgram, 'aCorner'),
+      uTex:       gl.getUniformLocation(this.blitProgram, 'uTex'),
+      uSmoke:     gl.getUniformLocation(this.blitProgram, 'uSmoke'),
+      uBloom:     gl.getUniformLocation(this.blitProgram, 'uBloom'),
+      uUseSmoke:  gl.getUniformLocation(this.blitProgram, 'uUseSmoke'),
     };
+
+    this.smokeProgram = buildProgram(gl, SMOKE_VS, SMOKE_FS);
+    this.smoke = {
+      aCorner:    gl.getAttribLocation(this.smokeProgram, 'aCorner'),
+      uTime:      gl.getUniformLocation(this.smokeProgram, 'uTime'),
+      uAspect:    gl.getUniformLocation(this.smokeProgram, 'uAspect'),
+      uIntensity: gl.getUniformLocation(this.smokeProgram, 'uIntensity'),
+    };
+    this.smokeEnabled = false;
+    this.smokeIntensity = 1.0;
+
+    // Separate FBO for the smoke pre-pass. RGBA8 is plenty — RGB holds
+    // the cool-grey haze color, alpha holds normalized density used as
+    // the ray-visibility mask by the blit + element passes.
+    this.smokeFbo = gl.createFramebuffer();
+    this.smokeTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.smokeTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    // Blur program + bloom ping-pong pair for the smoke-gated bloom.
+    // bloomTexA stores the horizontal-blur result, bloomTexB the final
+    // horizontal+vertical Gaussian that the blit/elem shaders sample.
+    this.blurProgram = buildProgram(gl, BLUR_VS, BLUR_FS);
+    this.blur = {
+      aCorner: gl.getAttribLocation(this.blurProgram, 'aCorner'),
+      uTex:    gl.getUniformLocation(this.blurProgram, 'uTex'),
+      uTexel:  gl.getUniformLocation(this.blurProgram, 'uTexel'),
+      uSpread: gl.getUniformLocation(this.blurProgram, 'uSpread'),
+    };
+    this.bloomSpread = 1.6;
+    this.bloomFboA = gl.createFramebuffer();
+    this.bloomFboB = gl.createFramebuffer();
+    this.bloomTexA = gl.createTexture();
+    this.bloomTexB = gl.createTexture();
+    for (const t of [this.bloomTexA, this.bloomTexB]) {
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    this._bloomW = 2;
+    this._bloomH = 2;
 
     this.elemProgram = buildProgram(gl, ELEM_VS, ELEM_FS);
     this.elem = {
@@ -280,6 +500,9 @@ export class Renderer {
       uEdgeWidth:    gl.getUniformLocation(this.elemProgram, 'uEdgeWidth'),
       uOpaque:       gl.getUniformLocation(this.elemProgram, 'uOpaque'),
       uFbo:          gl.getUniformLocation(this.elemProgram, 'uFbo'),
+      uSmoke:        gl.getUniformLocation(this.elemProgram, 'uSmoke'),
+      uBloom:        gl.getUniformLocation(this.elemProgram, 'uBloom'),
+      uUseSmoke:     gl.getUniformLocation(this.elemProgram, 'uUseSmoke'),
     };
 
     this.overlayProgram = buildProgram(gl, OVERLAY_VS, OVERLAY_FS);
@@ -455,6 +678,35 @@ export class Renderer {
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.fboTex, 0);
+
+    // Smoke density texture (separate from the HDR FBO so rays can be
+    // modulated by smoke without having to disentangle them later).
+    gl.bindTexture(gl.TEXTURE_2D, this.smokeTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.canvas.width, this.canvas.height, 0,
+      gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.smokeFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.smokeTex, 0);
+
+    // Half-res bloom ping-pong targets. RGBA16F so HDR ray brightness
+    // survives the blur pair; bloom is then Reinhard-tonemapped in the
+    // blit/elem shaders alongside the rays.
+    const bw = Math.max(2, Math.floor(this.canvas.width / 2));
+    const bh = Math.max(2, Math.floor(this.canvas.height / 2));
+    this._bloomW = bw;
+    this._bloomH = bh;
+    const bloomInternal = this.hdrEnabled ? gl.RGBA16F : gl.RGBA;
+    const bloomType = this.hdrEnabled ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+    for (const [tex, fbo] of [
+      [this.bloomTexA, this.bloomFboA],
+      [this.bloomTexB, this.bloomFboB],
+    ]) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, bloomInternal, bw, bh, 0,
+        gl.RGBA, bloomType, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    }
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
@@ -464,6 +716,26 @@ export class Renderer {
 
   draw(scene, tracer) {
     const gl = this.gl;
+
+    // --- Pass 0: smoke → smokeFbo (when enabled) ---
+    // Renders the animated smoke into its own RGBA8 texture so the HDR
+    // ray FBO stays "rays only". Density is written to alpha; blit and
+    // elem shaders multiply rays by mix(0.5, 1.0, density) to simulate
+    // particulate-lit rays.
+    if (this.smokeEnabled) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.smokeFbo);
+      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+      gl.disable(gl.BLEND);
+      gl.useProgram(this.smokeProgram);
+      gl.uniform1f(this.smoke.uTime, performance.now() / 1000);
+      gl.uniform2f(this.smoke.uAspect, scene.bench.w, scene.bench.h);
+      gl.uniform1f(this.smoke.uIntensity, this.smokeIntensity);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
+      gl.enableVertexAttribArray(this.smoke.aCorner);
+      gl.vertexAttribPointer(this.smoke.aCorner, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disableVertexAttribArray(this.smoke.aCorner);
+    }
 
     // --- Pass 1: rays → FBO ---
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
@@ -519,6 +791,39 @@ export class Renderer {
     gl.disableVertexAttribArray(this.ray.aCol2);
     gl.disableVertexAttribArray(this.ray.aCorner);
 
+    // --- Pass 1.5: two-pass Gaussian blur of rays → bloomTexB
+    //     (only when smoke is enabled — otherwise nothing reads it).
+    //     Half-resolution so the blur is smooth and cheap. HDR preserved
+    //     end-to-end (RGBA16F) so bright pile-ups bloom in their true
+    //     color instead of clipping to white before the Reinhard pass.
+    if (this.smokeEnabled) {
+      gl.disable(gl.BLEND);
+      gl.useProgram(this.blurProgram);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
+      gl.enableVertexAttribArray(this.blur.aCorner);
+      gl.vertexAttribPointer(this.blur.aCorner, 2, gl.FLOAT, false, 0, 0);
+
+      const bw = this._bloomW, bh = this._bloomH;
+      gl.uniform1f(this.blur.uSpread, this.bloomSpread);
+      // Horizontal: fboTex (full res) → bloomTexA (half res).
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFboA);
+      gl.viewport(0, 0, bw, bh);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
+      gl.uniform1i(this.blur.uTex, 0);
+      gl.uniform2f(this.blur.uTexel, 1.0 / this.canvas.width, 0.0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      // Vertical: bloomTexA → bloomTexB.
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFboB);
+      gl.viewport(0, 0, bw, bh);
+      gl.bindTexture(gl.TEXTURE_2D, this.bloomTexA);
+      gl.uniform2f(this.blur.uTexel, 0.0, 1.0 / bh);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      gl.disableVertexAttribArray(this.blur.aCorner);
+    }
+
     // --- Pass 2a: blit FBO → screen ---
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -529,6 +834,13 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
     gl.uniform1i(this.blit.uTex, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.smokeTex);
+    gl.uniform1i(this.blit.uSmoke, 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.bloomTexB);
+    gl.uniform1i(this.blit.uBloom, 2);
+    gl.uniform1i(this.blit.uUseSmoke, this.smokeEnabled ? 1 : 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
     gl.enableVertexAttribArray(this.blit.aCorner);
     gl.vertexAttribPointer(this.blit.aCorner, 2, gl.FLOAT, false, 0, 0);
@@ -540,6 +852,9 @@ export class Renderer {
       gl.useProgram(this.elemProgram);
       gl.uniform2f(this.elem.uBench, scene.bench.w, scene.bench.h);
       gl.uniform1i(this.elem.uFbo, 0);
+      gl.uniform1i(this.elem.uSmoke, 1);
+      gl.uniform1i(this.elem.uBloom, 2);
+      gl.uniform1i(this.elem.uUseSmoke, this.smokeEnabled ? 1 : 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
       gl.enableVertexAttribArray(this.elem.aCorner);
       gl.vertexAttribPointer(this.elem.aCorner, 2, gl.FLOAT, false, 0, 0);
@@ -547,6 +862,7 @@ export class Renderer {
         this.drawElement(el);
       }
     }
+    gl.activeTexture(gl.TEXTURE0);
 
     // Hook for capturing the framebuffer before overlay ticks/lines.
     if (this.onPreOverlay) this.onPreOverlay();
@@ -959,10 +1275,12 @@ export class Renderer {
         data.copyWithin(dstOff, rowOff, rowOff + rowBytes);
       }
       // Separator line at the top of each sensor block (except the
-      // first). Only when ROW_H >= 3 — at smaller sizes the separator
-      // would consume the entire visible sensor row and hide the
-      // spectrum, so we drop it and let color boundaries do the work.
-      if (s > 0 && ROW_H >= 3) {
+      // first). Only when ROW_H >= 15 — at smaller sizes the 1-px line
+      // consumes an outsized fraction of each row (≥ 17%) and the
+      // divider grid fights the spectrum for attention instead of
+      // separating it. Below that, color boundaries between adjacent
+      // sensor rows do the separating.
+      if (s > 0 && ROW_H >= 15) {
         for (let x = 0; x < CANVAS_W; x++) {
           const o = rowOff + x * 4;
           data[o] = borderR; data[o + 1] = borderG; data[o + 2] = borderB; data[o + 3] = 255;
