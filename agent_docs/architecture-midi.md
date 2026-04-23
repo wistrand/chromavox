@@ -4,6 +4,11 @@ MIDI input is a source type in `mic.js` (alongside microphone, sine,
 harmonics, noise, keyboard). Selected via the Source dropdown as
 "MIDI in".
 
+For Standard MIDI File (`.mid` / `.midi`) **import** — a separate path
+that converts a file into a Chromavox song JSON instead of feeding
+live MIDI events — see "MIDI file importer" in
+[design-song-format.md](design-song-format.md).
+
 ## How it works
 
 No AudioContext is created. `mic.enable('midi', deviceId)` calls

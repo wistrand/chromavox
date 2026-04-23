@@ -7,12 +7,13 @@ arc-approximations with a fixed number of segments per arc — see
 `localPolygon` in `docs/js/scene.js` for the current values.
 
 Element kinds: `prism`, `block`, `mirror`, `mirror-concave`,
-`mirror-convex`, `lens-convex`, `lens-concave`, `circle`, `rabbit`.
+`mirror-convex`, `lens-convex`, `lens-concave`, `circle`, `rabbit`,
+`diamond`.
 
 ## Element property schema (`docs/js/elements.js`)
 
 Single source of truth for per-kind element properties. Exports
-`ELEMENTS` (9 kinds) and `ELEMENT_KINDS`.
+`ELEMENTS` (10 kinds) and `ELEMENT_KINDS`.
 
 Each kind entry has:
 - `label` — display name for dropdown/toolbar.
@@ -92,14 +93,26 @@ Chosen in `makeElement` (`docs/js/scene.js`) so horizontal rays produce a
 visible effect on placement:
 
 - `prism` — rotated to avoid flint TIR at apex-up / 0° incidence.
-- `block` — rotated so an axis-aligned block doesn't pass rays through
+- `block` — 75° so an axis-aligned block doesn't pass rays through
   invisibly at 0° incidence.
-- `mirror` — rotated to 45° so an axis-aligned thin strip isn't grazed
+- `mirror` — 45° so an axis-aligned thin strip isn't grazed
   by rays.
 - `mirror-convex` — `Math.PI` (faces left toward incoming rays).
-- `rabbit`, lenses, `mirror-concave` — on-axis (rot 0) is correct.
+- `rabbit`, lenses, `mirror-concave`, `diamond` — on-axis (rot 0) is
+  correct.
 
 Check `makeElement` for the current values.
+
+## Diamond
+
+`diamond` uses the brilliant point-cut shape — a rhombus polygon with
+half-height `h = size/2` and half-width `w = size * 0.35`. Material is
+`diamond` (high refractive index). At any meaningful angle the bounce
+geometry produces total internal reflection on every internal hit, so
+the element behaves as a closed light trap regardless of the entry
+angle (caveat: some chosen `el.color` filters can absorb the ray
+before it returns). Properties: `size`, `spin`, `delayK`, `color`,
+`absorb`.
 
 ## Adding a new element kind
 

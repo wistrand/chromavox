@@ -147,6 +147,12 @@ Elements can carry `el.spin` (rad/s). The frame loop applies
 spin by 10 deg/s. The property serializes into scene JSON and
 participates in undo/redo automatically.
 
+While an element is selected, a small `+12.3°` overlay (the
+`#rotation-label` div inside `#bench-viewport`) shows the current
+rotation. Position is computed in bench units (`(sel.x + 26, sel.y - 8)`
+scaled by `vp.clientWidth / scene.bench.w`) so it stays clear of the
+20-unit indicator line and 14-unit arc at any viewport scale.
+
 ## Per-element color override
 
 Property panel shows a **Color** row with a native color picker, a `×`
@@ -200,7 +206,8 @@ Two paths, sharing `importSongFile(f)` in `main.js`:
 
 - **`⇪` button** next to the song selector (transport bar). Opens a
   hidden `<input type="file">` accepting `.json`, `.xml`,
-  `.musicxml`. Loads the file but does not auto-play (manual flow).
+  `.musicxml`, `.mid`, `.midi`. Loads the file but does not auto-play
+  (manual flow). MIDI files do auto-play once the user picks tracks.
 - **Drop onto `#stage`** — dragging a file over the stage adds
   `.drop-target` (dashed cyan outline). On drop, the file is read
   and — on success — `playBtn.click()` fires so the song auto-plays.
@@ -208,11 +215,21 @@ Two paths, sharing `importSongFile(f)` in `main.js`:
   starts. The `songSelect` dropdown clears to reflect that the
   loaded song isn't one of the catalogued ones.
 
-The helper reads the file as `ArrayBuffer`, sniffs a BOM
-(`FE FF` → UTF-16 BE, `FF FE` → UTF-16 LE) so Finale's UTF-16
+The helper reads the file as `ArrayBuffer`, sniffs the first four
+bytes for the MIDI magic `MThd` (Standard MIDI File), then sniffs a
+BOM (`FE FF` → UTF-16 BE, `FF FE` → UTF-16 LE) so Finale's UTF-16
 MusicXML exports decode correctly, then content-sniffs `<` vs `{`
 to choose between `musicxmlToSong(text)` (`docs/js/musicxml.js`)
-and `JSON.parse(text)`. Errors bubble up via `alert()`.
+and `JSON.parse(text)`. MIDI hits open the floating "MIDI tracks"
+window (`#midi-tracks-window`) where the user toggles which tracks
+contribute notes — see design-song-format.md for the importer
+defaults. Errors bubble up via `alert()`.
+
+A small `♪` button sits next to `⇪` in the transport. It is hidden
+until the first MIDI import; then it stays available so the user can
+reopen the track-picker after closing it. Loading any other song
+(catalog dropdown, MusicXML, native JSON) drops the cached MIDI
+state and hides the button again.
 
 The welcome overlay (rendered from the loaded song's `welcome`
 field) is clickable — clicking or tapping anywhere on it calls
