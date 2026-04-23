@@ -138,6 +138,57 @@ Note: `agent_docs/plan-element-schema.md` was removed (implemented).
   element sets `keyframesPaused`) — only the bend lane is suppressed,
   other automation keeps running. MIDI channel-0 pitch bend triggers
   the same pause via `mic.onGlobalBend`.
+- Repeat button (`⟳`) in the transport bar toggles `songPlayer.song.loop`
+  on the currently-loaded song. `loadSongJson` calls `syncLoopBtn()`
+  to reflect the song's `loop` field on the button. MusicXML imports
+  default `loop: true` (drop a score → keeps playing until stopped).
+  Catalogued songs use whatever `loop` is in their JSON.
+- Sine and piano carriers store phases in **table-index space**
+  (`[0, _SIN_N)` where `_SIN_N = 2048`), not radians. Inner loops call
+  `fsinFast(x)` — no modulos, two table loads — instead of `fsin(x)`.
+  Phase increment is `freq * invSr * _SIN_N` (was `twoPi * freq * invSr`).
+  Wrap threshold is `_SIN_N` (was `twoPi`). Required for `fsinFast`'s
+  contract: `x` must be in `[0, _SIN_N)`. FM and other carriers still
+  use `fsin` (their combined modulation argument can overshoot).
+- Coast counter on every voice: when the active-voice gate wants to
+  skip a voice (all gains < 1e-5, piano peaks < 1e-5), it instead
+  decrements `v.coast` and keeps running the carrier for ~3 more
+  blocks. Per-sample gain smoothing continues to pull gains through
+  zero during those blocks, eliminating the sample-aligned cliff at
+  the skipped→active block boundary that Firefox Mobile's output
+  resampler used to render as clicks.
+- Piano strike-edge reference is aligned on carrier switch: when the
+  incoming carrier is `'piano'`, `v.pianoPrevGain = v.gains[0]` for
+  every voice so the next block's `gainRise ≈ 0` (no phantom attack
+  from whatever the previous carrier's gain state was).
+- Voice gains/targetGains/phases are `Float32Array`s (not plain
+  arrays). Consistent with the rest of per-voice state, stable
+  element-kind for mobile JITs, halves memory per partial.
+- Worklet stats (`this.port.postMessage({type: 'stats', …})`) are
+  gated on `_statsEnabled`. Default off; main.js flips it on when
+  the stats window is shown and off when hidden. Zero worklet →
+  main-thread traffic during normal playback. On enable, the worklet
+  primes `_processCount = 187` so stats arrive within one block
+  instead of waiting up to ~500 ms.
+- Stats window extra diagnostics (when visible): `CPU/block`, `drift`,
+  `Max step`, `Boundary`, `D²`, `msgs/block`, plus main-thread `RAF
+  p99`. Measured only when stats are open (zero overhead otherwise).
+  Timing fields display `-` on platforms where `performance.now()`
+  isn't available in the worklet scope (some Firefox Mobile builds);
+  the signal-continuity fields always populate. Stats window
+  auto-clamps into the viewport on show / drag-end / resize to avoid
+  the "reload leaves window off-screen" issue on mobile.
+- AudioContext constructed with `{ latencyHint: 'playback' }` for a
+  larger, more forgiving output buffer (~50 ms extra latency is fine
+  for a synth driven by scene geometry). Graph is
+  `workletNode → master → destination` with the analyser branched
+  off `master` as a passive tap (not in the live path).
+- Element `_opacity` (0..1, set by `song._applyKeyframes` during
+  fade-in / fade-out between keyframes) is now actually rendered:
+  `renderer.drawElement` multiplies `uTintStrength`, `uEdgeGlowAmp`,
+  and `uMagnitude` by `_opacity`; the overlay pass scales outline
+  alpha by `_opacity`. Elements smoothly fade in/out instead of
+  snapping at keyframe boundaries.
 - Transient per-frame state lives on `scene.runtime` (created by
   `createScene()`): `{ micLevels, wlPerSource }`. `serializeScene`
   excludes runtime (explicit field list). `Object.assign(scene, fresh)`

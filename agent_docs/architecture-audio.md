@@ -265,9 +265,25 @@ disable, rebuild, setCarrier, setBase, etc.) and MessagePort plumbing.
   Constant-power pan per voice: sensor 0 pans left, sensor N-1 pans
   right. Pan law is `cos/sin(pan * PI/2)`. Soft limiter applied
   independently to both channels.
-- **Sine wavetable (`fsin`)**: 2048-entry LUT with linear
-  interpolation, replaces `Math.sin` in sine partial and FM inner
-  loops.
+- **Sine wavetable (`fsin` / `fsinFast`)**: 2049-entry LUT
+  (`_SIN_N = 2048` + one boundary sample for wrap-free interpolation),
+  linear interpolation. Two variants:
+  - `fsin(x)` accepts any real `x` — does float + int modulo to wrap
+    into table range. Used by carriers whose phase argument can
+    overshoot (FM's combined `cPhase + fsin(mPhase) * …`).
+  - `fsinFast(x)` assumes `x` is already in `[0, _SIN_N)` — no
+    modulo, two table loads. Used by sine and piano, which both
+    store their phases in **table-index space** and wrap themselves
+    (`phase -= _SIN_N` when `>= _SIN_N`). Phase increment is
+    `freq * invSr * _SIN_N` (replaces the older `twoPi * freq * invSr`
+    radian-space form). On mobile JITs this gives a noticeably
+    smaller inner loop that reliably stays inlined.
+- **Voice phase state storage**: `v.phases`, `v.gains`, `v.targetGains`
+  are `Float32Array`s allocated to the correct partial count in
+  `_rebuildPartials` (sine's partials that fit under Nyquist). Stable
+  element-kind across JIT runs; halves memory per partial vs. plain
+  `Array<number>`. Matches the typed-array pattern already used by
+  `ssPhases`, `kpBuf`, `voc1/2`, `pianoPhases/Peak/Dts`, etc.
 - **PRNG policy**: `_carrierNoise` and `_carrierKarplus` per-sample
   per-voice calls use `Math.random()` — a shared Mulberry32 stream
   across voices introduced audible inter-voice correlation. A
@@ -406,6 +422,74 @@ menu (`#synth-reverb` in `play.html`). Persisted via
 `UI_CONTROL_IDS → localStorage`. Automatable in songs via
 `{ "param": "reverbMix", "points": [...] }` — routes through the same
 `synth.setParam` pipeline the carrier params use.
+
+## Voice activity gate and coast counter
+
+`process()` gates each voice before calling its carrier:
+
+1. **Sensor-driven**: active if any of `v.gains[k] > 1e-5` or
+   `v.targetGains[k] > 1e-5`. True for any carrier whose voice is
+   receiving sensor light.
+2. **Piano ringing**: additionally active if any `v.pianoPeak[n] >
+   1e-5`. Partials decay exponentially for several seconds after
+   sensor light drops; voice must keep running so the tail renders.
+3. **Coast**: when both (1) and (2) fail, decrements `v.coast` and
+   stays active for up to 3 more blocks (~8 ms at 48 kHz). Per-sample
+   gain smoothing continues to pull `gains[k]` through zero during
+   those blocks, so the output contribution decays to zero
+   *continuously* instead of cliff-edging at the block boundary
+   where the gate would otherwise flip. The cliff used to be
+   rendered as a sample-aligned impulse by Firefox Mobile's output
+   resampler, producing audible clicks.
+
+**Carrier-switch state alignment**: when the worklet receives a
+`'carrier'` message whose new value is `'piano'`, it sets
+`v.pianoPrevGain = v.gains[0]` for every voice. Otherwise the first
+piano block would see
+`gainRise = voiceGain - stalePianoPrevGain ≫ 0` and inject a phantom
+strike based on whatever the previous carrier's gain state was.
+
+## Diagnostic stats
+
+The `stats` postMessage from the worklet carries extra diagnostic
+fields beyond the basic `voices` / `activeVoices` / `blockSize` /
+`droppedBuffers`. All are collected only when the stats window is
+open (worklet checks `this._statsEnabled`) so per-block overhead is
+zero during normal playback.
+
+- `maxBlockMs` — wall-clock duration of `process()` this window.
+  Budget is `128 / sampleRate * 1000 ≈ 2.67 ms` at 48 kHz. Values
+  above ~2 ms mean xruns are imminent even if not yet happening.
+- `driftMs` — cumulative wall-clock vs audio-clock skew since stats
+  were enabled. Positive = worklet falling behind real time.
+- `maxSampleStep` — largest `|bufL[i] - bufL[i-1]|` post-limiter
+  within the block. Catches signal-level discontinuities.
+- `maxBoundaryStep` — `|bufL[0] - bufL_prev[len-1]|`. Isolates
+  block-boundary jumps (voice-skip / voice-wake transitions) from
+  mid-block discontinuities.
+- `maxD2` — largest `|2·bufL[i] - bufL[i-1] - bufL[i+1]|`. Catches
+  single-sample impulses that first-order derivatives miss on
+  high-frequency content.
+- `msgsPerBlockMax` — max count of `port.onmessage` invocations
+  between consecutive `process()` calls in the window. Excess
+  indicates main → worklet message pressure.
+
+On platforms where `performance.now()` is unavailable in the worklet
+scope (historically Firefox Android), `maxBlockMs` and `driftMs` are
+reported as `null` (displayed as `-`) while the signal-continuity
+fields still populate — those don't need high-resolution timers.
+
+**`_statsEnabled` gating**: main.js calls `synth.setStatsEnabled(true)`
+when the stats window opens and `false` when it closes. The worklet
+flips an internal flag and additionally primes `_processCount = 187`
+on enable so the first stats message arrives within one block
+instead of waiting the usual ~500 ms interval. When disabled, the
+worklet skips both the signal scan and the postMessage — zero worklet
+→ main-thread traffic during normal playback.
+
+main.js also tracks **RAF p99** (99th-percentile frame-to-frame
+interval over the last ~240 RAF callbacks) and shows it in the stats
+window. Lets you correlate audio glitches with main-thread stalls.
 
 ## Spectrum readout smoothing
 

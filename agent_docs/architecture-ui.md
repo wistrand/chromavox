@@ -219,6 +219,58 @@ field) is clickable — clicking or tapping anywhere on it calls
 `playBtn.click()`, so the user-prompt "Press ▶ to play" actually
 plays when pressed.
 
+### Transport buttons
+
+- **`▶` / `❚❚` Play-pause** — toggles playback on the loaded song.
+- **`■` Stop** — stops and resets time to 0.
+- **`⟳` Repeat** — toggles `songPlayer.song.loop` on the currently
+  loaded song. Uses the existing `button.active` accent colour to
+  indicate on/off; `aria-pressed` kept in sync. `loadSongJson`
+  calls `syncLoopBtn()` to reflect the loaded song's `loop` field.
+- Seek slider + time readout.
+
+MusicXML imports default to `loop: true` (the typical workflow is
+"drop a score, it keeps playing") — users turn it off via `⟳`.
+Catalogued songs use whatever `loop` is in their JSON.
+
+### Stats window diagnostics
+
+The floating stats window shows both cosmetic stats (FPS, element
+counts) and audio-thread diagnostics. Diagnostics are computed only
+while the window is open: the worklet gates all extra work behind
+`_statsEnabled` and main.js flips it via `synth.setStatsEnabled()`
+on show/hide. Stats messages from the worklet are suppressed entirely
+when the window is hidden — no worklet → main-thread postMessage
+traffic during normal playback.
+
+When opened, the worklet primes its counter so the first stats
+message arrives within one block instead of ~500 ms later.
+
+Window position: `showStats()` on first show places it top-right
+(`top: 64px; right: 12px`). After that it's user-draggable.
+`clampStatsWindow()` is called on show, after each drag, and on
+`window.resize` so the window can never end up outside the viewport
+— either content wider than the viewport pins it `left: 4px;
+right: 4px` with `max-width` set, or the window's existing size is
+kept and top/left clamped. Prevents the "reload on mobile leaves
+window off-screen" issue.
+
+Displayed audio diagnostics (from the worklet's stats postMessage):
+
+- `CPU/block` / `drift` — wall-clock duration of `process()` and
+  cumulative audio-vs-wall-clock skew. Require `performance.now()`
+  in the worklet scope; display `-` on platforms where it's absent.
+- `Max step` / `D²` — largest first/second derivative in the block's
+  output. Catches in-signal clicks we generated.
+- `Boundary` — `|bufL[0] - bufL_prev[len-1]|`, isolates voice-skip
+  and block-boundary discontinuities from mid-block ones.
+- `msgs/block` — inbound `port.onmessage` count per process() call.
+  Excess indicates main → worklet message pressure.
+
+Plus main-thread **`RAF p99`** — 99th-percentile RAF-to-RAF interval
+over a ring buffer of the last ~240 frames. Correlates audio
+glitches with main-thread stalls (GC, heavy layout, etc.).
+
 Clear button `Object.assign`s a fresh `createScene()` over the scene
 (not just `elements = []`), calls `syncControls` +
 `rebuildSensorReadout`, and removes the localStorage entry. The fresh
