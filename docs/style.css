@@ -183,7 +183,6 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 #midi-tracks-list input[type=checkbox] { margin: 0; flex: 0 0 auto; }
 #midi-tracks-list .tname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #midi-tracks-list .tcount { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
-}
 /* Letterbox: bench is canonical portrait golden ratio (556 × 900). The
    viewport size is computed in JS (renderer.resize) so that both
    width and height constraints are enforced correctly on mobile. */
@@ -244,7 +243,11 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 .emitter-label {
   position: absolute;
   left: 4px;
-  transform: translate(0, calc(-100% - 3px));
+  /* Center label vertically on its tick — keeps every label inside the
+     bench border. Pushing labels above the tick (the previous design)
+     made the topmost label escape into the letterbox above the bench
+     when the stage was taller than the bench-viewport. */
+  transform: translate(0, -50%);
   font-size: 10px;
   color: rgba(220, 230, 240, 0.85);
   white-space: nowrap;
@@ -254,7 +257,7 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
 .sensor-label {
   position: absolute;
   right: 4px;
-  transform: translate(0, calc(-100% - 3px));
+  transform: translate(0, -50%);
   font-size: 10px;
   color: rgba(220, 230, 240, 0.85);
   white-space: nowrap;
