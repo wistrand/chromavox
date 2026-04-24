@@ -453,6 +453,11 @@ export class UI {
       e.stopPropagation();
       if (addMenu.classList.contains('open')) { closeMenu(); return; }
       document.querySelectorAll('.tool-menu.open, .options-menu.open').forEach(m => m.classList.remove('open'));
+      // Reparent to <body> so older mobile Chrome doesn't clip the
+      // dropdown to the toolbar's overflow:auto scroll rect. Idempotent;
+      // modern browsers are unaffected because `position: fixed` already
+      // escaped the clip for them.
+      if (addMenu.parentElement !== document.body) document.body.appendChild(addMenu);
       const r = addOptions.getBoundingClientRect();
       addMenu.style.top = `${r.bottom + 4}px`;
       addMenu.style.left = `${Math.max(4, r.right - 180)}px`;

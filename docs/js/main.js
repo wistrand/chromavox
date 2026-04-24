@@ -714,6 +714,10 @@ function bindOptionsMenu(toggleId, menuId) {
     }
     // Close any other options menus first.
     document.querySelectorAll('.options-menu.open').forEach(m => m.classList.remove('open'));
+    // Reparent to <body> so older mobile Chrome doesn't clip the dropdown
+    // to the toolbar's overflow:auto scroll rect. Idempotent; modern
+    // browsers already escape the clip via position: fixed.
+    if (menu.parentElement !== document.body) document.body.appendChild(menu);
     const r = toggle.getBoundingClientRect();
     menu.style.top = `${r.bottom + 4}px`;
     menu.style.left = `${Math.max(4, r.right - 280)}px`;
