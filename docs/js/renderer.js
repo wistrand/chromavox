@@ -460,6 +460,7 @@ export class Renderer {
     this.smokeEnabled = false;
     this.smokeIntensity = 1.0;
     this.smokeHue = 220; // cool blue-grey by default — the original look
+    this.showTicks = true; // emitter + sensor wall markers
 
     // Separate FBO for the smoke pre-pass. RGBA8 is plenty — RGB holds
     // the cool-grey haze color, alpha holds normalized density used as
@@ -1000,15 +1001,17 @@ export class Renderer {
     const levels = scene.runtime.micLevels;
     const disabled = scene.emitter.disabled;
     const srcStripH = bench.h / scene.emitter.count;
-    for (let s = 0; s < scene.emitter.count; s++) {
-      const y = (scene.emitter.count - 1 - s + 0.5) * srcStripH;
-      const off = disabled && disabled.has(s);
-      const a = off ? 0.3 : 1.0;
-      this.line(0, y, 14, y, 1, 1, 0.7, a);
-      if (!off && levels && levels[s] > 0.02) {
-        const v = Math.min(1, levels[s]);
-        const len = 10 + v * 50;
-        this.line(16, y, 16 + len, y, 1, 0.85, 0.4, 0.4 + 0.6 * v);
+    if (this.showTicks) {
+      for (let s = 0; s < scene.emitter.count; s++) {
+        const y = (scene.emitter.count - 1 - s + 0.5) * srcStripH;
+        const off = disabled && disabled.has(s);
+        const a = off ? 0.3 : 1.0;
+        this.line(0, y, 14, y, 1, 1, 0.7, a);
+        if (!off && levels && levels[s] > 0.02) {
+          const v = Math.min(1, levels[s]);
+          const len = 10 + v * 50;
+          this.line(16, y, 16 + len, y, 1, 0.85, 0.4, 0.4 + 0.6 * v);
+        }
       }
     }
     const senStripH = bench.h / scene.sensorCount;
@@ -1023,35 +1026,40 @@ export class Renderer {
       showMini = rr.width === 0 || rr.left >= window.innerWidth - 1;
     }
 
-    if (showMini && this.qualityTier < 1 && tracer && tracer.sensorBins && tracer.sensorCount === scene.sensorCount) {
-      const stripW = Math.min(72, bench.w * 0.06);
-      const stripH = Math.min(6, senStripH * 0.45);
-      const x0 = bench.w - 2 - stripW;
-      const binW = stripW / binCount;
-      for (let s = 0; s < scene.sensorCount; s++) {
-        const y = (scene.sensorCount - 1 - s + 0.5) * senStripH;
-        let maxVal = 1e-6;
-        for (let b = 0; b < binCount; b++) {
-          const v = tracer.sensorBins[s * binCount + b];
-          if (v > maxVal) maxVal = v;
-        }
-        for (let b = 0; b < binCount; b++) {
-          const v = tracer.sensorBins[s * binCount + b] / maxVal;
-          if (v < 0.02) continue;
-          const wl = 380 + (b + 0.5) / binCount * 400;
-          const rgb = wavelengthToRGB(wl);
-          const r = rgb[0] * v, g = rgb[1] * v, bl = rgb[2] * v;
-          const bx = x0 + b * binW;
-          for (let dy = -stripH * 0.5; dy <= stripH * 0.5; dy += 1) {
-            this.line(bx, y + dy, bx + binW + 0.5, y + dy, r, g, bl, 0.95);
+    // Sensor markers (mini-spectrum or plain tick) live behind the
+    // single showTicks gate so the toggle hides everything on the
+    // right wall in one shot.
+    if (this.showTicks) {
+      if (showMini && this.qualityTier < 1 && tracer && tracer.sensorBins && tracer.sensorCount === scene.sensorCount) {
+        const stripW = Math.min(72, bench.w * 0.06);
+        const stripH = Math.min(6, senStripH * 0.45);
+        const x0 = bench.w - 2 - stripW;
+        const binW = stripW / binCount;
+        for (let s = 0; s < scene.sensorCount; s++) {
+          const y = (scene.sensorCount - 1 - s + 0.5) * senStripH;
+          let maxVal = 1e-6;
+          for (let b = 0; b < binCount; b++) {
+            const v = tracer.sensorBins[s * binCount + b];
+            if (v > maxVal) maxVal = v;
+          }
+          for (let b = 0; b < binCount; b++) {
+            const v = tracer.sensorBins[s * binCount + b] / maxVal;
+            if (v < 0.02) continue;
+            const wl = 380 + (b + 0.5) / binCount * 400;
+            const rgb = wavelengthToRGB(wl);
+            const r = rgb[0] * v, g = rgb[1] * v, bl = rgb[2] * v;
+            const bx = x0 + b * binW;
+            for (let dy = -stripH * 0.5; dy <= stripH * 0.5; dy += 1) {
+              this.line(bx, y + dy, bx + binW + 0.5, y + dy, r, g, bl, 0.95);
+            }
           }
         }
-      }
-    } else {
-      // Plain ticks when the side-panel readout is taking the role.
-      for (let s = 0; s < scene.sensorCount; s++) {
-        const y = (scene.sensorCount - 1 - s + 0.5) * senStripH;
-        this.line(bench.w - 20, y, bench.w - 2, y, 0.6, 1, 0.9, 0.9);
+      } else {
+        // Plain ticks when the side-panel readout is taking the role.
+        for (let s = 0; s < scene.sensorCount; s++) {
+          const y = (scene.sensorCount - 1 - s + 0.5) * senStripH;
+          this.line(bench.w - 20, y, bench.w - 2, y, 0.6, 1, 0.9, 0.9);
+        }
       }
     }
 

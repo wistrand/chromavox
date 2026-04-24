@@ -87,7 +87,7 @@ const UI_CONTROL_IDS = [
   ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
   'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
-  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'smoke-toggle', 'smoke-intensity', 'smoke-hue', 'bloom-spread', 'no-overlap', 'bench-aspect',
+  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'labels-toggle', 'ticks-toggle', 'smoke-toggle', 'smoke-intensity', 'smoke-hue', 'bloom-spread', 'no-overlap', 'bench-aspect',
 ];
 function saveUiState() {
   const state = {};
@@ -379,6 +379,22 @@ smokeToggle.addEventListener('change', () => {
   scheduleFrame();
   setDirty();
 });
+
+const labelsToggle = document.getElementById('labels-toggle');
+const appEl = document.getElementById('app');
+const applyLabels = () => {
+  appEl.classList.toggle('no-labels', !labelsToggle.checked);
+};
+applyLabels();
+labelsToggle.addEventListener('change', applyLabels);
+
+const ticksToggle = document.getElementById('ticks-toggle');
+const applyTicks = () => {
+  renderer.showTicks = ticksToggle.checked;
+  setDirty();
+};
+applyTicks();
+ticksToggle.addEventListener('change', applyTicks);
 
 const bloomSlider = document.getElementById('bloom-spread');
 const bloomLabel = document.getElementById('bloom-spread-val');
