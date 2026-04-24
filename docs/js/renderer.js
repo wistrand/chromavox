@@ -9,7 +9,7 @@
 //   3. Overlay lines on top (bench outline, emitter/sensor ticks, element
 //      outlines, selection handle). Alpha blend.
 
-import { worldEdges, localPolygon } from './scene.js';
+import { worldEdges, localAABB } from './scene.js';
 import { wavelengthToRGB, MATERIALS } from './spectrum.js';
 
 const MAX_EDGES = 128;
@@ -22,6 +22,16 @@ const PTR_RADIUS_BENCH = 120;
 const K_ELEM_STRENGTH = 2.2; // push strength per element source (bench units, pre-normalization)
 const K_SPIN_SWIRL = 7.0;    // swirl strength per rad/s of element angular velocity
 const K_PTR_STRENGTH = 3.2;  // swirl strength per pointer source
+
+// Along-axis source offsets (fraction of longLen) for the element-source
+// packing loop. Hoisted to module scope so the arrays aren't reallocated
+// per element per frame. Index: 0 = near-square (AR < 1.5),
+// 1 = moderately elongated (1.5 ≤ AR < 3), 2 = very elongated (AR ≥ 3).
+const SMOKE_OFFS = [
+  [-1/5, 1/5],
+  [-1/4, 1/4],
+  [-1/3, 0, 1/3],
+];
 
 const RAY_VS = `#version 300 es
 in vec2 aCorner;
@@ -176,11 +186,18 @@ void main() {
   float cs = cos(ang), sn = sin(ang);
   vec2 p = mat2(cs, -sn, sn, cs) * p0;
 
-  // Gentle drift. Both axes modulated by their own slow sines so the
-  // motion is never a steady vector. Faster numbers made it feel like
-  // water currents; these are 4× slower.
-  p.x += uTime * 0.018 * (1.0 + 0.4 * sin(uTime * 0.05));
-  p.y += uTime * 0.011 * (1.0 + 0.5 * sin(uTime * 0.07 + 1.3));
+  // Gentle drift. Each axis has a velocity that oscillates around a
+  // constant mean, producing a non-steady-vector motion. The previous
+  // form, p += t * v0 * (1 + k*sin(w*t)), had a derivative whose
+  // magnitude grew linearly with t (the cross-term t*w*k*cos(wt)),
+  // which made smoke visibly accelerate after a few minutes of page
+  // open time. These are the proper integrals of the intended
+  // velocity v0 * (1 + k*sin(wt + phi)), so velocity stays bounded
+  // forever. Coefficients: amp0 = v0*k/w for each axis.
+  //   p.x: v0=0.018, k=0.4, w=0.05      → amp = 0.144
+  //   p.y: v0=0.011, k=0.5, w=0.07, phi=1.3 → amp = 0.0786
+  p.x += uTime * 0.018 + 0.144  * (1.0 - cos(uTime * 0.05));
+  p.y += uTime * 0.011 + 0.0786 * (cos(1.3) - cos(uTime * 0.07 + 1.3));
 
   // Domain warp using off-axis offsets, keeping the warp direction
   // unaligned with the noise grid so we don't get the straight edges
@@ -224,16 +241,20 @@ void main() {
       // Independent push (radial) and swirl (tangential) contributions.
       // A stationary element gives pure push; a spinning one adds
       // swirl proportional to its angular velocity; a pointer is pure
-      // swirl with zero push.
+      // swirl with zero push. Note: rad = d and tng = perp(d) both
+      // vanish at d = 0, so a pixel sitting exactly on a source gets
+      // zero displacement — correct (no push on its own centroid) and
+      // essential for avoiding a normalize(0) singularity.
       vec2 rad = d;
       vec2 tng = vec2(-d.y, d.x);
       sourceWarp += (rad * s1.z + tng * s1.w) * fall;
     }
     // Convert to FBM-input space. Same 300 * scaleMod divisor as p0,
     // and flip Y because the warp is computed in bench coords (y down)
-    // while p lives in vUV coords (y up).
-    sourceWarp.x /=  (300.0 * scaleMod);
-    sourceWarp.y /= -(300.0 * scaleMod);
+    // while p lives in vUV coords (y up). One reciprocal + a vec2 mul
+    // instead of two divisions.
+    float inv = 1.0 / (300.0 * scaleMod);
+    sourceWarp *= vec2(inv, -inv);
   }
 
   float n = fbm(p + warp * 0.30 + sourceWarp, uTime);
@@ -920,7 +941,8 @@ export class Renderer {
   // carved wake stretches along the shape's long direction.
   updateSources(scene) {
     const data = this._sourceData;
-    data.fill(0);
+    // No `data.fill(0)` — the shader reads only indices [0, uSourceCount),
+    // so stale values beyond the populated range are never sampled.
     const now = performance.now() / 1000;
     let idx = 0;
     let anyActivePtr = false;
@@ -955,20 +977,14 @@ export class Renderer {
     }
     this._hasActivePointers = anyActivePtr;
 
-    // Element sources.
+    // Element sources. Uses the O(1) localAABB helper rather than
+    // walking localPolygon — the latter allocates N {x,y} point objects
+    // (128 for a circle), and this runs every frame when smoke is on.
     for (const el of scene.elements) {
       if (idx >= MAX_SMOKE_SOURCES) break;
-      // Local-space polygon bounds → unbiased by rotation.
-      const poly = localPolygon(el);
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const q of poly) {
-        if (q.x < minX) minX = q.x;
-        if (q.y < minY) minY = q.y;
-        if (q.x > maxX) maxX = q.x;
-        if (q.y > maxY) maxY = q.y;
-      }
-      const w = Math.max(1, maxX - minX);
-      const h = Math.max(1, maxY - minY);
+      const box = localAABB(el);
+      const w = Math.max(1, box.w);
+      const h = Math.max(1, box.h);
       const longLen = Math.max(w, h);
       const shortLen = Math.min(w, h);
       const ar = longLen / shortLen;
@@ -976,23 +992,25 @@ export class Renderer {
       // near-square shapes (AR < 1.5). A single centered source at the
       // element's centroid has no orientation and reads as "nothing
       // happened" when the element spins.
-      const n = ar < 1.5 ? 2 : ar < 3 ? 2 : 3;
+      const n = ar < 3 ? 2 : 3;
       const invRlong = 2 / longLen;
       const invRshort = 2 / shortLen;
-      const pushK = K_ELEM_STRENGTH / Math.sqrt(n);
+      const invSqrtN = 1 / Math.sqrt(n);
+      const pushK = K_ELEM_STRENGTH * invSqrtN;
       // Spin generates swirl. Signed so CCW spin stirs CCW and CW stirs
       // CW; normalized by √N so splitting into more sources doesn't
       // amplify the total torque.
-      const swirlK = (el.spin || 0) * K_SPIN_SWIRL / Math.sqrt(n);
+      const swirlK = (el.spin || 0) * K_SPIN_SWIRL * invSqrtN;
       const rot = el.rot || 0;
       const cs = Math.cos(rot);
       const sn = Math.sin(rot);
-      // Along-axis offsets in local space, scaling with aspect ratio:
-      // near-square gets a modest spread, elongated gets sources spread
-      // further along the long axis.
-      const OFFS = ar < 1.5 ? [-1/5, 1/5]
-                 : ar < 3   ? [-1/4, 1/4]
-                 :            [-1/3, 0, 1/3];
+      // Along-axis offsets picked from hoisted SMOKE_OFFS table.
+      // Near-square gets a tighter spread so the two sources orbit close
+      // to the centroid; very elongated shapes get 3 sources spread along
+      // the long axis.
+      const OFFS = ar < 1.5 ? SMOKE_OFFS[0]
+                 : ar < 3   ? SMOKE_OFFS[1]
+                 :            SMOKE_OFFS[2];
       const longAlongX = w >= h;
       // In source-local frame, "long axis" is whichever direction has
       // the larger invR (smaller value since invR = 2/len). Set s0.zw
@@ -1044,10 +1062,17 @@ export class Renderer {
       gl.uniform1f(this.smoke.uIntensity, this.smokeIntensity);
       gl.uniform1f(this.smoke.uHue, this.smokeHue);
       gl.uniform1i(this.smoke.uSourceCount, this._sourceCount);
-      // gl.uniform4fv uploads vec4s; total floats = MAX_SMOKE_SOURCES * 8
-      // (= 2 vec4s per source × 4 floats per vec4). Unused slots are
-      // zero-filled by updateSources() so stale data can't leak.
-      gl.uniform4fv(this.smoke.uSources, this._sourceData);
+      // Upload only the populated portion — the shader loop is bounded
+      // by `uSourceCount`, so stale slots beyond it are never sampled.
+      // `subarray` is a view, zero-alloc. When count == 0 the shader's
+      // outer `if (uSourceCount > 0)` skips the loop entirely, so we
+      // can skip the uniform upload too.
+      if (this._sourceCount > 0) {
+        gl.uniform4fv(
+          this.smoke.uSources,
+          this._sourceData.subarray(0, this._sourceCount * 8),
+        );
+      }
       gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
       gl.enableVertexAttribArray(this.smoke.aCorner);
       gl.vertexAttribPointer(this.smoke.aCorner, 2, gl.FLOAT, false, 0, 0);

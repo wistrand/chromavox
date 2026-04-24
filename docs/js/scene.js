@@ -206,6 +206,62 @@ export function localPolygon(el) {
   }
 }
 
+// Local-space axis-aligned bounding box, returned as `{ w, h }`. Derived
+// directly from element schema fields instead of walking the polygon —
+// `localPolygon` allocates a fresh array + N `{x, y}` objects per call
+// (128 for a circle), which is fine for save/overlap/selection but too
+// much for a per-frame path like smoke source packing. O(1), zero
+// allocations. Caller multiplies by whatever rotation / position it
+// needs externally.
+export function localAABB(el) {
+  switch (el.kind) {
+    case 'diamond': {
+      const s = el.size;
+      const hc = s * (el.crown    ?? 0.162);
+      const hp = s * (el.pavilion ?? 0.431);
+      return { w: s, h: hc + hp };
+    }
+    case 'prism': {
+      const s = el.size;
+      return { w: s, h: s * Math.sqrt(3) / 2 };
+    }
+    case 'circle': {
+      const d = 2 * el.radius;
+      return { w: d, h: d };
+    }
+    case 'block':
+    case 'mirror': {
+      return { w: el.w, h: el.h };
+    }
+    case 'lens-convex': {
+      const R = el.radius;
+      const hh = Math.min(el.h, R * 0.97);
+      const sag = R - Math.sqrt(R * R - hh * hh);
+      return { w: 2 * sag, h: 2 * hh };
+    }
+    case 'lens-concave': {
+      const R = el.radius;
+      const hh = Math.min(el.h, R * 0.97);
+      return { w: 2 * el.w, h: 2 * hh };
+    }
+    case 'mirror-concave':
+    case 'mirror-convex': {
+      const R = el.radius;
+      const hh = Math.min(el.h, R * 0.97);
+      const sag = R - Math.sqrt(R * R - hh * hh);
+      // Back cap adds 3 px behind the arc on the axis.
+      return { w: sag + 3, h: 2 * hh };
+    }
+    case 'rabbit': {
+      // Bounds read once from the hardcoded polygon in localPolygon:
+      // x ∈ [-50, +50] (w = 100), y ∈ [-75, +48] (h = 123).
+      const u = el.size * 0.01;
+      return { w: 100 * u, h: 123 * u };
+    }
+  }
+  return { w: 100, h: 100 }; // unknown kind — generic default
+}
+
 // World-space edges with outward normals.  Returns a mix of segment and
 // arc edges.  Segment: { type:'seg', p1, p2, nx, ny, elementId }.
 // Arc: { type:'arc', cx, cy, R, a0, a1, convex, elementId }.
