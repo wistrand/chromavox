@@ -469,14 +469,54 @@ Two overlays inside `#bench-viewport`:
   `Independent scale` is on.
 
 Each row is a tiny `<div>` whose `top` is `((i + 0.5) / count) × 100%`
-so labels track the canvas height regardless of resize. In any scale
-mode they show note names via `freqToNote(scaleFreq(...))`; in log and
-voice modes they show bucket centre frequency in Hz / kHz (voice uses
-the 100–4000 Hz range, log uses 80–6000 Hz).
+so labels track the canvas height regardless of resize; the
+`transform: translate(0, -50%)` centers it on its tick so even the
+topmost label can't escape into the letterbox above the bench. In
+any scale mode they show note names via `freqToNote(scaleFreq(...))`;
+in log and voice modes they show bucket centre frequency in Hz / kHz
+(voice uses the 100–4000 Hz range, log uses 80–6000 Hz). Text colour
+is `rgba(220, 230, 240, 0.55)` — deliberately semi-transparent so
+rays + smoke dominate the visual.
+
+The **Labels** checkbox in the Bench dropdown toggles a
+`#app.no-labels` class (pure CSS `display: none` on both label hosts).
+The **Markers** checkbox toggles `renderer.showTicks` for the
+GL-drawn wall markers and level indicator. Both are also
+auto-hidden on narrow drawer-mode viewports (`@media (max-width: 600px)`
+for labels; a `matchMedia` listener gating `showTicks` for markers).
+User's checkbox choices re-apply the moment the viewport grows past
+600 px.
 
 The **Span** slider row is hidden when the mode is `log` or `voice`
 (both are log-spaced, so step size is meaningless). Visibility is
 toggled by `syncSpanVisibility()` in `main.js`.
+
+## Smoke + bloom controls
+
+The Bench dropdown hosts four smoke/bloom-related controls:
+
+- **Smoke** checkbox → `renderer.smokeEnabled`. Master toggle. When
+  off, the smoke pre-pass, bloom ping-pong, and source packing are
+  all skipped entirely (zero GPU cost). `renderer.hasActivePointers`
+  is short-circuited to `false` when smoke is disabled so pointer
+  sources retired mid-press can't pin the RAF loop awake.
+- **Smoke int.** slider (0–2, 0.05 step) → `renderer.smokeIntensity`.
+  Multiplies the smoke RGB output. Does not affect density
+  modulation of rays, so rays still get their min-0.5 gain even
+  when the haze is invisible.
+- **Smoke hue** slider (0–360°, 1° step) → `renderer.smokeHue`.
+  Rotates the smoke plume colour in HSV (saturation 0.45, value
+  0.18). Default 220° matches the original cool blue-grey.
+- **Bloom** slider (1.0–2.5, 0.05 step) → `renderer.bloomSpread`.
+  Controls `uSpread` in `BLUR_FS`, the per-tap spacing in the 9-tap
+  Gaussian. Halo radius at full-res ≈ `spread · 16 px` (clamped
+  above 2.5 to avoid kernel banding).
+
+All four values participate in `UI_CONTROL_IDS` persistence, so they
+survive reloads. See `architecture-overview.md` for the shader
+pipeline details (smoke pre-pass, two-pass blur, HDR bloom
+composition in the blit + element passes, elements deliberately
+exclude smoke + bloom so glass stays "clean").
 
 ## Help dialog
 

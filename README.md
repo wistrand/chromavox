@@ -57,8 +57,17 @@ extensionless paths resolve to the matching `.html`.
   noise (resonant bandpass), piano (modal). Master Reverb (Freeverb)
   sits after voice summation.
 - **Bench** dropdown: aspect (portrait / landscape / square), distort
-  toggle, no-overlap, debug windows (mic spectrum, synth spectrum, synth
-  waveform, stats).
+  toggle, scale labels + wall markers, **smoke** backdrop with
+  intensity + hue sliders and a **bloom** halo slider, no-overlap,
+  debug windows (mic spectrum, synth spectrum, synth waveform, stats).
+  Smoke parts around objects, swirls under your finger, and swirls
+  with spinning elements; bloom gives rays a soft halo wherever the
+  smoke is dense.
+- **Auto ✨** (in the Add menu): analyzes the current song and scene
+  and places a fitting element positioned to interact optically with
+  what's already on the bench — prism for bass, lens for wide
+  spreads, concave mirror for cavities, etc. — while avoiding the
+  song's melody range so the line stays intact.
 - **Songs**: pick from the catalog dropdown, or import via `⇪` /
   drag-drop. Native song JSON, MusicXML (`.musicxml` / `.xml`), and
   Standard MIDI Files (`.mid` / `.midi`) are accepted. MIDI imports open

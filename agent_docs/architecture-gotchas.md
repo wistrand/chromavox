@@ -201,3 +201,23 @@
 - Elements with `el.spin` keep the render loop active even when
   nothing else is dirty. If spin is set to zero the element stops
   marking dirty.
+- **Flexbox / grid `min-width: auto` inflation.** Both grid items and
+  flex items default to `min-width: auto`, which is their content's
+  *intrinsic* size. On mobile the canvas's intrinsic dimension is
+  `width = canvas.w · dpr` — easily 1000-2400 px — so #stage (grid
+  item) and #bench-viewport (flex item) were being forced wider than
+  the viewport by the canvas's pixel-resolution attributes, manifesting
+  as "bench clipped on the right" with no top/bottom letterbox.
+  Affected elements need `min-width: 0; min-height: 0` explicitly:
+  `#stage`, `#bench-viewport`, `#toolbar`, `#transport`, plus
+  `min-width: 0` on `#gl`. If you add another grid or flex element
+  that contains a large-intrinsic-size child (canvas, image), add
+  `min-width: 0` preemptively or the layout will creep back to
+  overflowing on narrow screens.
+- Labels (`#emitter-labels`, `#sensor-labels`) and GL-drawn wall
+  markers (`renderer.showTicks`) both auto-hide at `@media (max-width:
+  600px)` (drawer mode). The Labels checkbox is CSS-only and matters
+  only at larger widths; the Markers checkbox goes through a JS
+  `matchMedia` gate: `showTicks = ticksCheckbox.checked && !narrowMql.matches`.
+  If you add new mobile breakpoints or rename the 600 px threshold,
+  update both the CSS query and the `matchMedia` pattern in main.js.
