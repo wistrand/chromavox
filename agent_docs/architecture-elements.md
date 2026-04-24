@@ -84,6 +84,15 @@ table.
 The renderer's `MAX_EDGES` limit in `docs/js/renderer.js` constrains how
 many vertices an element can have (applies to the polygon representation).
 
+`localAABB(el)` is an O(1), zero-allocation sibling that returns just
+the axis-aligned bounding box `{ w, h }` in local space, derived
+directly from schema fields (size, w, h, radius, and — for diamond —
+the table/crown/pavilion ratios). Used by per-frame hot paths like the
+smoke-source packer where walking `localPolygon`'s N point objects
+(128 for a circle) would be GC-pressure-heavy. If you add a new
+element kind, extend both helpers: `localPolygon` for the visible
+shape, `localAABB` for the fast bounds.
+
 ## Lens parameter constraints
 
 - `lens-convex`: user picks `h` (aperture) and `radius`; sagitta is
@@ -135,10 +144,13 @@ a closed light trap regardless of entry angle (caveat: some chosen
 1. Add an entry to `ELEMENTS` in `docs/js/elements.js` with label,
    material, props, resize, and pinch.
 2. Extend `localPolygon` in `docs/js/scene.js` with its geometry.
-3. Extend `elementOutlineColor` in the renderer (or let it fall through
+3. Extend `localAABB` in `docs/js/scene.js` with a per-kind bounds
+   formula (smoke source packer relies on this; falls back to a
+   100×100 default otherwise).
+4. Extend `elementOutlineColor` in the renderer (or let it fall through
    to the default) and optionally add a `LOOK` entry for the element
    pass.
-4. Add a tool button in `play.html` (inside the `#toolbar .tools`
+5. Add a tool button in `play.html` (inside the `#toolbar .tools`
    group) — `placeable` set in `UI.bindTools` picks it up
    automatically.
 

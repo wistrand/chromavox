@@ -221,3 +221,15 @@
   `matchMedia` gate: `showTicks = ticksCheckbox.checked && !narrowMql.matches`.
   If you add new mobile breakpoints or rename the 600 px threshold,
   update both the CSS query and the `matchMedia` pattern in main.js.
+- **Shader-time modulation: integrate velocity, don't multiply
+  position.** A natural-looking formulation of "drift with oscillating
+  speed" looks like `p += t * v0 * (1 + k*sin(w*t))`, but its time
+  derivative contains `t * v0 * k * w * cos(w*t)` — linear in `t`, so
+  the effective drift rate grows without bound as the page stays
+  open. This is what caused the smoke to appear to "speed up after a
+  while." The correct form is the integral of the intended velocity
+  `v(t) = v0 * (1 + k*sin(wt + φ))`, i.e.
+  `p(t) = v0*t + (v0*k/w) * (cos(φ) - cos(wt + φ))`. Bounded
+  derivative forever. Rule of thumb: if you want a quantity's *rate*
+  to oscillate, write `p(t) = v0*t + amp * (1 - cos(wt))` directly,
+  not `t * v0 * (1 + k*sin(wt))`.

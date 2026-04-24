@@ -32,7 +32,9 @@ No dependencies.
   in `elements.js`. `createScene()` initialises `scene.runtime`
   (transient per-frame state: `micLevels`, `wlPerSource`) and
   increments `scene.generation` (used by the tracer to detect scene
-  replacement and auto-reset persistence).
+  replacement and auto-reset persistence). `localAABB(el)` is a
+  zero-allocation alternative to `localPolygon` for hot paths that
+  only need bounds (notably the per-frame smoke source packer).
 - `docs/js/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
 - `docs/js/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
   rendered into a **HDR `RGBA16F` FBO** via `EXT_color_buffer_float`
