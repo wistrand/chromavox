@@ -26,6 +26,7 @@ window.chromavox = cv;
 
 const canvas = document.getElementById('gl');
 const renderer = new Renderer(canvas);
+cv.renderer = renderer; // expose early so UI pointer handlers can see it
 const freshStart = new URLSearchParams(location.search).has('init');
 let scene;
 try {
@@ -44,8 +45,8 @@ let tracer = (gpuTracer && gpuTracer._ready) ? gpuTracer : cpuTracer;
 
 // Highlight tracer: visualizes rays from one emitter on hover.
 // Separate CPU tracer instance — never fed to synth.
-const highlightTracer = new Tracer();
-let highlightEmitter = -1; // -1 = none
+// Highlight tracer removed — per-mousemove CPU retrace was too expensive
+// on mobile for what was purely a cosmetic hover effect.
 
 // Auto-switch: use CPU tracer when delay elements are present (GPU
 // tracer doesn't support particle simulation / secondary rays).
@@ -891,23 +892,6 @@ document.getElementById('midi-gain').addEventListener('input', e => {
 });
 
 // --- Emitter highlight on hover ---
-// When the mouse hovers near the left-wall emitter ticks, highlight
-// that emitter's rays by running a lightweight CPU trace.
-{
-  const HOVER_ZONE = 40; // bench pixels from left wall
-  canvas.addEventListener('mousemove', e => {
-    const rect = canvas.getBoundingClientRect();
-    const benchX = (e.clientX - rect.left) / rect.width * scene.bench.w;
-    const benchY = (e.clientY - rect.top) / rect.height * scene.bench.h;
-    if (benchX > HOVER_ZONE) { highlightEmitter = -1; return; }
-    const nSrc = scene.emitter.count;
-    const stripH = scene.bench.h / nSrc;
-    highlightEmitter = Math.max(0, Math.min(nSrc - 1,
-      nSrc - 1 - Math.floor(benchY / stripH)));
-  });
-  canvas.addEventListener('mouseleave', () => { highlightEmitter = -1; });
-}
-
 // --- Touch input: pointer events on stage → emitter levels ---
 // Listen on #stage (not canvas) so touches in the letterbox black
 // bars also register — the Y coordinate maps to emitters regardless
@@ -2495,47 +2479,27 @@ function frame() {
   // frame, so we must re-trace whenever the scene is dirty *or* any
   // pool holds in-flight particles. Outside those conditions RAF idles.
   const particlesInFlight = tracer.activeParticleCount() > 0;
-  // Highlight tracer disabled — full CPU retrace per mousemove is too
-  // expensive on mobile. The emitter hover effect is cosmetic.
-  const highlightChanged = false;
-  if (dirty || particlesInFlight) {
-    dirty = false;
-    tracer.trace(scene);
-    // Push display capture hooks into the renderer between the element
-    // pass and the overlay pass — gets rays + elements without ticks/lines.
-    renderer.onPreOverlay = (midi.push.output && midi.push.displayConnected)
-      ? () => midi.push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas)
-      : null;
-    // Highlight trace: single emitter, CPU, overlay only.
-    if (highlightEmitter >= 0) {
-      const hlScene = {
-        bench: scene.bench,
-        emitter: {
-          ...scene.emitter,
-          disabled: new Set(),
-        },
-        sensorCount: scene.sensorCount,
-        elements: scene.elements,
-        runtime: {
-          micLevels: (() => {
-            const l = new Float32Array(scene.emitter.count);
-            l[highlightEmitter] = 1;
-            return l;
-          })(),
-          wlPerSource: null,
-        },
-        generation: scene.generation,
-      };
-      highlightTracer.trace(hlScene);
-      renderer.highlightSegments = highlightTracer;
-    } else {
-      renderer.highlightSegments = null;
+  // Smoke is animated — redraw every frame while enabled or while a
+  // pointer swirl is still decaying, even if nothing else is dirty.
+  // The tracer stays gated on dirty/particles (expensive), but draw()
+  // runs whenever the smoke needs its per-frame noise update.
+  const smokeAnimating = renderer.smokeEnabled || renderer.hasActivePointers;
+  const retrace = dirty || particlesInFlight;
+  if (retrace || smokeAnimating) {
+    if (retrace) {
+      dirty = false;
+      tracer.trace(scene);
+      // Push display capture hooks into the renderer between the element
+      // pass and the overlay pass — gets rays + elements without ticks/lines.
+      renderer.onPreOverlay = (midi.push.output && midi.push.displayConnected)
+        ? () => midi.push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas)
+        : null;
     }
 
     renderer.draw(scene, tracer);
     renderer.onPreOverlay = null;
     // Readout runs when retraced or still decaying from a previous trace.
-    renderer.updateReadout(scene, tracer);
+    if (retrace) renderer.updateReadout(scene, tracer);
   } else if (renderer._peakMax > 0.001) {
     // Decay-only: readout IIR is settling, redraw bars without retrace.
     renderer.updateReadout(scene, tracer);
@@ -2581,7 +2545,8 @@ function frame() {
     || readoutDecaying
     || songPlayer.playing || (mic.active && mic.source !== 'touch')
     || (mic._filePlaying)
-    || renderer.smokeEnabled; // animated background needs continuous frames
+    || renderer.smokeEnabled // animated background needs continuous frames
+    || renderer.hasActivePointers; // swirl sources fading out
   if (needsFrame) scheduleFrame();
 }
 // Expose key objects for console debugging: chromavox.scene, chromavox.synth, etc.

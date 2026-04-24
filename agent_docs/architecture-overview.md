@@ -40,7 +40,26 @@ No dependencies.
   `renderer.smokeEnabled` is true, a separate **pre-pass** writes an
   animated simplex-FBM smoke into its own RGBA8 texture — RGB = cool
   blue-grey haze, **A = normalized density**; the HDR ray FBO stays
-  rays-only. When smoke is on, a **two-pass separable Gaussian** runs
+  rays-only. Scene elements and recent pointer taps contribute to a
+  per-frame **smoke source list** (`renderer.updateSources(scene)`).
+  Each source carries two independent scalars — `pushK` (radial) and
+  `swirlK` (tangential, signed). Elements emit 2-3 sources along
+  their long axis (from the local polygon AABB) with anisotropic
+  elliptic falloff rotated to match the element;
+  `pushK = K_ELEM_STRENGTH / √N`, and `swirlK = el.spin · K_SPIN_SWIRL / √N`
+  so a spinning element stirs the smoke in the same direction as its
+  rotation while a stationary one just pushes smoke radially. Pointer
+  sources set `pushK = 0` and `swirlK = K_PTR_STRENGTH · fade`; the
+  swirl tracks the pointer live while held, then fades exponentially
+  over ~0.35 s once released. Sources are packed into a pooled
+  `Float32Array(48 × 8)` and uploaded via one `gl.uniform4fv` as
+  `vec4 uSources[96]`; `renderer.hasActivePointers` keeps the RAF
+  loop alive while swirls decay. The smoke shader accumulates these
+  in bench space, scales into FBM-input space, and adds them to the
+  ambient noise-domain-warp so smoke visibly parts around elements
+  and swirls under fingers. When smoke is off both the source
+  packing and GPU loop are skipped entirely. When smoke is on, a
+  **two-pass separable Gaussian** runs
   on a half-resolution `RGBA16F` ping-pong (`bloomTexA` → `bloomTexB`)
   — horizontal then vertical, 9-tap kernel, 1.6-texel tap spacing
   ≈ 24 px halo at full res. HDR preserved end-to-end so bright ray

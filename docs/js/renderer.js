@@ -9,10 +9,19 @@
 //   3. Overlay lines on top (bench outline, emitter/sensor ticks, element
 //      outlines, selection handle). Alpha blend.
 
-import { worldEdges } from './scene.js';
+import { worldEdges, localPolygon } from './scene.js';
 import { wavelengthToRGB, MATERIALS } from './spectrum.js';
 
 const MAX_EDGES = 128;
+// Smoke displacement sources. Mirrors the #define in SMOKE_FS — keep in sync.
+// 48 sources × 2 vec4s = 96 vec4 uniform slots; WebGL2 guarantees ≥ 224.
+const MAX_SMOKE_SOURCES = 48;
+const PTR_FADE_SEC = 0.35;
+const PTR_RISE_SEC = 0.15; // exponential ramp-in when a finger touches down
+const PTR_RADIUS_BENCH = 120;
+const K_ELEM_STRENGTH = 2.2; // push strength per element source (bench units, pre-normalization)
+const K_SPIN_SWIRL = 7.0;    // swirl strength per rad/s of element angular velocity
+const K_PTR_STRENGTH = 3.2;  // swirl strength per pointer source
 
 const RAY_VS = `#version 300 es
 in vec2 aCorner;
@@ -80,11 +89,26 @@ void main() {
 
 const SMOKE_FS = `#version 300 es
 precision highp float;
+#define MAX_SOURCES 48
 in vec2 vUV;
 uniform float uTime;
 uniform vec2 uAspect;    // (bench.w, bench.h)
 uniform float uIntensity;
 uniform float uHue;      // smoke "hi" color hue in degrees (0..360)
+
+// Smoke displacement sources. Each source is two vec4s:
+//   s0 = (cx, cy, invRx, invRy)   center in bench units + local-axis inverse radii
+//   s1 = (cosA, sinA, pushK, swirlK)
+//        cosA/sinA: element rotation (for anisotropic falloff)
+//        pushK: radial push magnitude (≥ 0 for elements, 0 for pointers)
+//        swirlK: tangential swirl magnitude (signed: +CCW, −CW)
+// A source can mix push + swirl freely — e.g. a spinning element gets
+// both a push from its presence and a swirl proportional to el.spin.
+// WebGL2 min MAX_FRAGMENT_UNIFORM_VECTORS is 224, so 96 vec4s here is
+// safe on every conformant implementation. Bump MAX_SOURCES with care.
+uniform int uSourceCount;
+uniform vec4 uSources[MAX_SOURCES * 2];
+
 out vec4 outColor;
 
 // HSV to linear RGB. h in [0,1], s, v in [0,1].
@@ -167,7 +191,52 @@ void main() {
     snoise(p * 1.4 + vec2( wt * 0.8,  wt * 0.4)),
     snoise(p * 1.4 + vec2(-wt * 0.3,  wt * 0.9) + 17.3)
   );
-  float n = fbm(p + warp * 0.30, uTime);
+
+  // --- Source displacement ---
+  // Object sources push smoke radially; pointer sources swirl it. The
+  // anisotropic elliptic falloff lets a long mirror have a long wake
+  // without anisotropizing the push direction. Accumulated in bench
+  // space, then scaled into FBM-input space (same 300 times scaleMod
+  // divisor as p0) and added to the ambient turbulence warp. The
+  // per-source strength constant is tuned low so the ambient
+  // turbulence dominates and the sources just nudge the field.
+  vec2 sourceWarp = vec2(0.0);
+  if (uSourceCount > 0) {
+    // Bench y runs TOP→DOWN (y=0 is top, y=bench.h is bottom) while vUV
+    // has y=0 at the bottom of the quad. Flip Y so sources in bench
+    // coords line up with the on-screen position of each fragment.
+    vec2 pBench = vec2(vUV.x, 1.0 - vUV.y) * uAspect;
+    for (int i = 0; i < MAX_SOURCES; i++) {
+      if (i >= uSourceCount) break;
+      vec4 s0 = uSources[i * 2];
+      vec4 s1 = uSources[i * 2 + 1];
+      vec2 d = pBench - s0.xy;
+      // Rotate d into the source's local frame (for anisotropic falloff).
+      vec2 lx = vec2( s1.x * d.x + s1.y * d.y,
+                     -s1.y * d.x + s1.x * d.y);
+      vec2 e = lx * s0.zw;
+      // Squared elliptic falloff: 1/(e²+1)² drops off ~quadratically
+      // so the influence stays localized. Plain 1/(e²+1) combined with
+      // dir = d (magnitude grows linearly with distance) kept roughly
+      // 30% of peak force at 3× the radius.
+      float fall = 1.0 / (dot(e, e) + 1.0);
+      fall *= fall;
+      // Independent push (radial) and swirl (tangential) contributions.
+      // A stationary element gives pure push; a spinning one adds
+      // swirl proportional to its angular velocity; a pointer is pure
+      // swirl with zero push.
+      vec2 rad = d;
+      vec2 tng = vec2(-d.y, d.x);
+      sourceWarp += (rad * s1.z + tng * s1.w) * fall;
+    }
+    // Convert to FBM-input space. Same 300 * scaleMod divisor as p0,
+    // and flip Y because the warp is computed in bench coords (y down)
+    // while p lives in vUV coords (y up).
+    sourceWarp.x /=  (300.0 * scaleMod);
+    sourceWarp.y /= -(300.0 * scaleMod);
+  }
+
+  float n = fbm(p + warp * 0.30 + sourceWarp, uTime);
 
   // Soft, wide smoothstep — no hard plume edges. This is the main
   // "faded smoke" lever: the wider the range, the more washed-out the
@@ -451,16 +520,36 @@ export class Renderer {
 
     this.smokeProgram = buildProgram(gl, SMOKE_VS, SMOKE_FS);
     this.smoke = {
-      aCorner:    gl.getAttribLocation(this.smokeProgram, 'aCorner'),
-      uTime:      gl.getUniformLocation(this.smokeProgram, 'uTime'),
-      uAspect:    gl.getUniformLocation(this.smokeProgram, 'uAspect'),
-      uIntensity: gl.getUniformLocation(this.smokeProgram, 'uIntensity'),
-      uHue:       gl.getUniformLocation(this.smokeProgram, 'uHue'),
+      aCorner:      gl.getAttribLocation(this.smokeProgram, 'aCorner'),
+      uTime:        gl.getUniformLocation(this.smokeProgram, 'uTime'),
+      uAspect:      gl.getUniformLocation(this.smokeProgram, 'uAspect'),
+      uIntensity:   gl.getUniformLocation(this.smokeProgram, 'uIntensity'),
+      uHue:         gl.getUniformLocation(this.smokeProgram, 'uHue'),
+      uSourceCount: gl.getUniformLocation(this.smokeProgram, 'uSourceCount'),
+      uSources:     gl.getUniformLocation(this.smokeProgram, 'uSources[0]'),
     };
     this.smokeEnabled = false;
     this.smokeIntensity = 1.0;
     this.smokeHue = 220; // cool blue-grey by default — the original look
     this.showTicks = true; // emitter + sensor wall markers
+
+    // Smoke source state. `_sourceData` is a pooled Float32Array packed
+    // per-frame in updateSources(); `_pointerSources` is a fixed-size
+    // ring where rapid taps overwrite the oldest entry. Zero GC on
+    // the hot path.
+    this._sourceData = new Float32Array(MAX_SMOKE_SOURCES * 8);
+    this._sourceCount = 0;
+    this._pointerSources = [];
+    for (let i = 0; i < 16; i++) {
+      this._pointerSources.push({
+        id: -1, x: 0, y: 0,
+        tPress: 0,       // touchdown time — drives exponential ramp-in
+        tRelease: 0,
+        active: false,   // slot in use
+        released: false, // pointer has been lifted; fade from tRelease
+      });
+    }
+    this._hasActivePointers = false;
 
     // Separate FBO for the smoke pre-pass. RGBA8 is plenty — RGB holds
     // the cool-grey haze color, alpha holds normalized density used as
@@ -729,6 +818,188 @@ export class Renderer {
     return { w: this._benchW, h: this._benchH };
   }
 
+  // Register / move / release a pointer-driven swirl source at bench
+  // coordinates. Sources are keyed by `id` (pointer ID) so the swirl
+  // follows the finger live: pointerdown → push, pointermove → push
+  // again with the same id (updates position in place), pointerup →
+  // release. Released sources fade over PTR_FADE_SEC. No-op when
+  // smoke is disabled — without updateSources() to run the fade, a
+  // live pointer would pin `_hasActivePointers` forever.
+  pushPointerSource(id, x, y) {
+    if (!this.smokeEnabled) return;
+    // Update existing active slot for this id if one exists.
+    for (const p of this._pointerSources) {
+      if (p.active && !p.released && p.id === id) {
+        p.x = x; p.y = y;
+        this._hasActivePointers = true;
+        return;
+      }
+    }
+    // Otherwise take an unused slot, then the oldest released one,
+    // then (last resort) the oldest active one.
+    let slot = -1;
+    let oldestReleasedT = Infinity;
+    let oldestActiveT = Infinity;
+    let bestReleased = -1;
+    let bestActive = -1;
+    for (let i = 0; i < this._pointerSources.length; i++) {
+      const p = this._pointerSources[i];
+      if (!p.active) { slot = i; break; }
+      if (p.released) {
+        if (p.tRelease < oldestReleasedT) {
+          oldestReleasedT = p.tRelease;
+          bestReleased = i;
+        }
+      } else if (p.tRelease < oldestActiveT) {
+        oldestActiveT = p.tRelease;
+        bestActive = i;
+      }
+    }
+    if (slot < 0) slot = bestReleased >= 0 ? bestReleased : bestActive;
+    if (slot < 0) return;
+    const p = this._pointerSources[slot];
+    p.id = id;
+    p.x = x;
+    p.y = y;
+    p.tPress = performance.now() / 1000;
+    p.tRelease = 0;
+    p.active = true;
+    p.released = false;
+    this._hasActivePointers = true;
+  }
+
+  // Pointer lifted: flip the slot to released mode so its fade timer
+  // starts. Identified by the same `id` used at push time.
+  releasePointerSource(id) {
+    const now = performance.now() / 1000;
+    for (const p of this._pointerSources) {
+      if (p.active && !p.released && p.id === id) {
+        p.released = true;
+        p.tRelease = now;
+        return;
+      }
+    }
+  }
+
+  // True while any pointer source has non-negligible fade remaining.
+  // main.js folds this into `needsFrame` so swirls decay smoothly
+  // after release. Short-circuits to false when smoke is off: in that
+  // state `updateSources` doesn't run, so pointer slots never retire
+  // and the flag would otherwise pin the RAF loop awake forever.
+  get hasActivePointers() {
+    return this.smokeEnabled && this._hasActivePointers;
+  }
+
+  // Populate `_sourceData` from the scene's elements + active pointer
+  // sources. Zero-GC: reuses the pooled array and ring buffer.
+  // Source order: pointers first (preserved under overflow), then
+  // elements. Elongated elements get 2 or 3 along-axis sources so the
+  // carved wake stretches along the shape's long direction.
+  updateSources(scene) {
+    const data = this._sourceData;
+    data.fill(0);
+    const now = performance.now() / 1000;
+    let idx = 0;
+    let anyActivePtr = false;
+
+    // Pointer sources — isotropic swirl. Held pointers ramp in from 0
+    // over PTR_RISE_SEC after touchdown (so the swirl lerps in instead
+    // of popping), then stay at full strength for as long as the
+    // finger is down. Released ones decay from their release time so
+    // the swirl trails off when the finger lifts.
+    const invRptr = 1 / PTR_RADIUS_BENCH;
+    for (const p of this._pointerSources) {
+      if (!p.active) continue;
+      let fade;
+      if (p.released) {
+        fade = Math.exp(-(now - p.tRelease) / PTR_FADE_SEC);
+        if (fade < 0.02) { p.active = false; p.released = false; continue; }
+      } else {
+        fade = 1.0 - Math.exp(-(now - p.tPress) / PTR_RISE_SEC);
+      }
+      anyActivePtr = true;
+      if (idx >= MAX_SMOKE_SOURCES) continue;
+      const o = idx * 8;
+      data[o    ] = p.x;
+      data[o + 1] = p.y;
+      data[o + 2] = invRptr;
+      data[o + 3] = invRptr;
+      data[o + 4] = 1;                      // cosA = 1 (isotropic)
+      data[o + 5] = 0;                      // sinA = 0
+      data[o + 6] = 0;                      // pushK = 0
+      data[o + 7] = K_PTR_STRENGTH * fade;  // swirlK = tangential CCW
+      idx++;
+    }
+    this._hasActivePointers = anyActivePtr;
+
+    // Element sources.
+    for (const el of scene.elements) {
+      if (idx >= MAX_SMOKE_SOURCES) break;
+      // Local-space polygon bounds → unbiased by rotation.
+      const poly = localPolygon(el);
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const q of poly) {
+        if (q.x < minX) minX = q.x;
+        if (q.y < minY) minY = q.y;
+        if (q.x > maxX) maxX = q.x;
+        if (q.y > maxY) maxY = q.y;
+      }
+      const w = Math.max(1, maxX - minX);
+      const h = Math.max(1, maxY - minY);
+      const longLen = Math.max(w, h);
+      const shortLen = Math.min(w, h);
+      const ar = longLen / shortLen;
+      // Always ≥ 2 sources so rotation visibly orbits them, even for
+      // near-square shapes (AR < 1.5). A single centered source at the
+      // element's centroid has no orientation and reads as "nothing
+      // happened" when the element spins.
+      const n = ar < 1.5 ? 2 : ar < 3 ? 2 : 3;
+      const invRlong = 2 / longLen;
+      const invRshort = 2 / shortLen;
+      const pushK = K_ELEM_STRENGTH / Math.sqrt(n);
+      // Spin generates swirl. Signed so CCW spin stirs CCW and CW stirs
+      // CW; normalized by √N so splitting into more sources doesn't
+      // amplify the total torque.
+      const swirlK = (el.spin || 0) * K_SPIN_SWIRL / Math.sqrt(n);
+      const rot = el.rot || 0;
+      const cs = Math.cos(rot);
+      const sn = Math.sin(rot);
+      // Along-axis offsets in local space, scaling with aspect ratio:
+      // near-square gets a modest spread, elongated gets sources spread
+      // further along the long axis.
+      const OFFS = ar < 1.5 ? [-1/5, 1/5]
+                 : ar < 3   ? [-1/4, 1/4]
+                 :            [-1/3, 0, 1/3];
+      const longAlongX = w >= h;
+      // In source-local frame, "long axis" is whichever direction has
+      // the larger invR (smaller value since invR = 2/len). Set s0.zw
+      // so the first component aligns with the long axis.
+      const sInvX = longAlongX ? invRlong : invRshort;
+      const sInvY = longAlongX ? invRshort : invRlong;
+      for (const t of OFFS) {
+        if (idx >= MAX_SMOKE_SOURCES) break;
+        const offLocal = t * longLen;
+        const dxLocal = longAlongX ? offLocal : 0;
+        const dyLocal = longAlongX ? 0 : offLocal;
+        // Rotate offset into world.
+        const rx = dxLocal * cs - dyLocal * sn;
+        const ry = dxLocal * sn + dyLocal * cs;
+        const o = idx * 8;
+        data[o    ] = el.x + rx;
+        data[o + 1] = el.y + ry;
+        data[o + 2] = sInvX;
+        data[o + 3] = sInvY;
+        data[o + 4] = cs;
+        data[o + 5] = sn;
+        data[o + 6] = pushK;
+        data[o + 7] = swirlK;
+        idx++;
+      }
+    }
+
+    this._sourceCount = idx;
+  }
+
   draw(scene, tracer) {
     const gl = this.gl;
 
@@ -741,11 +1012,19 @@ export class Renderer {
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.smokeFbo);
       gl.viewport(0, 0, this.canvas.width, this.canvas.height);
       gl.disable(gl.BLEND);
+      // Smoke is on — pack elements + pointer sources and upload.
+      // When smoke is off we skip this work entirely (per design).
+      this.updateSources(scene);
       gl.useProgram(this.smokeProgram);
       gl.uniform1f(this.smoke.uTime, performance.now() / 1000);
       gl.uniform2f(this.smoke.uAspect, scene.bench.w, scene.bench.h);
       gl.uniform1f(this.smoke.uIntensity, this.smokeIntensity);
       gl.uniform1f(this.smoke.uHue, this.smokeHue);
+      gl.uniform1i(this.smoke.uSourceCount, this._sourceCount);
+      // gl.uniform4fv uploads vec4s; total floats = MAX_SMOKE_SOURCES * 8
+      // (= 2 vec4s per source × 4 floats per vec4). Unused slots are
+      // zero-filled by updateSources() so stale data can't leak.
+      gl.uniform4fv(this.smoke.uSources, this._sourceData);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
       gl.enableVertexAttribArray(this.smoke.aCorner);
       gl.vertexAttribPointer(this.smoke.aCorner, 2, gl.FLOAT, false, 0, 0);
@@ -992,7 +1271,6 @@ export class Renderer {
     // Per-sensor mini-spectrum is 64 bins × 6 stacked lines × 2 verts per line.
     let estimate = 8 + scene.emitter.count * 2 + scene.sensorCount * (2 + binCount * 6);
     for (const el of scene.elements) estimate += 100;
-    if (this.highlightSegments) estimate += this.highlightSegments.segmentCount * 2;
     this.ensureOverlayCapacity(estimate * 2);
 
     const { bench } = scene;
@@ -1099,26 +1377,6 @@ export class Renderer {
             cx + Math.cos(a2) * arcR, cy + Math.sin(a2) * arcR,
             1, 0.8, 0.3, 0.6);
         }
-      }
-    }
-
-    // Highlight segments: draw rays from the hovered emitter as bright
-    // overlay lines so the user can see where that emitter's rays go.
-    if (this.highlightSegments) {
-      const ht = this.highlightSegments;
-      for (let i = 0; i < ht.segmentCount; i++) {
-        const off = i * 12;
-        const I1 = ht.segmentData[off + 7];
-        const I2 = ht.segmentData[off + 11];
-        if (I1 < 1e-6 && I2 < 1e-6) continue;
-        const r = ht.segmentData[off + 4] / (I1 || 1);
-        const g = ht.segmentData[off + 5] / (I1 || 1);
-        const b = ht.segmentData[off + 6] / (I1 || 1);
-        const a = Math.min(1, Math.max(0.3, (I1 + I2) * 3));
-        this.line(
-          ht.segmentData[off], ht.segmentData[off + 1],
-          ht.segmentData[off + 2], ht.segmentData[off + 3],
-          r * 0.6 + 0.4, g * 0.6 + 0.4, b * 0.6 + 0.4, a);
       }
     }
 

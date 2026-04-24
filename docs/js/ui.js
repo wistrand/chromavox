@@ -567,7 +567,6 @@ export class UI {
     this.canvas.setPointerCapture(e.pointerId);
     const { x, y } = this.canvasToBench(e.clientX, e.clientY);
     this.pointers.set(e.pointerId, { x, y });
-
     // Second simultaneous pointer: start pinch (scale + rotate).
     // If nothing is selected yet, find the element whose center is
     // closest to the midpoint of the two fingers — users typically
@@ -627,6 +626,13 @@ export class UI {
       }
     } else {
       this.select(null);
+      // Empty-bench click: register a smoke swirl source so the touch
+      // stirs the fog. Clicks on elements or emitter ticks don't qualify
+      // — objects emit their own displacement source already, and it
+      // read as noisy to add a swirl on top.
+      this._swirlingPointers ??= new Set();
+      this._swirlingPointers.add(e.pointerId);
+      window.chromavox?.renderer?.pushPointerSource?.(e.pointerId, x, y);
     }
   }
 
@@ -634,6 +640,11 @@ export class UI {
     const { x, y } = this.canvasToBench(e.clientX, e.clientY);
     if (this.pointers.has(e.pointerId)) {
       this.pointers.set(e.pointerId, { x, y });
+      // Keep the smoke swirl stuck to the moving finger/mouse — only
+      // for pointers that started as empty-bench swirls.
+      if (this._swirlingPointers?.has(e.pointerId)) {
+        window.chromavox?.renderer?.pushPointerSource?.(e.pointerId, x, y);
+      }
     }
     // Cancel a pending emitter long-press if the pointer drifts too far.
     if (this.emitterPending && this.emitterPending.pointerId === e.pointerId) {
@@ -690,6 +701,11 @@ export class UI {
   onUp(e) {
     try { this.canvas.releasePointerCapture(e.pointerId); } catch {}
     this.pointers.delete(e.pointerId);
+    // Let the smoke swirl decay from here — but only for pointers that
+    // actually created one (empty-bench clicks).
+    if (this._swirlingPointers?.delete(e.pointerId)) {
+      window.chromavox?.renderer?.releasePointerSource?.(e.pointerId);
+    }
     // Emitter long-press / click resolution.
     if (this.emitterPending && this.emitterPending.pointerId === e.pointerId) {
       clearTimeout(this.emitterPending.timer);
