@@ -52,6 +52,11 @@ html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: 
   height: 54px;
   min-height: 54px;
   box-sizing: border-box;
+  /* Don't let the toolbar's intrinsic button width inflate its grid
+     column. Without this the whole #app grid stretches past the
+     viewport on narrow mobile; with it, the toolbar collapses to the
+     column width and its own overflow-x:auto kicks in. */
+  min-width: 0;
 }
 #toolbar > * { flex-shrink: 0; }
 #toolbar .tools { display: flex; gap: 6px; grid-template-columns: none; }
@@ -155,6 +160,10 @@ button:disabled { opacity: 0.35; cursor: not-allowed; border-color: var(--border
   height: 38px;
   min-height: 38px;
   box-sizing: border-box;
+  /* Same reason as #toolbar — the transport's child min-widths must
+     not inflate the grid column beyond the viewport. */
+  min-width: 0;
+  overflow: hidden;
 }
 #transport select { font: inherit; padding: 4px 6px; background: #1d222a; color: var(--ink); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; }
 #transport button { padding: 4px 10px; font-size: 13px; }
@@ -170,6 +179,12 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
   justify-content: center;
   overflow: hidden;
   touch-action: none;
+  /* Grid items default to `min-width: auto`, which lets the stage grow
+     to fit the canvas's intrinsic (pixel-resolution) size and push past
+     the 1fr column width. That produced the "clipped on the right"
+     layout on narrow mobile widths. Opt out on both axes. */
+  min-width: 0;
+  min-height: 0;
 }
 #stage.drop-target {
   outline: 2px dashed #6cf;
@@ -188,12 +203,26 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
    width and height constraints are enforced correctly on mobile. */
 #bench-viewport {
   position: relative;
+  /* Flexbox `min-width: auto` default would clamp this to the canvas's
+     intrinsic size (width/height attributes = w·dpr, easily 800–2400 px
+     on mobile), overflowing the stage on narrow screens. Opt out so JS
+     can size us below the canvas's pixel resolution. */
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 auto;
 }
-#gl { width: 100%; height: 100%; display: block; touch-action: none; }
+#gl { width: 100%; height: 100%; display: block; touch-action: none; min-width: 0; min-height: 0; }
 #emitter-labels { position: absolute; top: 0; left: 0; bottom: 0; width: 56px; pointer-events: none; z-index: 4; }
 #sensor-labels  { position: absolute; top: 0; right: 0; bottom: 0; width: 56px; pointer-events: none; z-index: 4; }
 #app.no-labels #emitter-labels,
 #app.no-labels #sensor-labels { display: none; }
+/* On narrow (drawer-mode) screens the panels are hidden by default and
+   the bench is short on width; hide the scale labels too so the rays
+   have the full width. User's Labels checkbox is still respected at
+   larger widths. */
+@media (max-width: 600px) {
+  #emitter-labels, #sensor-labels { display: none; }
+}
 #welcome-overlay {
   position: absolute;
   inset: 0;
@@ -251,7 +280,7 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
      when the stage was taller than the bench-viewport. */
   transform: translate(0, -50%);
   font-size: 10px;
-  color: rgba(220, 230, 240, 0.85);
+  color: rgba(220, 230, 240, 0.55);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 3px #000, 0 0 6px #000;
@@ -261,7 +290,7 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
   right: 4px;
   transform: translate(0, -50%);
   font-size: 10px;
-  color: rgba(220, 230, 240, 0.85);
+  color: rgba(220, 230, 240, 0.55);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 3px #000, 0 0 6px #000;

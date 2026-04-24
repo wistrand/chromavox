@@ -675,6 +675,14 @@ export class Renderer {
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    // Also observe the stage element directly — media-query transitions
+    // and drawer panel toggles can change stage.clientWidth/Height
+    // without a window resize event, and the canvas should reflow too.
+    const stageEl = this.canvas.parentElement?.parentElement;
+    if (stageEl && typeof ResizeObserver !== 'undefined') {
+      this._stageRO = new ResizeObserver(() => this.resize());
+      this._stageRO.observe(stageEl);
+    }
   }
 
   // Call at the start of each frame with the scene to update quality tier.
@@ -749,12 +757,27 @@ export class Renderer {
   resize() {
     const vp = this.canvas.parentElement;
     const stage = vp.parentElement;
-    const stageW = stage.clientWidth;
-    const stageH = stage.clientHeight;
+    const stageW = Math.max(1, stage.clientWidth);
+    const stageH = Math.max(1, stage.clientHeight);
     const ASPECT = this._benchW / this._benchH;
-    let w = stageH * ASPECT;
-    let h = stageH;
-    if (w > stageW) { w = stageW; h = stageW / ASPECT; }
+    // Pick the axis that runs out first. Stage-aspect wider than
+    // bench-aspect → height-constrained (horizontal letterbox). Stage
+    // narrower than bench-aspect → width-constrained (vertical letterbox
+    // on top and bottom). The old form worked out to the same result
+    // mathematically, but reading it this way makes it obvious neither
+    // axis can exceed the stage, and floating-point rounding can't
+    // accidentally push the bench past the stage edge.
+    let w, h;
+    if (stageW / stageH >= ASPECT) {
+      h = stageH;
+      w = h * ASPECT;
+    } else {
+      w = stageW;
+      h = w / ASPECT;
+    }
+    // Defensive clamp in case of pixel-rounding drift.
+    w = Math.min(w, stageW);
+    h = Math.min(h, stageH);
     vp.style.width  = Math.floor(w) + 'px';
     vp.style.height = Math.floor(h) + 'px';
     // Sync sensor readout height to bench viewport so bars align

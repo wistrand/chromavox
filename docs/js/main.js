@@ -390,12 +390,18 @@ applyLabels();
 labelsToggle.addEventListener('change', applyLabels);
 
 const ticksToggle = document.getElementById('ticks-toggle');
+// On narrow (drawer-mode) screens, force-hide the emitter/sensor wall
+// markers too — the panels are already collapsed, so the bench should
+// use the full width without competing visual noise. The checkbox
+// state is still respected at larger widths.
+const narrowMql = window.matchMedia('(max-width: 600px)');
 const applyTicks = () => {
-  renderer.showTicks = ticksToggle.checked;
+  renderer.showTicks = ticksToggle.checked && !narrowMql.matches;
   setDirty();
 };
 applyTicks();
 ticksToggle.addEventListener('change', applyTicks);
+narrowMql.addEventListener('change', applyTicks);
 
 const bloomSlider = document.getElementById('bloom-spread');
 const bloomLabel = document.getElementById('bloom-spread-val');
