@@ -82,9 +82,17 @@ const SMOKE_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
 uniform float uTime;
-uniform vec2 uAspect; // (bench.w, bench.h)
+uniform vec2 uAspect;    // (bench.w, bench.h)
 uniform float uIntensity;
+uniform float uHue;      // smoke "hi" color hue in degrees (0..360)
 out vec4 outColor;
+
+// HSV to linear RGB. h in [0,1], s, v in [0,1].
+vec3 hsv2rgb(vec3 c) {
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
 
 // Ashima Arts simplex noise (2D). Output ~[-1, 1].
 vec3 _perm(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
@@ -169,8 +177,12 @@ void main() {
   // Lightly tinted grey. Both endpoints are darker and closer
   // together than before so the smoke sits as a backdrop, never
   // competing with the rays.
-  vec3 lo = vec3(0.010, 0.013, 0.020);
-  vec3 hi = vec3(0.09, 0.11, 0.15);
+  // Hue-driven plume color. The "hi" is HSV with low saturation (0.45)
+  // and modest value (0.18) — a cool dusty tone at any hue. The "lo"
+  // is a tiny tint of the same hue so dense and sparse regions read as
+  // the same fog rather than two unrelated colors.
+  vec3 hi = hsv2rgb(vec3(uHue / 360.0, 0.45, 0.18));
+  vec3 lo = hi * 0.12;
   vec3 col = mix(lo, hi, m);
   // RGB = smoke color; A = normalized density [0,1] used as the
   // "how visible are rays here" mask in the blit + element passes.
@@ -443,9 +455,11 @@ export class Renderer {
       uTime:      gl.getUniformLocation(this.smokeProgram, 'uTime'),
       uAspect:    gl.getUniformLocation(this.smokeProgram, 'uAspect'),
       uIntensity: gl.getUniformLocation(this.smokeProgram, 'uIntensity'),
+      uHue:       gl.getUniformLocation(this.smokeProgram, 'uHue'),
     };
     this.smokeEnabled = false;
     this.smokeIntensity = 1.0;
+    this.smokeHue = 220; // cool blue-grey by default — the original look
 
     // Separate FBO for the smoke pre-pass. RGBA8 is plenty — RGB holds
     // the cool-grey haze color, alpha holds normalized density used as
@@ -730,6 +744,7 @@ export class Renderer {
       gl.uniform1f(this.smoke.uTime, performance.now() / 1000);
       gl.uniform2f(this.smoke.uAspect, scene.bench.w, scene.bench.h);
       gl.uniform1f(this.smoke.uIntensity, this.smokeIntensity);
+      gl.uniform1f(this.smoke.uHue, this.smokeHue);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
       gl.enableVertexAttribArray(this.smoke.aCorner);
       gl.vertexAttribPointer(this.smoke.aCorner, 2, gl.FLOAT, false, 0, 0);

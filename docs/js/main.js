@@ -87,7 +87,7 @@ const UI_CONTROL_IDS = [
   ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
   'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
-  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'smoke-toggle', 'bloom-spread', 'no-overlap', 'bench-aspect',
+  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'smoke-toggle', 'smoke-intensity', 'smoke-hue', 'bloom-spread', 'no-overlap', 'bench-aspect',
 ];
 function saveUiState() {
   const state = {};
@@ -390,6 +390,28 @@ const applyBloomSpread = () => {
 };
 applyBloomSpread();
 bloomSlider.addEventListener('input', applyBloomSpread);
+
+const smokeIntSlider = document.getElementById('smoke-intensity');
+const smokeIntLabel = document.getElementById('smoke-intensity-val');
+const applySmokeIntensity = () => {
+  const v = parseFloat(smokeIntSlider.value);
+  renderer.smokeIntensity = v;
+  smokeIntLabel.textContent = v.toFixed(2);
+  setDirty();
+};
+applySmokeIntensity();
+smokeIntSlider.addEventListener('input', applySmokeIntensity);
+
+const smokeHueSlider = document.getElementById('smoke-hue');
+const smokeHueLabel = document.getElementById('smoke-hue-val');
+const applySmokeHue = () => {
+  const v = parseInt(smokeHueSlider.value, 10);
+  renderer.smokeHue = v;
+  smokeHueLabel.textContent = String(v);
+  setDirty();
+};
+applySmokeHue();
+smokeHueSlider.addEventListener('input', applySmokeHue);
 
 const synthBtn = document.getElementById('synth-toggle');
 synthBtn.addEventListener('click', async () => {
