@@ -1,6 +1,6 @@
 // Entry: wire scene, tracer, renderer, UI; run the frame loop.
 
-import { createScene, serializeScene, deserializeScene, autoTitle } from './scene.js';
+import { createScene, serializeScene, deserializeScene, autoTitle, ensureRuntimeSize, bumpGeneration } from './scene.js';
 import { Tracer } from './raytracer.js';
 import { GPUTracer } from './gpu-tracer.js';
 import { Renderer } from './renderer.js';
@@ -88,7 +88,7 @@ const UI_CONTROL_IDS = [
   ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
   'synth-device',
   'emitter-count', 'sensor-count', 'sensor-sync', 'sensor-factor',
-  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'labels-toggle', 'ticks-toggle', 'smoke-toggle', 'smoke-intensity', 'smoke-hue', 'bloom-spread', 'no-overlap', 'bench-aspect',
+  'midi-gain', 'sim-rate', 'wl-bend', 'distort-toggle', 'labels-toggle', 'ticks-toggle', 'smoke-toggle', 'smoke-intensity', 'smoke-hue', 'bloom-spread', 'edge-glow-toggle', 'edge-glow-width', 'edge-glow-tau', 'no-overlap', 'bench-aspect',
 ];
 function saveUiState() {
   const state = {};
@@ -381,6 +381,39 @@ smokeToggle.addEventListener('change', () => {
   setDirty();
 });
 
+const edgeGlowToggle = document.getElementById('edge-glow-toggle');
+renderer.edgeGlowEnabled = edgeGlowToggle.checked;
+edgeGlowToggle.addEventListener('change', () => {
+  renderer.edgeGlowEnabled = edgeGlowToggle.checked;
+  // Reset accumulated state when toggled so a fresh enable starts black
+  // rather than carrying frozen values from a previous session.
+  if (!edgeGlowToggle.checked) renderer.resetEdgeGlow();
+  scheduleFrame();
+  setDirty();
+});
+
+const edgeWidthSlider = document.getElementById('edge-glow-width');
+const edgeWidthLabel = document.getElementById('edge-glow-width-val');
+const applyEdgeWidth = () => {
+  const v = parseFloat(edgeWidthSlider.value);
+  renderer.edgeGlowBandWidth = v;
+  edgeWidthLabel.textContent = String(v | 0);
+  setDirty();
+};
+applyEdgeWidth();
+edgeWidthSlider.addEventListener('input', applyEdgeWidth);
+
+const edgeTauSlider = document.getElementById('edge-glow-tau');
+const edgeTauLabel = document.getElementById('edge-glow-tau-val');
+const applyEdgeTau = () => {
+  const v = parseFloat(edgeTauSlider.value);
+  renderer.edgeGlowTau = v;
+  edgeTauLabel.textContent = v.toFixed(1) + 's';
+  setDirty();
+};
+applyEdgeTau();
+edgeTauSlider.addEventListener('input', applyEdgeTau);
+
 const labelsToggle = document.getElementById('labels-toggle');
 const appEl = document.getElementById('app');
 const applyLabels = () => {
@@ -654,10 +687,16 @@ function rebuildEmitterLabels() {
   }
 }
 rebuildEmitterLabels();
+const _onLadderChange = () => {
+  rebuildEmitterLabels();
+  // Wavelength → row mapping changed; flush edge memory so cached row
+  // colors don't disagree with the new ladder.
+  renderer.resetEdgeGlow();
+};
 ['mic-mode', 'mic-base', 'mic-source', 'chromatic-span', 'emitter-count']
-  .forEach(id => document.getElementById(id).addEventListener('input', rebuildEmitterLabels));
+  .forEach(id => document.getElementById(id).addEventListener('input', _onLadderChange));
 ['mic-mode', 'mic-base', 'mic-source']
-  .forEach(id => document.getElementById(id).addEventListener('change', rebuildEmitterLabels));
+  .forEach(id => document.getElementById(id).addEventListener('change', _onLadderChange));
 
 function rebuildSensorLabels() {
   const host = document.getElementById('sensor-labels');
@@ -1938,7 +1977,11 @@ window.addEventListener('resize', () => {
         if (g.emitter.raysPerSource !== undefined) scene.emitter.raysPerSource = g.emitter.raysPerSource;
       }
       if (g.sensorCount !== undefined) scene.sensorCount = g.sensorCount;
-      scene.runtime.micLevels = new Float32Array(scene.emitter.count);
+      // Bring runtime arrays in line with the restored shape (and bump
+      // generation so the tracer + edge-memory tripwires fire).
+      scene.runtime.micLevels = null;
+      bumpGeneration(scene);
+      ensureRuntimeSize(scene);
       if (songPlayer.onGlobal) {
         songPlayer.onGlobal(g);
         songPlayer._globalApplied = true;
@@ -2171,33 +2214,98 @@ window.addEventListener('resize', () => {
   // `.drop-target` class while something is dragged over it.
   const stage = document.getElementById('stage');
   if (stage) {
-    const hasSongFile = (dt) => dt && dt.types && Array.from(dt.types).includes('Files');
     const pickSongFile = (files) => {
       if (!files || !files.length) return null;
       const re = /\.(json|xml|musicxml|mid|midi)$/i;
       for (const f of files) if (re.test(f.name)) return f;
       return files[0]; // fall back to first (content-sniff will still work)
     };
-    stage.addEventListener('dragover', (e) => {
-      if (!hasSongFile(e.dataTransfer)) return;
+    // Accept any drag-over: recent Chromium versions hide
+    // dataTransfer.types until the drop event for privacy, so a
+    // pre-flight "is it a file?" check on dragover bails out and the
+    // browser refuses the drop entirely. We check files at drop time
+    // instead. The cost of accepting non-file drags is just a brief
+    // dashed outline.
+    //
+    // Firefox-specific: `dragenter` must also call preventDefault to
+    // signal that this element accepts the drop. Chrome is satisfied
+    // with dragover alone; Firefox treats dragenter as the gating
+    // event and refuses to fire drop without it.
+    // Bind on document, not stage. Firefox can ignore a bubbled
+    // dragover.preventDefault() from a stage ancestor when the
+    // immediate target is a canvas (the WebGL element here), refusing
+    // to fire `drop`. document-level handlers guarantee the immediate
+    // target's ancestor chain always has a handler that calls
+    // preventDefault, regardless of which sub-element is under the
+    // pointer.
+    const overStage = (e) => {
+      const t = e.target;
+      return t && (t === stage || (t.nodeType === 1 && stage.contains(t)));
+    };
+    document.addEventListener('dragover', (e) => {
+      if (!overStage(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
       stage.classList.add('drop-target');
     });
-    stage.addEventListener('dragleave', (e) => {
-      // Only drop the class when the drag truly leaves the stage, not
-      // when it moves between child elements (which fire dragleave too).
-      if (e.target === stage) stage.classList.remove('drop-target');
+    document.addEventListener('dragleave', (e) => {
+      // dragleave fires on every child boundary; only drop the class
+      // when the drag truly leaves the page.
+      if (!e.relatedTarget || !stage.contains(e.relatedTarget)) {
+        stage.classList.remove('drop-target');
+      }
     });
-    stage.addEventListener('drop', async (e) => {
-      if (!hasSongFile(e.dataTransfer)) return;
+    document.addEventListener('drop', async (e) => {
+      // Always preventDefault — otherwise the browser opens the file
+      // in a new tab when the drop misses our handler.
       e.preventDefault();
       stage.classList.remove('drop-target');
-      const f = pickSongFile(e.dataTransfer.files);
-      // Autoplay on drop (not for the file-picker import path, which
-      // stays manual). The drop gesture itself counts as a user
-      // interaction, so browsers allow the AudioContext to start.
-      if (f && await importSongFile(f) && !songPlayer.playing) playBtn.click();
+      if (!overStage(e)) return;
+      const dt = e.dataTransfer;
+      // Try DataTransfer.files first; fall back to items (modern API)
+      // which sometimes carries files when files is empty.
+      let files = dt && dt.files;
+      if ((!files || !files.length) && dt && dt.items) {
+        const collected = [];
+        for (const it of dt.items) {
+          if (it.kind === 'file') {
+            const f = it.getAsFile();
+            if (f) collected.push(f);
+          }
+        }
+        if (collected.length) files = collected;
+      }
+      if (!files || !files.length) {
+        // Firefox+Linux (especially Wayland) sometimes delivers `drop`
+        // with an empty DataTransfer when dragging from a file
+        // manager. The bytes aren't reachable from JS — open the file
+        // picker as a fallback so the user can finish the import in
+        // one extra click. Chrome bundles its own DnD layer and isn't
+        // affected.
+        if (importFile) {
+          alert('Drop received but the file contents weren’t exposed to the page (a known Firefox+Linux issue with HTTP pages). Opening the file picker — pick the file you wanted to drop.');
+          importFile.click();
+        }
+        return;
+      }
+      const f = pickSongFile(files);
+      if (!f) return;
+      // Pre-warm the synth before the await: Firefox invalidates the
+      // user-activation token across async boundaries, so kicking off
+      // synth.enable() now (while the drop gesture is still fresh)
+      // is the only way to satisfy the AudioContext autoplay policy.
+      if (!synth.active) synthBtn.click();
+      if (!await importSongFile(f)) return;
+      // Autoplay. Inline the play sequence rather than dispatching a
+      // synthetic playBtn.click() — the synthetic click runs after the
+      // await, so it has no user-activation in Firefox, and any
+      // AudioContext.resume() inside the click handler silently fails.
+      if (!songPlayer.playing && songPlayer.song) {
+        if (synth.ctx && synth.ctx.state === 'suspended') synth.ctx.resume();
+        cv.hideWelcome();
+        songPlayer.play();
+        scheduleFrame();
+      }
     });
   }
 
@@ -2314,6 +2422,11 @@ function frame() {
   }
   cv.updateSongTransport();
 
+  // Per-frame runtime invariant: micLevels and any wlPerSource are
+  // sized to scene.emitter.count. Single boundary call so every
+  // downstream consumer can index by emitter index without bounds
+  // checks. Cheap when sizes already match.
+  ensureRuntimeSize(scene);
   // Reset per-frame — rebuilt below by bucket-color, MPE, or bend.
   scene.runtime.wlPerSource = null;
 
@@ -2494,8 +2607,13 @@ function frame() {
   // The tracer stays gated on dirty/particles (expensive), but draw()
   // runs whenever the smoke needs its per-frame noise update.
   const smokeAnimating = renderer.smokeEnabled || renderer.hasActivePointers;
+  // Edge memory has its own decay clock — keep drawing while it's on
+  // so the per-row colors visibly fade after activity stops.
+  const edgeGlowing = renderer.edgeGlowEnabled;
+  // Update the per-row glow state once per frame; cheap no-op when off.
+  renderer.updateEdgeGlow(scene, tracer, dt);
   const retrace = dirty || particlesInFlight;
-  if (retrace || smokeAnimating) {
+  if (retrace || smokeAnimating || edgeGlowing) {
     if (retrace) {
       dirty = false;
       tracer.trace(scene);
@@ -2556,7 +2674,8 @@ function frame() {
     || songPlayer.playing || (mic.active && mic.source !== 'touch')
     || (mic._filePlaying)
     || renderer.smokeEnabled // animated background needs continuous frames
-    || renderer.hasActivePointers; // swirl sources fading out
+    || renderer.hasActivePointers // swirl sources fading out
+    || renderer.edgeGlowEnabled; // wall-glow decay clock
   if (needsFrame) scheduleFrame();
 }
 // Expose key objects for console debugging: chromavox.scene, chromavox.synth, etc.

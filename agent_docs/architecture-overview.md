@@ -31,10 +31,13 @@ No dependencies.
   save/load. `makeElement` reads defaults from the `ELEMENTS` schema
   in `elements.js`. `createScene()` initialises `scene.runtime`
   (transient per-frame state: `micLevels`, `wlPerSource`) and
-  increments `scene.generation` (used by the tracer to detect scene
-  replacement and auto-reset persistence). `localAABB(el)` is a
-  zero-allocation alternative to `localPolygon` for hot paths that
-  only need bounds (notably the per-frame smoke source packer).
+  increments `scene.generation` (used by the tracer + renderer
+  edge-memory to detect scene replacement and auto-reset persistence).
+  Exports `bumpGeneration(scene)` and `ensureRuntimeSize(scene)` — the
+  paired single-owner helpers called at every shape-change site to
+  keep runtime arrays co-sized with `emitter.count`. `localAABB(el)`
+  is a zero-allocation alternative to `localPolygon` for hot paths
+  that only need bounds (notably the per-frame smoke source packer).
 - `docs/js/raytracer.js` — CPU tracer; per-frame segment records + sensor bins.
 - `docs/js/renderer.js` — WebGL2, three passes: (1) instanced SDF quad rays
   rendered into a **HDR `RGBA16F` FBO** via `EXT_color_buffer_float`
@@ -66,6 +69,20 @@ No dependencies.
   — horizontal then vertical, 9-tap kernel, 1.6-texel tap spacing
   ≈ 24 px halo at full res. HDR preserved end-to-end so bright ray
   pile-ups bloom in their true color before the final Reinhard squash.
+  An optional **edge memory** pass writes per-emitter / per-sensor
+  point-source glow into the HDR FBO right before the ray pass —
+  exponential smoothing of `(emitterColor × micLevel)` on the left
+  wall and the wavelength-weighted average of sensor bins on the
+  right. Each row contributes one radial source at `(0, y_i)` /
+  `(benchW, y_j)`; up to 32 brightness-thresholded rows are packed and
+  uploaded as `vec2 uGlowPos[]` + `vec3 uGlowCol[]`. Time constant
+  (`edgeGlowTau`) and falloff radius (`edgeGlowBandWidth`) are
+  user-tunable. Self-resets via a generation/dimension tripwire at
+  the top of `updateEdgeGlow` so per-row state never carries across a
+  scene-shape change. The shader clamps `max(vec3(0), uGlowCol[i])`
+  per source as cheap insurance against any negative roundoff in the
+  EMA — the additive HDR FBO has no clamp of its own, so a single
+  bad value would otherwise dominate the bench.
   (2) Tonemapped blit to screen + per-element bounding-quad pass that
   re-samples the ray FBO with a polygon-SDF-driven offset for
   refractive distortion. Both apply Reinhard tone-mapping. When smoke
@@ -188,7 +205,9 @@ interaction. On page load, `main.js` restores from localStorage if
 present, otherwise calls `createScene()`. At the end of each frame the
 idle check decides whether to request another:
 `needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
-|| songPlayer.playing || (mic.active && source !== 'touch') || synth.active`.
+|| songPlayer.playing || (mic.active && source !== 'touch') || synth.active
+|| renderer.smokeEnabled || renderer.hasActivePointers
+|| renderer.edgeGlowEnabled`.
 All state-changing event handlers (mic enable/disable, file transport,
 song play/stop/seek, synth enable, visibility resume, keyboard shortcuts)
 call `scheduleFrame()` or `setDirty()` as appropriate.

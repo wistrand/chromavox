@@ -25,6 +25,28 @@ export const CANONICAL_BENCH = { w: 556, h: 900 };
 let _generation = 0;
 export function bumpGeneration(scene) { scene.generation = ++_generation; }
 
+// Single owner of `scene.runtime` array sizing. Resizes (or freshly
+// allocates) `micLevels` and any present `wlPerSource` arrays to match
+// `scene.emitter.count`. Idempotent: cheap no-op when already correct.
+//
+// This is the linchpin of the "trust internally" boundary: once this
+// has been called for a given (scene.generation, scene.emitter.count)
+// state, every consumer can index `runtime.micLevels[i]` and
+// `runtime.wlPerSource.{min,max}[i]` for `i < emitter.count` without
+// bounds checks. Call it from any site that mutates emitter.count.
+export function ensureRuntimeSize(scene) {
+  const n = scene.emitter.count | 0;
+  const r = scene.runtime;
+  if (!r.micLevels || r.micLevels.length !== n) {
+    r.micLevels = new Float32Array(n);
+  }
+  if (r.wlPerSource) {
+    const wp = r.wlPerSource;
+    if (!wp.min || wp.min.length !== n) wp.min = new Float32Array(n);
+    if (!wp.max || wp.max.length !== n) wp.max = new Float32Array(n);
+  }
+}
+
 export function createScene() {
   return {
     bench: { ...CANONICAL_BENCH },

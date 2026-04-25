@@ -84,10 +84,24 @@ relevant one before editing that subsystem.
   `createScene()`): `{ micLevels, wlPerSource }`. `serializeScene`
   excludes runtime via an explicit field list. `Object.assign(scene,
   fresh)` on clear/load/preset automatically replaces runtime.
-- **`scene.generation`** is incremented by `createScene()`. The tracer
-  checks it at the top of `trace()` and self-resets all persistence
-  (pools, localPolys, exitSegs, sensorPersist, secondary queue) on
-  mismatch — the safety net against stale per-element caches.
+- **`scene.runtime` array sizing is co-managed with `emitter.count`.**
+  `ensureRuntimeSize(scene)` (`scene.js`) is the single owner: resizes
+  `runtime.micLevels` and any present `runtime.wlPerSource.{min,max}`
+  to match `scene.emitter.count`. Idempotent (cheap when sizes already
+  match). Called from every shape-change site (`song.js`
+  `_applyKeyframes`, `applyKeyframeAt`; `main.js` `restoreSongJson`,
+  top of frame loop; `ui.js` emitter-count handler, `_restore`
+  undo/redo). With this contract, every consumer can index by emitter
+  index without bounds checks — no per-call `Number.isFinite` /
+  length-check guards needed.
+- **`scene.generation`** is incremented by `createScene()` AND
+  `bumpGeneration(scene)` at every shape-change site (paired with
+  `ensureRuntimeSize`). The tracer checks it at the top of `trace()`
+  and self-resets all persistence (pools, localPolys, exitSegs,
+  sensorPersist, secondary queue) on mismatch. The renderer's edge
+  memory uses an analogous tripwire — bumps on generation mismatch OR
+  emitter/sensor-count mismatch — so per-row accumulators never carry
+  meaning across a row-index reshuffle.
 - **Idle RAF loop**: the frame loop stops when nothing needs updating.
   `needsFrame = dirty || particlesInFlight || hasSpinning ||
   touchRamping || songPlayer.playing || mic.active || synth.active`.

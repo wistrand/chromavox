@@ -188,9 +188,23 @@
   (clear, load, preset) to avoid stale exit-segment and sensor
   persistence data bleeding into the new scene. The `onSceneReset`
   callback handles this. Additionally, `scene.generation` (incremented
-  by `createScene()`) triggers the tracer to self-reset all persistence
-  at the top of `trace()` on generation mismatch, as a safety net
-  against missed manual resets.
+  by `createScene()` AND by `bumpGeneration(scene)` at every shape-
+  change site — UI count sliders, song keyframe globals, undo/redo)
+  triggers the tracer to self-reset all persistence at the top of
+  `trace()` on generation mismatch, as a safety net against missed
+  manual resets.
+- **`scene.runtime` array sizing.** `runtime.micLevels` and any present
+  `runtime.wlPerSource.{min,max}` must always be sized to
+  `scene.emitter.count`. `ensureRuntimeSize(scene)` (`scene.js`) is
+  the single owner — call it from any new site that mutates
+  `emitter.count`. Float32Array silently no-ops out-of-bounds writes
+  and returns `undefined` on out-of-bounds reads, so a size mismatch
+  produces NaN downstream, not an error: any consumer using these
+  values (tracer wavelength integration, edge-memory color pickup,
+  GPU-tracer texture upload) will silently corrupt with NaN that
+  propagates through additive blending into the HDR FBO and the
+  Reinhard tonemap squashes the whole bench to black. The frame loop
+  calls `ensureRuntimeSize` once per frame as a floor.
 - Changing the emitter count clears `emitter.disabled` so stale
   toggle indices from a previous count don't persist. On clear/load,
   the fresh `createScene()` provides a clean `emitter.disabled`
@@ -233,3 +247,49 @@
   derivative forever. Rule of thumb: if you want a quantity's *rate*
   to oscillate, write `p(t) = v0*t + amp * (1 - cos(wt))` directly,
   not `t * v0 * (1 + k*sin(wt))`.
+- **Edge memory accumulators are row-index-keyed.** `_emitterGlow[i]`
+  / `_sensorGlow[s]` only have meaning relative to the *current*
+  `emitter.count` / `sensorCount`. The renderer guards this with a
+  generation+dimension tripwire at the top of `updateEdgeGlow` —
+  reset on `scene.generation` change OR on emitter/sensor count
+  change. Don't add new persistence keyed by emitter/sensor index
+  without applying the same pattern (see `_glowGen`,
+  `_glowEmitterCount`, `_glowSensorCount` in `renderer.js`).
+- **Edge memory shader clamps `max(vec3(0), uGlowCol[i])`.** A single
+  negative or NaN value uploaded to the additive HDR FBO (no clamp,
+  blend `ONE+ONE`) would dominate the bench and tonemap to black.
+  CPU-side guards are belt-and-suspenders — the shader clamp is the
+  load-bearing one. Don't remove it.
+
+## Drag-and-drop / file import
+
+- **Firefox + Linux Wayland delivers an empty `DataTransfer` to the
+  drop event** when a file is dragged from a Wayland-native file
+  manager onto an HTTP page. `dt.files`, `dt.items`, `dt.types`,
+  every `getData()` call — all empty. Chrome bundles its own DnD
+  layer and isn't affected. The page bytes simply aren't reachable
+  from JS; no JS-side workaround can recover them. Fixes (in order
+  of effectiveness): (1) launch with `MOZ_ENABLE_WAYLAND=0 firefox`
+  to force the X11 backend; (2) toggle
+  `dom.events.dataTransfer.protected.enabled` in `about:config`;
+  (3) set `privacy.resistFingerprinting = false`. The drop handler
+  in `main.js` opens the file picker as a fallback when it sees an
+  empty DataTransfer, so users hit one extra click instead of total
+  failure.
+- **Drop-handler quirks.** Drag handlers are bound on `document` (not
+  `stage`) because Firefox can ignore a bubbled `dragover.preventDefault()`
+  from an ancestor when the immediate target is a WebGL canvas, and
+  refuse to fire `drop`. Document-level binding guarantees
+  preventDefault is registered for the immediate target's ancestor
+  chain regardless of which sub-element is under the pointer. Don't
+  preventDefault the `dragenter` event in Firefox — for cross-origin
+  (file://) drag sources, that causes the subsequent `drop` to
+  deliver an empty `DataTransfer`.
+- **Autoplay across `await` in Firefox.** Firefox invalidates the
+  user-activation token across async boundaries, so a synthetic
+  `playBtn.click()` issued *after* `await importSongFile(f)` can't
+  unlock the AudioContext — the play handler runs but
+  `synth.enable()` / `AudioContext.resume()` silently fail. The drop
+  handler pre-warms `synthBtn.click()` synchronously before the
+  await, then inlines the play sequence (no synthetic click) after
+  the song loads.

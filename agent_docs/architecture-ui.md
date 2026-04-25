@@ -422,6 +422,14 @@ needed. Clear, file-load, and preset-load all invoke the
 calls `renderer.resetReadout()` (zeros `_displayBins` and `_peakMax`
 on the Renderer) and `tracer.resetPersistence()`.
 
+In-place mutations of `emitter.count` / `sensorCount` (UI sliders,
+song keyframe globals, undo/redo `_restore`) bump `scene.generation`
+via `bumpGeneration(scene)` and call `ensureRuntimeSize(scene)` so
+runtime arrays stay co-sized with the emitter count. Without this
+pair the tracer's persistence caches and the renderer's edge-memory
+accumulators would carry stale values into the new shape. See
+CLAUDE.md cross-cutting invariants.
+
 `syncControls` dispatches `'change'` events on all 7 sliders after
 setting values programmatically so label-rebuild listeners in `main.js`
 fire correctly.

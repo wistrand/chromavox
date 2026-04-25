@@ -1,6 +1,6 @@
 // UI: input handling, property panel, save/load.
 
-import { makeElement, worldEdges, pointInPolygon, overlapsAny, serializeScene, deserializeScene, createScene, autoTitle } from './scene.js';
+import { makeElement, worldEdges, pointInPolygon, overlapsAny, serializeScene, deserializeScene, createScene, autoTitle, bumpGeneration, ensureRuntimeSize } from './scene.js';
 import { autoPlace } from './auto-place.js';
 import { MATERIALS } from './spectrum.js';
 import { ELEMENTS } from './elements.js';
@@ -122,6 +122,10 @@ class History {
     scene.emitter.disabled = new Set(data.emitter.disabled || []);
     scene.sensorCount = data.sensorCount;
     scene.elements = data.elements.map(e => ({ ...e }));
+    // Undo/redo can shift emitter/sensor counts — trip caches and
+    // resize runtime arrays so consumers don't index past their ends.
+    bumpGeneration(scene);
+    ensureRuntimeSize(scene);
   }
   begin(scene) {
     if (this.pending !== null) return;
@@ -308,6 +312,12 @@ export class UI {
         if (key === 'count') {
           this.scene.emitter.disabled.clear();
           if (document.getElementById('sensor-sync').checked) applySync();
+          // Shape change: notify caches via generation bump and resize
+          // runtime arrays. Without this, the tracer's per-element
+          // pools, edge-memory rows, and wlPerSource bands stay sized
+          // for the previous count and consumers read past their ends.
+          bumpGeneration(this.scene);
+          ensureRuntimeSize(this.scene);
         }
         this.refreshEmitterLabels();
         this.onChange();
@@ -332,6 +342,8 @@ export class UI {
       // Manual change overrides sync.
       syncIn.checked = false;
       syncFactorRow();
+      // Shape change: see emitter-count handler above.
+      bumpGeneration(this.scene);
       this.onChange();
       this.rebuildSensorReadout();
     });

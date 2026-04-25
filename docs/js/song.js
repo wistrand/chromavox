@@ -8,7 +8,7 @@
 //   // in frame loop:
 //   player.update(scene, dt);  // mutates scene.elements + scene.runtime.micLevels
 
-import { makeElement } from './scene.js';
+import { makeElement, bumpGeneration, ensureRuntimeSize } from './scene.js';
 
 export class SongPlayer {
   constructor() {
@@ -89,7 +89,8 @@ export class SongPlayer {
     this.time = t;
     this._applyKeyframes(scene);
     // Zero emitter levels — no audio, just the visual scene.
-    scene.runtime.micLevels = new Float32Array(scene.emitter.count);
+    scene.runtime.micLevels = null;
+    ensureRuntimeSize(scene);
     this.time = saved;
   }
 
@@ -140,13 +141,28 @@ export class SongPlayer {
     // Apply global emitter/sensor/scale config.
     const g = this.song.global;
     if (g) {
+      // Track shape changes so we can bump scene.generation and resize
+      // runtime arrays after — the tripwire that lets every consumer
+      // (tracer, edge-memory, etc.) self-reset on scene-shape changes
+      // without each having to remember resetXxx() in load paths.
+      let shapeChanged = false;
       if (g.emitter) {
-        if (g.emitter.count !== undefined) scene.emitter.count = g.emitter.count;
+        if (g.emitter.count !== undefined && g.emitter.count !== scene.emitter.count) {
+          scene.emitter.count = g.emitter.count;
+          shapeChanged = true;
+        }
         if (g.emitter.wlMin !== undefined) scene.emitter.wlMin = g.emitter.wlMin;
         if (g.emitter.wlMax !== undefined) scene.emitter.wlMax = g.emitter.wlMax;
         if (g.emitter.raysPerSource !== undefined) scene.emitter.raysPerSource = g.emitter.raysPerSource;
       }
-      if (g.sensorCount !== undefined) scene.sensorCount = g.sensorCount;
+      if (g.sensorCount !== undefined && g.sensorCount !== scene.sensorCount) {
+        scene.sensorCount = g.sensorCount;
+        shapeChanged = true;
+      }
+      if (shapeChanged) {
+        bumpGeneration(scene);
+        ensureRuntimeSize(scene);
+      }
       // Scale / carrier settings. Applied once on play via onGlobal callback.
       if (!this._globalApplied) {
         this._globalApplied = true;

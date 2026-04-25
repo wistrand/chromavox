@@ -97,6 +97,57 @@ void main() {
   gl_Position = vec4(aCorner * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
+// Edge-glow pass: writes per-row accumulated emitter/sensor colors as
+// soft vertical bands on the left/right walls. Drawn into the HDR ray
+// FBO before the ray pass so the glow gets ray-modulated by smoke and
+// bloomed by the existing pipeline. Most fragments fall outside both
+// bands and exit immediately; the band itself is ~40 bench units wide.
+const EDGE_GLOW_VS = `#version 300 es
+in vec2 aCorner;
+out vec2 vUV;
+void main() {
+  vUV = aCorner;
+  gl_Position = vec4(aCorner * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const EDGE_GLOW_FS = `#version 300 es
+precision highp float;
+#define MAX_ACTIVE_GLOW 32
+in vec2 vUV;
+// Active glow sources, packed CPU-side. Two parallel arrays — single-
+// index lookup avoids the i*2 stride form that some mobile drivers
+// optimize less well. Sources below a brightness threshold are dropped.
+uniform vec2 uGlowPos[MAX_ACTIVE_GLOW];
+uniform vec3 uGlowCol[MAX_ACTIVE_GLOW];
+uniform int  uGlowCount;
+uniform vec2 uBench;
+uniform float uBandWidth;
+out vec4 outColor;
+
+void main() {
+  vec2 p = vec2(vUV.x, 1.0 - vUV.y) * uBench;
+  vec3 col = vec3(0.0);
+  if (uGlowCount > 0) {
+    float invR2 = 1.0 / max(uBandWidth * uBandWidth, 1.0);
+    for (int i = 0; i < MAX_ACTIVE_GLOW; i++) {
+      if (i >= uGlowCount) break;
+      vec2 d = p - uGlowPos[i];
+      float r2 = dot(d, d);
+      // Smooth distance-based falloff, peaking at each source's
+      // wall position and decaying with squared distance.
+      float fall = 1.0 / (r2 * invR2 + 1.0);
+      fall *= fall;
+      // Clamp non-negative at the read site so a stray negative from
+      // EMA roundoff or a future upstream bug can't subtract from the
+      // additive HDR FBO. The blast radius of a single bad fragment
+      // is the whole bench (NaN or large negative + tonemap = black),
+      // so the cheap insurance is worth it.
+      col += max(vec3(0.0), uGlowCol[i]) * fall;
+    }
+  }
+  outColor = vec4(col, 1.0);
+}`;
+
 const SMOKE_FS = `#version 300 es
 precision highp float;
 #define MAX_SOURCES 48
@@ -562,6 +613,41 @@ export class Renderer {
     }
     this._hasActivePointers = false;
 
+    // Edge-glow program + per-row state. Buffers sized to MAX_GLOW_ROWS
+    // (matches the shader #define). Only the first emitter.count /
+    // sensorCount entries are read.
+    this.edgeGlowProgram = buildProgram(gl, EDGE_GLOW_VS, EDGE_GLOW_FS);
+    this.edgeGlow = {
+      aCorner:        gl.getAttribLocation(this.edgeGlowProgram, 'aCorner'),
+      uGlowPos:       gl.getUniformLocation(this.edgeGlowProgram, 'uGlowPos[0]'),
+      uGlowCol:       gl.getUniformLocation(this.edgeGlowProgram, 'uGlowCol[0]'),
+      uGlowCount:     gl.getUniformLocation(this.edgeGlowProgram, 'uGlowCount'),
+      uBench:         gl.getUniformLocation(this.edgeGlowProgram, 'uBench'),
+      uBandWidth:     gl.getUniformLocation(this.edgeGlowProgram, 'uBandWidth'),
+    };
+    this.MAX_GLOW_ROWS = 64;
+    this.MAX_ACTIVE_GLOW = 32;
+    this._emitterGlow = new Float32Array(this.MAX_GLOW_ROWS * 3);
+    this._sensorGlow  = new Float32Array(this.MAX_GLOW_ROWS * 3);
+    // Two parallel packed arrays for the GPU: positions (vec2) and
+    // colors (vec3). Single-index lookup on the GPU side.
+    this._activeGlowPos = new Float32Array(this.MAX_ACTIVE_GLOW * 2);
+    this._activeGlowCol = new Float32Array(this.MAX_ACTIVE_GLOW * 3);
+    this._activeGlowCount = 0;
+    this._sensorRgbCache = null;     // per-bin RGB lookup, rebuilt on binCount change
+    this._sensorRgbCacheBins = -1;
+    // Auto-reset tripwires for edge memory: when scene.generation bumps
+    // (full scene swap) or emitter/sensor counts shift (song keyframe,
+    // user edit), per-row accumulators are stale — row index meaning
+    // changed under us. Mirrors the tracer's generation pattern, but
+    // also catches in-place count changes that don't bump generation.
+    this._glowGen = -1;
+    this._glowEmitterCount = -1;
+    this._glowSensorCount = -1;
+    this.edgeGlowEnabled = false;
+    this.edgeGlowTau = 1.5;          // seconds — exponential memory time constant
+    this.edgeGlowBandWidth = 40;     // bench units of falloff distance from each wall
+
     // Separate FBO for the smoke pre-pass. RGBA8 is plenty — RGB holds
     // the cool-grey haze color, alpha holds normalized density used as
     // the ray-visibility mask by the blit + element passes.
@@ -603,6 +689,39 @@ export class Renderer {
     }
     this._bloomW = 2;
     this._bloomH = 2;
+
+    // Precomputed cumulative integral of wavelengthToRGB across 380..800 nm,
+    // 1 nm bins. Used to derive an emitter's correct visible color from
+    // its (wlMin, wlMax) range in O(1) — for narrow bands this approaches
+    // wavelengthToRGB(wlCenter); for broadband emitters it integrates to
+    // approximately white, matching the actual ray-averaged output.
+    this._WL_LO = 380;
+    this._WL_HI = 800;
+    const NW = this._WL_HI - this._WL_LO + 1;
+    this._cumR = new Float32Array(NW);
+    this._cumG = new Float32Array(NW);
+    this._cumB = new Float32Array(NW);
+    {
+      let R = 0, G = 0, Bv = 0;
+      for (let i = 0; i < NW; i++) {
+        const rgb = wavelengthToRGB(this._WL_LO + i);
+        R += rgb[0]; G += rgb[1]; Bv += rgb[2];
+        this._cumR[i] = R;
+        this._cumG[i] = G;
+        this._cumB[i] = Bv;
+      }
+    }
+    // Per-channel normalization. Without these, integrating the CIE
+    // wavelength-to-RGB curve across the full visible band yields a
+    // yellow-green tint (the curves are luminosity-weighted and
+    // peak in the green/yellow). Multiplying each channel by NW/totalX
+    // makes the full-band integral resolve to exactly (1, 1, 1) and
+    // narrow bands resolve to their saturated spectral colors (clipped
+    // to 1.0 in the helper). Result: white sources look white, narrow
+    // ladder rungs look like the right pure colors.
+    this._wlNormR = NW / Math.max(1e-6, this._cumR[NW - 1]);
+    this._wlNormG = NW / Math.max(1e-6, this._cumG[NW - 1]);
+    this._wlNormB = NW / Math.max(1e-6, this._cumB[NW - 1]);
 
     this.elemProgram = buildProgram(gl, ELEM_VS, ELEM_FS);
     this.elem = {
@@ -822,6 +941,11 @@ export class Renderer {
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.fboTex, 0);
+    // Pre-clear the FBO storage so the next sample doesn't trigger
+    // "Tex image incurring lazy initialization" — saves a one-time
+    // first-frame stall.
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
 
     // Smoke density texture (separate from the HDR FBO so rays can be
     // modulated by smoke without having to disentangle them later).
@@ -830,6 +954,7 @@ export class Renderer {
       gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.smokeFbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.smokeTex, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
 
     // Half-res bloom ping-pong targets. RGBA16F so HDR ray brightness
     // survives the blur pair; bloom is then Reinhard-tonemapped in the
@@ -849,6 +974,7 @@ export class Renderer {
         gl.RGBA, bloomType, null);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
     }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -984,6 +1110,201 @@ export class Renderer {
   // Source order: pointers first (preserved under overflow), then
   // elements. Elongated elements get 2 or 3 along-axis sources so the
   // carved wake stretches along the shape's long direction.
+  // Reset the edge-memory buffers — call when the emitter/sensor
+  // wavelength mapping changes (mode/base/span change) so stale
+  // colors don't linger after the ladder shifts. Cheap: 384 floats.
+  // Average wavelengthToRGB over [wlMin, wlMax] using the precomputed
+  // cumulative integral. Writes the 3 channels into `out` at offset
+  // `oi` to avoid allocations on the hot path. For wlMin == wlMax it
+  // returns the single-wavelength color; for full-spectrum bands it
+  // returns approximately white — matching the tracer's averaged ray
+  // output without having to call wavelengthToRGB per ray.
+  _avgWlRGB(wlMin, wlMax, out, oi) {
+    const lo = this._WL_LO, hi = this._WL_HI;
+    const span = hi - lo;
+    const aIdx = Math.max(0, Math.min(span, Math.round(wlMin - lo)));
+    const bIdx = Math.max(0, Math.min(span, Math.round(wlMax - lo)));
+    const range = bIdx - aIdx;
+    if (range <= 1) {
+      // Narrow / monochromatic — point-sample to preserve spectral
+      // accuracy (the integral form's denominator collapses here).
+      const rgb = wavelengthToRGB((wlMin + wlMax) * 0.5);
+      out[oi    ] = Math.min(1, rgb[0]);
+      out[oi + 1] = Math.min(1, rgb[1]);
+      out[oi + 2] = Math.min(1, rgb[2]);
+      return;
+    }
+    // Wider band — integral with per-channel normalization. Spectral
+    // peaks naturally clip to 1.0 (yellow stays yellow at full-sat);
+    // a full-spectrum band sums to (1, 1, 1) by construction.
+    const r = (this._cumR[bIdx] - this._cumR[aIdx]) / range * this._wlNormR;
+    const g = (this._cumG[bIdx] - this._cumG[aIdx]) / range * this._wlNormG;
+    const b = (this._cumB[bIdx] - this._cumB[aIdx]) / range * this._wlNormB;
+    out[oi    ] = Math.min(1, r);
+    out[oi + 1] = Math.min(1, g);
+    out[oi + 2] = Math.min(1, b);
+  }
+
+  resetEdgeGlow() {
+    this._emitterGlow.fill(0);
+    this._sensorGlow.fill(0);
+    this._activeGlowCount = 0;
+  }
+
+  // Pack the brightness-thresholded subset of emitter+sensor rows
+  // into the compact `_activeGlowData` array used by the GPU. Each
+  // active row contributes one point-source: emitters at (0, y),
+  // sensors at (bench.w, y). Sorted by brightness so when the cap
+  // is hit we keep the strongest. CPU-side, called every frame.
+  _packActiveGlow(scene) {
+    const pos = this._activeGlowPos;
+    const col = this._activeGlowCol;
+    const eg = this._emitterGlow;
+    const sg = this._sensorGlow;
+    const benchH = scene.bench.h;
+    const benchW = scene.bench.w;
+    const nE = Math.min(this.MAX_GLOW_ROWS, scene.emitter.count | 0);
+    const nS = Math.min(this.MAX_GLOW_ROWS, scene.sensorCount | 0);
+    const THRESH = 0.02;
+    const cands = (this._glowCandidates ||= []);
+    cands.length = 0;
+    for (let i = 0; i < nE; i++) {
+      const o = i * 3;
+      const r = eg[o], g = eg[o + 1], b = eg[o + 2];
+      const m = r + g + b;
+      if (m < THRESH) continue;
+      const y = benchH * (1 - (i + 0.5) / nE);
+      cands.push({ x: 0, y, r, g, b, m });
+    }
+    for (let s = 0; s < nS; s++) {
+      const o = s * 3;
+      const r = sg[o], g = sg[o + 1], b = sg[o + 2];
+      const m = r + g + b;
+      if (m < THRESH) continue;
+      const y = benchH * (1 - (s + 0.5) / nS);
+      cands.push({ x: benchW, y, r, g, b, m });
+    }
+    if (cands.length > this.MAX_ACTIVE_GLOW) {
+      cands.sort((a, c) => c.m - a.m);
+      cands.length = this.MAX_ACTIVE_GLOW;
+    }
+    for (let i = 0; i < cands.length; i++) {
+      const c = cands[i];
+      pos[i * 2    ] = c.x;
+      pos[i * 2 + 1] = c.y;
+      col[i * 3    ] = c.r;
+      col[i * 3 + 1] = c.g;
+      col[i * 3 + 2] = c.b;
+    }
+    // Zero out trailing slots so stale data can't leak across frames
+    // when the active count shrinks.
+    for (let i = cands.length; i < this.MAX_ACTIVE_GLOW; i++) {
+      pos[i * 2    ] = 0;
+      pos[i * 2 + 1] = 0;
+      col[i * 3    ] = 0;
+      col[i * 3 + 1] = 0;
+      col[i * 3 + 2] = 0;
+    }
+    this._activeGlowCount = cands.length;
+  }
+
+  // Per-frame exponential smoothing of the edge-memory state. Targets
+  // are (emitterColor × micLevel) for the left wall and the
+  // wavelength-weighted average of sensor bins for the right wall.
+  // No-op when the toggle is off (paid only when in use).
+  updateEdgeGlow(scene, tracer, dt) {
+    if (!this.edgeGlowEnabled) {
+      this._activeGlowCount = 0;
+      return;
+    }
+    // Self-reset on any scene-shape change. Single tripwire replaces
+    // explicit resetEdgeGlow() calls scattered across load paths — any
+    // future mutation site is automatically covered.
+    const eCount = scene.emitter.count | 0;
+    const sCount = scene.sensorCount | 0;
+    if (this._glowGen !== scene.generation
+        || this._glowEmitterCount !== eCount
+        || this._glowSensorCount !== sCount) {
+      this._emitterGlow.fill(0);
+      this._sensorGlow.fill(0);
+      this._activeGlowCount = 0;
+      this._glowGen = scene.generation;
+      this._glowEmitterCount = eCount;
+      this._glowSensorCount = sCount;
+    }
+    const k = 1 - Math.exp(-Math.max(0, dt) / Math.max(0.05, this.edgeGlowTau));
+    const eg = this._emitterGlow;
+    const sg = this._sensorGlow;
+    // wlPerSource is { min: Float32Array, max: Float32Array } per the
+    // tracer's ray distribution (raytracer.js:299–303). Fall back to
+    // the global wlMin/wlMax band when the runtime override is absent.
+    // Trust the boundary: ensureRuntimeSize() in the frame loop guarantees
+    // wlPerSource.{min,max}.length === emitter.count, and the global
+    // wlMin/wlMax are slider-clamped finite. Tracer's same fallback rule
+    // (raytracer.js:299–303): null wlPerSource means every emitter spans
+    // the full global band.
+    const wpe = scene.runtime.wlPerSource;
+    const wpeMin = wpe && wpe.min;
+    const wpeMax = wpe && wpe.max;
+    const gMin = scene.emitter.wlMin;
+    const gMax = scene.emitter.wlMax;
+    const levels = scene.runtime.micLevels;
+    const nE = Math.min(this.MAX_GLOW_ROWS, scene.emitter.count | 0);
+    // Scratch for the per-emitter avg-RGB (reused; no alloc).
+    const tmp = (this._egTmp ||= new Float32Array(3));
+    for (let i = 0; i < nE; i++) {
+      const wlMinS = wpeMin ? wpeMin[i] : gMin;
+      const wlMaxS = wpeMax ? wpeMax[i] : gMax;
+      this._avgWlRGB(wlMinS, wlMaxS, tmp, 0);
+      const lvl = (levels && levels[i]) || 0;
+      const tr = tmp[0] * lvl, tg = tmp[1] * lvl, tb = tmp[2] * lvl;
+      const o = i * 3;
+      eg[o    ] += k * (tr - eg[o    ]);
+      eg[o + 1] += k * (tg - eg[o + 1]);
+      eg[o + 2] += k * (tb - eg[o + 2]);
+    }
+    // Right wall — sensors, weighted by per-bin wavelength.
+    if (tracer && tracer.sensorBins && tracer.binCount > 0) {
+      const binCount = tracer.binCount;
+      // Per-bin RGB lookup, rebuilt only when binCount changes.
+      if (!this._sensorRgbCache || this._sensorRgbCacheBins !== binCount) {
+        this._sensorRgbCache = new Float32Array(binCount * 3);
+        for (let b = 0; b < binCount; b++) {
+          const wl = 380 + (b + 0.5) / binCount * 400;
+          const rgb = wavelengthToRGB(wl);
+          this._sensorRgbCache[b * 3    ] = rgb[0];
+          this._sensorRgbCache[b * 3 + 1] = rgb[1];
+          this._sensorRgbCache[b * 3 + 2] = rgb[2];
+        }
+        this._sensorRgbCacheBins = binCount;
+      }
+      const wlRgb = this._sensorRgbCache;
+      const nS = Math.min(this.MAX_GLOW_ROWS, scene.sensorCount | 0);
+      for (let s = 0; s < nS; s++) {
+        const base = s * binCount;
+        let tr = 0, tg = 0, tb = 0;
+        for (let b = 0; b < binCount; b++) {
+          const v = tracer.sensorBins[base + b];
+          if (v <= 0) continue;
+          tr += wlRgb[b * 3    ] * v;
+          tg += wlRgb[b * 3 + 1] * v;
+          tb += wlRgb[b * 3 + 2] * v;
+        }
+        // Soft cap so very bright bursts don't overshoot 1 dramatically.
+        const cap = 1.0;
+        tr = Math.min(cap, tr);
+        tg = Math.min(cap, tg);
+        tb = Math.min(cap, tb);
+        const o = s * 3;
+        sg[o    ] += k * (tr - sg[o    ]);
+        sg[o + 1] += k * (tg - sg[o + 1]);
+        sg[o + 2] += k * (tb - sg[o + 2]);
+      }
+    }
+    // Pack the bright-enough subset for the GPU.
+    this._packActiveGlow(scene);
+  }
+
   updateSources(scene) {
     const data = this._sourceData;
     // No `data.fill(0)` — the shader reads only indices [0, uSourceCount),
@@ -1131,11 +1452,36 @@ export class Renderer {
       gl.disableVertexAttribArray(this.smoke.aCorner);
     }
 
-    // --- Pass 1: rays → FBO ---
+    // --- Pass 0.5: edge glow → ray FBO (additive, before rays) ---
+    // Writes per-row accumulated emitter/sensor colors as soft bands on
+    // the bench's left and right walls. Lives in the HDR FBO so it
+    // gets bloomed alongside rays and modulated by smoke density in
+    // the blit/elem composition.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
+    if (this.edgeGlowEnabled) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.useProgram(this.edgeGlowProgram);
+      // Upload the full fixed-size arrays each frame; trailing slots
+      // are zeroed in updateEdgeGlow so stale colors can't leak back.
+      // The shader's `if (i >= uGlowCount) break` ensures only the
+      // populated prefix is sampled.
+      gl.uniform2fv(this.edgeGlow.uGlowPos, this._activeGlowPos);
+      gl.uniform3fv(this.edgeGlow.uGlowCol, this._activeGlowCol);
+      gl.uniform1i(this.edgeGlow.uGlowCount, this._activeGlowCount);
+      gl.uniform2f(this.edgeGlow.uBench, scene.bench.w, scene.bench.h);
+      gl.uniform1f(this.edgeGlow.uBandWidth, this.edgeGlowBandWidth);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.unitQuadBuf);
+      gl.enableVertexAttribArray(this.edgeGlow.aCorner);
+      gl.vertexAttribPointer(this.edgeGlow.aCorner, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disableVertexAttribArray(this.edgeGlow.aCorner);
+    }
+
+    // --- Pass 1: rays → FBO ---
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(this.rayProgram);
