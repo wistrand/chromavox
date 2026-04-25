@@ -21,7 +21,7 @@ const PTR_RISE_SEC = 0.15; // exponential ramp-in when a finger touches down
 const PTR_RADIUS_BENCH = 120;
 const K_ELEM_STRENGTH = 2.2; // push strength per element source (bench units, pre-normalization)
 const K_SPIN_SWIRL = 7.0;    // swirl strength per rad/s of element angular velocity
-const K_PTR_STRENGTH = 3.2;  // swirl strength per pointer source
+const K_PTR_STRENGTH = 3.2;  // outward push strength per pointer source
 
 // Along-axis source offsets (fraction of longLen) for the element-source
 // packing loop. Hoisted to module scope so the arrays aren't reallocated
@@ -1313,11 +1313,11 @@ export class Renderer {
     let idx = 0;
     let anyActivePtr = false;
 
-    // Pointer sources — isotropic swirl. Held pointers ramp in from 0
-    // over PTR_RISE_SEC after touchdown (so the swirl lerps in instead
-    // of popping), then stay at full strength for as long as the
-    // finger is down. Released ones decay from their release time so
-    // the swirl trails off when the finger lifts.
+    // Pointer sources — isotropic outward push. Held pointers ramp in
+    // from 0 over PTR_RISE_SEC after touchdown (so the push lerps in
+    // instead of popping), then stay at full strength for as long as
+    // the finger is down. Released ones decay from their release time
+    // so the displacement trails off when the finger lifts.
     const invRptr = 1 / PTR_RADIUS_BENCH;
     for (const p of this._pointerSources) {
       if (!p.active) continue;
@@ -1337,8 +1337,12 @@ export class Renderer {
       data[o + 3] = invRptr;
       data[o + 4] = 1;                      // cosA = 1 (isotropic)
       data[o + 5] = 0;                      // sinA = 0
-      data[o + 6] = 0;                      // pushK = 0
-      data[o + 7] = K_PTR_STRENGTH * fade;  // swirlK = tangential CCW
+      // Negative pushK: domain-warp moves smoke patterns *opposite* to
+      // the warp vector, so a vector pointing away from the source
+      // (rad = d) visually pulls smoke inward. Negate to get the
+      // intuitive outward flow from the touch point.
+      data[o + 6] = -K_PTR_STRENGTH * fade; // pushK (visual outward)
+      data[o + 7] = 0;                      // swirlK = 0
       idx++;
     }
     this._hasActivePointers = anyActivePtr;

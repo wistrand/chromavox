@@ -54,9 +54,9 @@ No dependencies.
   `pushK = K_ELEM_STRENGTH / √N`, and `swirlK = el.spin · K_SPIN_SWIRL / √N`
   so a spinning element stirs the smoke in the same direction as its
   rotation while a stationary one just pushes smoke radially. Pointer
-  sources set `pushK = 0` and `swirlK = K_PTR_STRENGTH · fade`; the
-  swirl tracks the pointer live while held, then fades exponentially
-  over ~0.35 s once released. Sources are packed into a pooled
+  sources set `pushK = K_PTR_STRENGTH · fade` and `swirlK = 0`; the
+  outward push tracks the pointer live while held, then fades
+  exponentially over ~0.35 s once released. Sources are packed into a pooled
   `Float32Array(48 × 8)` and uploaded via one `gl.uniform4fv` as
   `vec4 uSources[96]`; `renderer.hasActivePointers` keeps the RAF
   loop alive while swirls decay. The smoke shader accumulates these
