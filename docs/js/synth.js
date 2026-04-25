@@ -91,6 +91,24 @@ export class SensorSynth {
 
   async enable(sensorCount, mode = 'log') {
     if (this.active) return;
+    // Re-entry guard. `this.active` only flips at the END of enable(),
+    // after multiple awaits — so two concurrent calls (drop-handler
+    // pre-warm + user click + visibility-resume, etc.) would both pass
+    // the active check, both create AudioContexts, and both call
+    // audioWorklet.addModule(). Firefox occasionally shares the
+    // worklet global scope across rapidly-created contexts, in which
+    // case registerProcessor('chromavox-synth') runs twice and throws
+    // NotSupportedError. Reuse the in-flight Promise so concurrent
+    // callers wait on the original instead of starting their own.
+    if (this._enabling) return this._enabling;
+    this._enabling = (async () => {
+      try { await this._enableInner(sensorCount, mode); }
+      finally { this._enabling = null; }
+    })();
+    return this._enabling;
+  }
+
+  async _enableInner(sensorCount, mode = 'log') {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error('AudioContext not supported');
     // latencyHint: 'playback' asks the browser for a larger, more

@@ -150,6 +150,16 @@
   transient-only (plucked) modes.
 - `synth.js`: `enable()` has try/catch around fetch + addModule —
   cleans up AudioContext on failure to prevent leaked contexts.
+- `synth.js`: `enable()` is gated by an in-flight Promise (`_enabling`)
+  in addition to the `this.active` check. The active flag only flips
+  at the end of `_enableInner()` — after several awaits — so two
+  concurrent callers (drop-handler synth pre-warm + user click +
+  visibility resume, etc.) would both pass the active check, both
+  create AudioContexts, and both call `audioWorklet.addModule()`.
+  Firefox sometimes shares the worklet global scope across rapidly-
+  created contexts, and `registerProcessor('chromavox-synth')` runs
+  twice → `NotSupportedError`. The Promise re-entry guard makes
+  concurrent callers wait on the original instead.
 - `synth-worklet.js`: vocoder stores `env` (not `voiceTarget`) in
   `v.gains[0]` for correct envelope tracking.
 - Centroid smoothing uses block-rate coefficient
