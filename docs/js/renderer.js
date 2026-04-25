@@ -1285,7 +1285,14 @@ export class Renderer {
         let tr = 0, tg = 0, tb = 0;
         for (let b = 0; b < binCount; b++) {
           const v = tracer.sensorBins[base + b];
-          if (v <= 0) continue;
+          // Strict-positive: rejects 0, negatives, and NaN. NaN <= 0
+          // is false, so without `> 0` a NaN bin slips through, taints
+          // tr/tg/tb, and pollutes _sensorGlow[s] permanently — once
+          // an EMA slot is NaN, k*(target - NaN) = NaN forever, and
+          // that sensor row stays dead until resetEdgeGlow(). Bins
+          // can occasionally be NaN around scene transitions before
+          // the tracer settles; this is the consumer-side guard.
+          if (!(v > 0)) continue;
           tr += wlRgb[b * 3    ] * v;
           tg += wlRgb[b * 3 + 1] * v;
           tb += wlRgb[b * 3 + 2] * v;
