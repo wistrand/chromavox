@@ -47,7 +47,7 @@ function padToDegree(padIndex) {
   return row * _rowOffset + col;
 }
 
-// Pad note → emitter index. Exported for mic.js pad mapper.
+// Pad note → emitter index. Exported for input.js pad mapper.
 export function apcPadNoteToEmitter(note) {
   if (note < 0 || note >= PAD_COUNT) return -1;
   return padToDegree(note);

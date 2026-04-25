@@ -100,9 +100,14 @@ No dependencies.
   panel is scrolled or short.
 - `docs/js/ui.js` — pointer events (mouse + touch unified), property panel,
   save/load, preset dropdown, undo/redo, keyboard shortcuts.
-- `docs/js/mic.js` — audio input (mic or synthetic source) + FFT bucket extraction.
-  Filters system-realtime messages (status >= 0xF0, e.g. Active Sensing)
-  before processing/logging MIDI input.
+- `docs/js/input.js` — owns every input source that drives emitter
+  levels: microphone, audio file playback, MIDI (notes + MPE
+  slide/bend), touch (pointer events on the bench's left wall),
+  keyboard polyphony, and synthetic audio sources (sine, harmonics,
+  white/pink noise). Provides FFT bucket extraction (`micBands`) for
+  audio sources and `directLevels()` for deterministic ones.
+  Filters system-realtime messages (status >= 0xF0, e.g. Active
+  Sensing) before processing/logging MIDI input.
 - `docs/js/synth.js` — additive sensor synth (~190 lines); main-thread
   API (enable, disable, rebuild, setCarrier, setBase, etc.) and
   MessagePort plumbing. Fetches the worklet source from

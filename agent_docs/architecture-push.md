@@ -2,7 +2,7 @@
 
 `docs/js/midi-devices/push.js` — owns the MIDI output port, 8x8 RGB pixel map,
 dynamic palette management, sensor-to-pad color mapping, and
-encoder-to-element dispatch. Separated from `mic.js` so the mic
+encoder-to-element dispatch. Separated from `input.js` so the mic
 module stays a generic MIDI note/CC source.
 
 ## Hardware facts
@@ -181,7 +181,7 @@ main.js at every MIDI enable/disable/switch site.
 
 The Push 3's User Port (hw:X,0,1) is broken at the ALSA sequencer
 level — only delivers Active Sensing, no notes. The Live Port
-(hw:X,0,0) works. `mic.js` auto-selects the Live Port by name
+(hw:X,0,0) works. `input.js` auto-selects the Live Port by name
 matching. See `notes/push3-midi.md` for details.
 
 ## Push transport / utility buttons

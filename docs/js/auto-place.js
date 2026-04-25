@@ -67,21 +67,35 @@ export function analyzeSong(song, scene) {
   }
 
   // Centroid + spread (in emitter-index space).
-  let centroid = 0;
-  for (let i = 0; i < N; i++) centroid += i * W[i];
+  // Bass-pedal compensation: a sustained low drone (e.g. open-string
+  // bass on emitter 0) can hold 20-30% of the velocity-weighted
+  // energy and drag the centroid toward the bottom of the bench even
+  // when the melody is firmly in the upper half. Down-weight the
+  // lower third's contribution to the centroid so the metric reflects
+  // the "musical voice" region rather than the drone.
+  const third = Math.max(1, Math.floor(N / 3));
+  const BASS_FADE = 0.3;
+  let cNum = 0, cDen = 0;
+  for (let i = 0; i < N; i++) {
+    const wt = i < third ? BASS_FADE * W[i] : W[i];
+    cNum += i * wt;
+    cDen += wt;
+  }
+  const centroid = cDen > 0 ? cNum / cDen : N / 2;
   let variance = 0;
   for (let i = 0; i < N; i++) variance += W[i] * (i - centroid) ** 2;
   const spread = Math.sqrt(variance);
 
   // Bass / treble ratios.
-  const third = Math.max(1, Math.floor(N / 3));
   let bassRatio = 0, trebleRatio = 0;
   for (let i = 0; i < third; i++) bassRatio += W[i];
   for (let i = N - third; i < N; i++) trebleRatio += W[i];
 
-  // Melody band: peak of smoothed weights, expand while ≥ 30% of peak.
-  let peak = 0;
-  for (let i = 1; i < N; i++) if (S[i] > S[peak]) peak = i;
+  // Melody band: peak of smoothed weights in the upper 2/3 of the
+  // bench (skips the bass-pedal region for the same reason as the
+  // centroid down-weight above), then expand while ≥ 30% of peak.
+  let peak = third;
+  for (let i = third + 1; i < N; i++) if (S[i] > S[peak]) peak = i;
   const thresh = S[peak] * 0.3;
   let mLo = peak, mHi = peak;
   while (mLo > 0 && S[mLo - 1] >= thresh) mLo--;

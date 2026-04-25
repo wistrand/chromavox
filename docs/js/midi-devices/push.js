@@ -68,7 +68,7 @@ function padToDegree(padIndex) {
   return row * _rowOffset + col;
 }
 
-// Pad note → emitter index (= scale degree). Exported for mic.js.
+// Pad note → emitter index (= scale degree). Exported for input.js.
 export function padNoteToEmitter(note) {
   const k = note - PAD_BASE;
   if (k < 0 || k >= PAD_COUNT) return -1;

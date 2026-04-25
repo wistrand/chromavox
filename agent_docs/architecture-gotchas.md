@@ -96,13 +96,13 @@
   causing `tan(0)=0` and a silent first block.
 - `main.js`: `synth.setBase(NaN)` guard when source is touch/file
   (missing from `baseBySource` map).
-- `mic.js`: `_peakHold` reset to 0 in `enable()` to avoid stale
+- `input.js`: `_peakHold` reset to 0 in `enable()` to avoid stale
   values across source switches.
-- `mic.js`: `disable()` clears `_touchTargets` so stale touch state
+- `input.js`: `disable()` clears `_touchTargets` so stale touch state
   doesn't persist across source switches.
-- `mic.js`: `_installKeyboard` uses `setTouchLevel()` not direct
+- `input.js`: `_installKeyboard` uses `setTouchLevel()` not direct
   `_touchLevels` write, so the touch smoothing ramp runs correctly.
-- `mic.js`: `_decodedFile` persists across `disable()` cycles so file
+- `input.js`: `_decodedFile` persists across `disable()` cycles so file
   audio can resume without re-picking.
 - `raytracer.js`: secondary ray `skipElId` stored in separate
   `_secondarySkipIds[]` array (UUID strings can't go in Float32Array).

@@ -1,6 +1,6 @@
 # Architecture: MIDI Input
 
-MIDI input is a source type in `mic.js` (alongside microphone, sine,
+MIDI input is a source type in `input.js` (alongside microphone, sine,
 harmonics, noise, keyboard). Selected via the Source dropdown as
 "MIDI in".
 

@@ -1,6 +1,6 @@
 # Architecture: Audio In / Out
 
-## Audio in (`docs/js/mic.js`)
+## Audio in (`docs/js/input.js`)
 
 Toggle `Audio in` in the toolbar (or press `A`; Push Play button
 CC 85 also toggles). `mic-source` picks the signal
@@ -48,7 +48,7 @@ generator:
 
 Mic, sine, harmonics, white, pink, keyboard, and file sources feed a
 single `AnalyserNode` with `fftSize = 8192` and
-`smoothingTimeConstant` set in `mic.js` `enable()`, so downstream code
+`smoothingTimeConstant` set in `input.js` `enable()`, so downstream code
 doesn't know where the audio came from. Touch/keys and MIDI sources
 bypass the AudioContext entirely — `directLevels()` returns emitter
 levels directly.

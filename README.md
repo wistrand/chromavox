@@ -97,7 +97,7 @@ extensionless paths resolve to the matching `.html`.
   rays into an HDR FBO, tonemapped blit, per-element distortion pass,
   overlay lines.
 - `docs/js/ui.js` — pointer input, property panel, undo/redo, shortcuts.
-- `docs/js/mic.js` — audio input modes + scale-aware bucketing.
+- `docs/js/input.js` — audio input modes + scale-aware bucketing.
 - `docs/js/synth.js` + `docs/js/synth-worklet.js` — additive synth in
   a single `AudioWorkletProcessor`; nine carrier modes + Freeverb.
 - `docs/js/carriers.js` — carrier parameter schema.

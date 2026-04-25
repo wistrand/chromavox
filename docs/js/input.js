@@ -1,12 +1,14 @@
-// Audio-input modulator. `enable(source)` attaches either the microphone or
-// a synthetic debug source (sine, harmonics, white/pink noise) to the same
-// AnalyserNode so everything downstream (sample, micBands) is oblivious to
-// where the sound came from.
+// Input modulator. Owns every input source that drives emitter levels:
+// microphone, audio file playback, MIDI (notes + MPE), touch (pointer
+// events on the bench's left wall), keyboard polyphony, and synthetic
+// audio sources (sine, harmonics, white/pink noise). `enable(source)`
+// wires whichever source is selected; downstream consumers (sample,
+// micBands, directLevels) read a uniform per-emitter level array.
 
 import { scaleFreq, SCALES } from './spectrum.js';
 import { padNoteToEmitter } from './midi-devices/push.js';
 
-export class MicModulator {
+export class InputModulator {
   constructor() {
     this.active = false;
     this.ctx = null;

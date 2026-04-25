@@ -2,7 +2,7 @@
 
 ## What MIDI provides vs. the mic path
 
-The mic path (`mic.js`) feeds an `AnalyserNode`, which `micBands()`
+The mic path (`input.js`) feeds an `AnalyserNode`, which `micBands()`
 bins into N amplitude buckets. Each bucket drives one emitter source's
 intensity. The mapping is indirect: audio → FFT → bucket → emitter →
 ray → sensor → synth.

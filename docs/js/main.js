@@ -6,7 +6,7 @@ import { GPUTracer } from './gpu-tracer.js';
 import { Renderer } from './renderer.js';
 import { UI } from './ui.js';
 import { wavelengthToRGB } from './spectrum.js';
-import { MicModulator, micBands } from './mic.js';
+import { InputModulator, micBands } from './input.js';
 import { SensorSynth } from './synth.js';
 import { padNoteToEmitter } from './midi-devices/push.js';
 import { MidiRouter } from './midi-devices/router.js';
@@ -196,7 +196,7 @@ function resetDisplay() {
 }
 let lastFrameTime = performance.now() / 1000;
 
-const mic = new MicModulator();
+const mic = new InputModulator();
 const songPlayer = new SongPlayer();
 const synth = new SensorSynth();
 const midi = new MidiRouter();
@@ -273,7 +273,7 @@ const encoderCC = (cc, val) => {
   markDirty();
 };
 midi.setCCHandler(encoderCC);
-// Keyboard note on/off in mic.js needs to wake the frame loop.
+// Keyboard note on/off in input.js needs to wake the frame loop.
 mic.onTouchChange = () => setDirty();
 mic.onMidiChange = () => setDirty();
 // MIDI pitch bend arriving from a hardware controller takes over from
