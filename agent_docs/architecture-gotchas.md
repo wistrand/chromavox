@@ -286,6 +286,15 @@
   in `main.js` opens the file picker as a fallback when it sees an
   empty DataTransfer, so users hit one extra click instead of total
   failure.
+- **Firefox + Linux multi-touch is disabled by default**, even on
+  X11. Touchscreen input collapses to a single mouse-emulated
+  pointer, so the page only ever sees `mapSize: 1` in `_touchPointers`
+  and emitter polyphony via fingers doesn't work (keyboard polyphony
+  is unaffected — same code path, different input device). Chrome
+  enables the equivalents by default. Two opt-ins needed:
+  `about:config` → `dom.w3c_touch_events.enabled = 2` (auto), plus
+  launching with `MOZ_USE_XINPUT2=1 MOZ_ENABLE_WAYLAND=0 firefox` so
+  XInput2 delivers per-finger pointer events.
 - **Drop-handler quirks.** Drag handlers are bound on `document` (not
   `stage`) because Firefox can ignore a bubbled `dragover.preventDefault()`
   from an ancestor when the immediate target is a WebGL canvas, and
