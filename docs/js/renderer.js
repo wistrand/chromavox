@@ -119,6 +119,13 @@ uniform float uHue;      // smoke "hi" color hue in degrees (0..360)
 uniform int uSourceCount;
 uniform vec4 uSources[MAX_SOURCES * 2];
 
+// Pre-baked tileable noise texture (R8). Replaces ~5 procedural simplex
+// calls per fragment with one bilinear-filtered sample each — ~95%
+// fewer ALU on the noise path. The hardware bilinear filter does the
+// gradient interpolation; texture wrap is REPEAT so noiseT(p) is
+// well-defined at any p without modulo math.
+uniform sampler2D uNoise;
+
 out vec4 outColor;
 
 // HSV to linear RGB. h in [0,1], s, v in [0,1].
@@ -128,31 +135,13 @@ vec3 hsv2rgb(vec3 c) {
   return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
 
-// Ashima Arts simplex noise (2D). Output ~[-1, 1].
-vec3 _perm(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
-float snoise(vec2 v) {
-  const vec4 C = vec4(0.211324865405187, 0.366025403784439,
-                     -0.577350269189626, 0.024390243902439);
-  vec2 i  = floor(v + dot(v, C.yy));
-  vec2 x0 = v - i + dot(i, C.xx);
-  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-  vec4 x12 = x0.xyxy + C.xxzz;
-  x12.xy -= i1;
-  i = mod(i, 289.0);
-  vec3 p = _perm(_perm(i.y + vec3(0.0, i1.y, 1.0))
-                     + i.x + vec3(0.0, i1.x, 1.0));
-  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy),
-                          dot(x12.zw, x12.zw)), 0.0);
-  m = m * m; m = m * m;
-  vec3 x = 2.0 * fract(p * C.www) - 1.0;
-  vec3 h = abs(x) - 0.5;
-  vec3 ox = floor(x + 0.5);
-  vec3 a0 = x - ox;
-  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
-  vec3 g;
-  g.x  = a0.x * x0.x + h.x * x0.y;
-  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
-  return 130.0 * dot(m, g);
+// Drop-in replacement for the old Ashima 2D simplex noise. The texture
+// is generated once at startup (256x256 tileable smooth value noise,
+// 64x64 source grid → 64 features per period) and uploaded with
+// REPEAT + LINEAR. Multiplier tuned by eye against the previous simplex
+// path: 1/16 read too fine, 1/32 too soft, 1/22 lands in the middle.
+float noiseT(vec2 v) {
+  return texture(uNoise, v * (1.0 / 22.0)).r * 2.0 - 1.0;
 }
 
 // FBM with a tiny per-octave drift. Kept slow so layers don't slide
@@ -163,7 +152,7 @@ float fbm(vec2 p, float t) {
   vec2 shift = vec2(0.0);
   float dir = 1.0;
   for (int i = 0; i < 3; i++) {
-    v += a * snoise(p + shift);
+    v += a * noiseT(p + shift);
     p *= 2.03;
     a *= 0.5;
     shift += dir * vec2(t * 0.012, -t * 0.008);
@@ -205,8 +194,8 @@ void main() {
   // the warp nudges the field rather than stretching it into rivers.
   float wt = uTime * 0.045;
   vec2 warp = vec2(
-    snoise(p * 1.4 + vec2( wt * 0.8,  wt * 0.4)),
-    snoise(p * 1.4 + vec2(-wt * 0.3,  wt * 0.9) + 17.3)
+    noiseT(p * 1.4 + vec2( wt * 0.8,  wt * 0.4)),
+    noiseT(p * 1.4 + vec2(-wt * 0.3,  wt * 0.9) + 17.3)
   );
 
   // --- Source displacement ---
@@ -548,11 +537,12 @@ export class Renderer {
       uHue:         gl.getUniformLocation(this.smokeProgram, 'uHue'),
       uSourceCount: gl.getUniformLocation(this.smokeProgram, 'uSourceCount'),
       uSources:     gl.getUniformLocation(this.smokeProgram, 'uSources[0]'),
+      uNoise:       gl.getUniformLocation(this.smokeProgram, 'uNoise'),
     };
     this.smokeEnabled = false;
     this.smokeIntensity = 1.0;
     this.smokeHue = 220; // cool blue-grey by default — the original look
-    this.showTicks = true; // emitter + sensor wall markers
+    this.showTicks = false; // emitter + sensor wall markers — off by default; user opts in via Bench → Markers
 
     // Smoke source state. `_sourceData` is a pooled Float32Array packed
     // per-frame in updateSources(); `_pointerSources` is a fixed-size
@@ -582,6 +572,12 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    // Pre-baked tileable noise texture, sampled by SMOKE_FS's FBM and
+    // domain-warp paths instead of running the Ashima 2D simplex
+    // algorithm in-shader (~50 ALU per call × 5 calls). Built once at
+    // construction; bound on the smoke pre-pass below.
+    this.noiseTex = this._buildNoiseTexture(256, 64);
 
     // Blur program + bloom ping-pong pair for the smoke-gated bloom.
     // bloomTexA stores the horizontal-blur result, bloomTexB the final
@@ -862,6 +858,55 @@ export class Renderer {
     return { w: this._benchW, h: this._benchH };
   }
 
+  // Build a tileable smooth-value-noise texture once at startup. The
+  // smoke shader samples this with REPEAT wrap + LINEAR filter as a
+  // drop-in for procedural simplex noise: 5 in-shader simplex calls
+  // (~50 ALU each) become 5 texture fetches (~3 ALU each + bandwidth).
+  // Generation: a low-resolution random grid (gridRes×gridRes) bilinearly
+  // upsampled to size×size with smoothstep interpolation, indexed
+  // toroidally so the result is seamless under REPEAT.
+  _buildNoiseTexture(size, gridRes) {
+    const gl = this.gl;
+    const grid = new Float32Array(gridRes * gridRes);
+    for (let i = 0; i < grid.length; i++) grid[i] = Math.random();
+    const data = new Uint8Array(size * size);
+    const ratio = size / gridRes;
+    for (let y = 0; y < size; y++) {
+      const fy = y / ratio;
+      const yf = Math.floor(fy);
+      const y0 = ((yf % gridRes) + gridRes) % gridRes;
+      const y1 = (y0 + 1) % gridRes;
+      const ty = fy - yf;
+      const sy = ty * ty * (3 - 2 * ty);
+      for (let x = 0; x < size; x++) {
+        const fx = x / ratio;
+        const xf = Math.floor(fx);
+        const x0 = ((xf % gridRes) + gridRes) % gridRes;
+        const x1 = (x0 + 1) % gridRes;
+        const tx = fx - xf;
+        const sx = tx * tx * (3 - 2 * tx);
+        const v00 = grid[y0 * gridRes + x0];
+        const v10 = grid[y0 * gridRes + x1];
+        const v01 = grid[y1 * gridRes + x0];
+        const v11 = grid[y1 * gridRes + x1];
+        const v = v00 * (1 - sx) * (1 - sy)
+                + v10 *      sx  * (1 - sy)
+                + v01 * (1 - sx) *      sy
+                + v11 *      sx  *      sy;
+        data[y * size + x] = (v * 255) | 0;
+      }
+    }
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, size, size, 0, gl.RED,
+                  gl.UNSIGNED_BYTE, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    return tex;
+  }
+
   // Register / move / release a pointer-driven swirl source at bench
   // coordinates. Sources are keyed by `id` (pointer ID) so the swirl
   // follows the finger live: pointerdown → push, pointermove → push
@@ -1061,6 +1106,12 @@ export class Renderer {
       gl.uniform2f(this.smoke.uAspect, scene.bench.w, scene.bench.h);
       gl.uniform1f(this.smoke.uIntensity, this.smokeIntensity);
       gl.uniform1f(this.smoke.uHue, this.smokeHue);
+      // Bind the pre-baked noise texture on TEXTURE3 (TEXTURE0..2 are
+      // reserved by the blit + elem passes for fboTex/smokeTex/bloom).
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.noiseTex);
+      gl.uniform1i(this.smoke.uNoise, 3);
+      gl.activeTexture(gl.TEXTURE0);
       gl.uniform1i(this.smoke.uSourceCount, this._sourceCount);
       // Upload only the populated portion — the shader loop is bounded
       // by `uSourceCount`, so stale slots beyond it are never sampled.
