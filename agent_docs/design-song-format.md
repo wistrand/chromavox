@@ -89,8 +89,8 @@ restore.
 
 - `emitter`: count, wavelength range, rays — same as scene.emitter
 - `sensorCount`: sensor count for the song
-- `mode`, `base`, `span`: mic-side scale settings (applied via
-  `onGlobal` callback to `mic-mode`, `mic-base`, `chromatic-span`)
+- `mode`, `base`, `span`: input-side scale settings (applied via
+  `onGlobal` callback to `input-mode`, `input-base`, `chromatic-span`)
 - `carrier`: synth carrier mode (applied to `synth-carrier`)
 - `partials`, `volume`: synth settings
 

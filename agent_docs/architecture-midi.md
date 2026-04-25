@@ -11,16 +11,16 @@ live MIDI events — see "MIDI file importer" in
 
 ## How it works
 
-No AudioContext is created. `mic.enable('midi', deviceId)` calls
+No AudioContext is created. `inputs.enable('midi', deviceId)` calls
 `navigator.requestMIDIAccess({ sysex: true })` (falls back to basic
 if SysEx is denied), attaches an `onmidimessage` handler to the
-selected input port, and sets `mic.active = true`.
+selected input port, and sets `inputs.active = true`.
 
 The handler parses MIDI messages by status byte:
 
 - **Note On (0x90)** with velocity > 0: `_midiNotes.set(note, vel / 127)`
 - **Note Off (0x80)** or Note On with velocity 0: `_midiNotes.delete(note)`
-- **CC (0xB0)**: dispatched to `mic.onCC(cc, val)` callback (wired to
+- **CC (0xB0)**: dispatched to `inputs.onCC(cc, val)` callback (wired to
   the active controller's `handleCC` in main.js)
 - **Sustain pedal (CC 64)**: holds notes after key release. Pedal off
   clears all sustained notes.
@@ -61,11 +61,11 @@ Each device class exposes:
   `/push/i`; `KeyboardDevice.matches` always returns true → fallback).
 - `static label` — human-readable mapper name shown in the MIDI options
   panel (e.g. "Push in-key", "MPC 4x4", "keyboard (linear)").
-- `padMapper` — function or `null`, copied to `mic._padMapper` after
-  attach. KeyboardDevice builds its mapper in `attach(_, _, mic)` so
-  it can close over the current `mic._kbdMidiBase`.
+- `padMapper` — function or `null`, copied to `inputs._padMapper` after
+  attach. KeyboardDevice builds its mapper in `attach(_, _, inputs)` so
+  it can close over the current `inputs._kbdMidiBase`.
 
-`mic.directLevels(n, mode, base, step)` uses `mic._padMapper` to map
+`inputs.directLevels(n, mode, base, step)` uses `inputs._padMapper` to map
 pad notes to emitter indices:
 
 - **Push**: `padMapper === null` → falls back to the default
@@ -76,7 +76,7 @@ pad notes to emitter indices:
 - **APC**: `apcPadNoteToEmitter` — same in-key layout as Push but with
   note offset 0.
 - **Generic keyboard** (`KeyboardDevice`): linear
-  `note - mic._kbdMidiBase`; base is resynced from the current "Base"
+  `note - inputs._kbdMidiBase`; base is resynced from the current "Base"
   Hz selector via `keyboard.onAttach` (wired in `main.js`).
 
 All mappers bypass the FFT entirely — no spectral leakage, no bucket
@@ -84,7 +84,7 @@ bleed, exact pad/key-to-emitter mapping.
 
 ## `sample()` for MIDI
 
-Returns `true` with no analyser work. `mic.ctx` is null (no
+Returns `true` with no analyser work. `inputs.ctx` is null (no
 AudioContext), so `micBands` must never be called — `directLevels`
 returns an all-zeros Float32Array even when no notes are held
 (not null), preventing the FFT fallback.
@@ -118,14 +118,14 @@ a browser permission prompt on first use.
 
 ## Lifecycle
 
-- `mic.enable('midi')`: request MIDI access, attach handler, set active.
+- `inputs.enable('midi')`: request MIDI access, attach handler, set active.
   main.js then calls `attachPush()` (thin wrapper over `midi.attach(...)`
   on the `MidiRouter` instance) which picks the matching device and
-  writes `mic._padMapper` + the mapper-label element.
-- `mic.disable()`: detach handler, clear notes, set inactive.
+  writes `inputs._padMapper` + the mapper-label element.
+- `inputs.disable()`: detach handler, clear notes, set inactive.
   main.js calls `detachPush()` first, which calls `midi.detach()` (clears
-  LEDs on all controller devices and unsets `mic._padMapper`).
-- Source change: `detachPush()` → `mic.disable()` → `mic.enable(newSrc)` →
+  LEDs on all controller devices and unsets `inputs._padMapper`).
+- Source change: `detachPush()` → `inputs.disable()` → `inputs.enable(newSrc)` →
   `attachPush()` (if new source is MIDI).
 
 ## GPU tracer wlPerSource texture

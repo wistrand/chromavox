@@ -139,13 +139,13 @@ No dependencies.
   RGB pads via SysEx (with palette fallback), faders with pickup mode,
   in-key layout matching Push. See `architecture-akai-controllers.md`.
 - `docs/js/midi-devices/keyboard.js` — generic MIDI keyboard fallback:
-  no LEDs, no display, linear `note - mic._kbdMidiBase` pad mapping.
+  no LEDs, no display, linear `note - inputs._kbdMidiBase` pad mapping.
   Its `static matches()` always returns true, so the router picks it
   when no specific controller matches.
 - `docs/js/midi-devices/router.js` — `MidiRouter`: owns singleton
   instances of all four devices, dispatches by name via each device's
   `static matches(name)`, and copies the active device's `padMapper`
-  to `mic._padMapper`. main.js talks to this one object instead of
+  to `inputs._padMapper`. main.js talks to this one object instead of
   branching on controller type.
 - `docs/js/carriers.js` — carrier parameter descriptors (UI, persistence,
   automation, worklet defaults). Single source of truth for all
@@ -210,7 +210,7 @@ interaction. On page load, `main.js` restores from localStorage if
 present, otherwise calls `createScene()`. At the end of each frame the
 idle check decides whether to request another:
 `needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
-|| songPlayer.playing || (mic.active && source !== 'touch') || synth.active
+|| songPlayer.playing || (inputs.active && source !== 'touch') || synth.active
 || renderer.smokeEnabled || renderer.hasActivePointers
 || renderer.edgeGlowEnabled`.
 All state-changing event handlers (mic enable/disable, file transport,

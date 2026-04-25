@@ -104,7 +104,7 @@ relevant one before editing that subsystem.
   meaning across a row-index reshuffle.
 - **Idle RAF loop**: the frame loop stops when nothing needs updating.
   `needsFrame = dirty || particlesInFlight || hasSpinning ||
-  touchRamping || songPlayer.playing || mic.active || synth.active`.
+  touchRamping || songPlayer.playing || inputs.active || synth.active`.
   State-changing handlers call `scheduleFrame()` / `setDirty()` /
   `markDirty()` (the last also persists to localStorage).
 - **Element property schema** (`docs/js/elements.js`) is the single

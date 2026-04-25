@@ -744,7 +744,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // Compute target gains from latest bins snapshot.
     // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
     // the 0-1 micGain scale, then apply floor + gamma. This matches the
-    // mic spectrum's absolute scaling so quiet voices stay quiet.
+    // input spectrum's absolute scaling so quiet voices stay quiet.
     // Noise and acid carriers use K=1 (single band per voice).
     if (bins && bins.length >= sc * bc) {
       const fs = this.fullScale;

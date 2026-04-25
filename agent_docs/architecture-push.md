@@ -121,7 +121,7 @@ Finally calls `flush()`.
 ## Encoder → element control
 
 Push track encoders (CC 71-78) send relative values around 64.
-`mic.onCC` dispatches to `push.handleCC` → `push.onCC` callback,
+`inputs.onCC` dispatches to `push.handleCC` → `push.onCC` callback,
 wired in main.js:
 
 | CC | Property | Step |

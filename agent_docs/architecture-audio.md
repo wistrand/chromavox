@@ -3,7 +3,7 @@
 ## Audio in (`docs/js/input.js`)
 
 Toggle `Audio in` in the toolbar (or press `A`; Push Play button
-CC 85 also toggles). `mic-source` picks the signal
+CC 85 also toggles). `input-source` picks the signal
 generator:
 
 - `microphone` — real mic via `getUserMedia`. Browser AGC / AEC / NS
@@ -28,7 +28,7 @@ generator:
   `_touchLevels` directly); actual levels ramp toward targets each
   frame via `smoothTouchLevels()` — attack 0.2/frame (~50 ms),
   release 0.15/frame (~66 ms). This prevents clicks from instant
-  0→1 steps into the vocoder or other carriers. `mic.onTouchChange`
+  0→1 steps into the vocoder or other carriers. `inputs.onTouchChange`
   callback wakes the frame loop on keyboard note on/off so the ramp
   runs immediately. Multi-touch supported. All emitters are force-
   enabled (disabled set cleared each frame). Context menu suppressed
@@ -84,14 +84,14 @@ tones; with major + span 2 you get thirds. Span only matters in scale
 modes (hidden in `log`).
 
 The mic smoothing slider drives `AnalyserNode.smoothingTimeConstant`
-via `mic.setSmoothing(v)`. Lower for snappier per-key response on the
+via `inputs.setSmoothing(v)`. Lower for snappier per-key response on the
 keyboard claviature; higher for smoother envelope tracking on vocals
 or sustained sources.
 
 All modes use `getFloatFrequencyData` (dB values). Normalization is
 **split by source type**:
 
-- **File source** (`mic.source === 'file'`): converts dB to linear
+- **File source** (`inputs.source === 'file'`): converts dB to linear
   amplitude via `dbToLin` (`10^(dB/20)`), then peak-normalizes using
   `_peakHold` (module-scope; rises instantly, decays at 0.95/frame —
   roughly 1 s to half at 60 fps). Linear output (no sqrt, no gamma).
@@ -355,7 +355,7 @@ hiccups. The graph is `workletNode → master → destination`; the
   headroom. Sine partials get 1/k rolloff.
   A `tanh` soft limiter at ±0.8 prevents hard clipping when many
   voices overlap. No peak-hold — quiet voices stay quiet relative
-  to loud ones, matching the mic spectrum's absolute scaling.
+  to loud ones, matching the input spectrum's absolute scaling.
 - **Voice stealing**: voices whose gains are all < 1e-5 are skipped
   entirely in the render loop.
 - Master gain slider posts a gain value via `MessagePort`.
@@ -519,7 +519,7 @@ bleed across scenes.
 
 Toggled via the **Synth spectrum** checkbox in the left panel (below
 Mic spectrum). Floating draggable window identical in structure to the
-mic spectrum window. Shows the actual FFT of the synth's audio output
+input spectrum window. Shows the actual FFT of the synth's audio output
 via an `AnalyserNode` (`fftSize=8192`, `smoothing=0.6`) tapped between
 the worklet node and master gain in the audio graph. Log-frequency
 axis 80–6000 Hz with `getFloatFrequencyData`. Reflects the real output

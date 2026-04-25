@@ -25,14 +25,15 @@ export class MidiRouter {
     for (const d of this.devices) d.onCC = fn;
   }
 
-  // Pick and attach a device. `mic` is only used by KeyboardDevice to
-  // build a closure over `mic._kbdMidiBase`; the other devices ignore it.
+  // Pick and attach a device. `inputs` is only used by KeyboardDevice
+  // to build a closure over `inputs._kbdMidiBase`; the other devices
+  // ignore it.
   // Returns { label, padMapper } or null if nothing to attach.
-  attach(midiAccess, input, mic) {
+  attach(midiAccess, input, inputs) {
     if (!midiAccess || !input) return null;
     const name = input.name || '';
     const dev = this.devices.find(d => d.constructor.matches(name));
-    dev.attach(midiAccess, input, mic);
+    dev.attach(midiAccess, input, inputs);
     this.active = dev;
     return {
       label: `Mapper: ${dev.constructor.label} — ${name}`,

@@ -82,8 +82,8 @@ function setDirty() {
 
 const UI_STORAGE_KEY = 'chromavox-ui';
 const UI_CONTROL_IDS = [
-  'mic-source', 'mic-device', 'midi-device', 'mic-mode', 'mic-base',
-  'chromatic-span', 'mic-smoothing', 'bucket-color', 'synth-independent',
+  'input-source', 'input-device', 'midi-device', 'input-mode', 'input-base',
+  'chromatic-span', 'input-smoothing', 'bucket-color', 'synth-independent',
   'synth-mode', 'synth-base', 'synth-span', 'synth-vol', 'synth-reverb', 'synth-carrier',
   ...ALL_PARAM_IDS.map(id => 'cp-' + id), // carrier param sliders
   'synth-device',
@@ -196,7 +196,7 @@ function resetDisplay() {
 }
 let lastFrameTime = performance.now() / 1000;
 
-const mic = new InputModulator();
+const inputs = new InputModulator();
 const songPlayer = new SongPlayer();
 const synth = new SensorSynth();
 const midi = new MidiRouter();
@@ -274,20 +274,20 @@ const encoderCC = (cc, val) => {
 };
 midi.setCCHandler(encoderCC);
 // Keyboard note on/off in input.js needs to wake the frame loop.
-mic.onTouchChange = () => setDirty();
-mic.onMidiChange = () => setDirty();
+inputs.onTouchChange = () => setDirty();
+inputs.onMidiChange = () => setDirty();
 // MIDI pitch bend arriving from a hardware controller takes over from
 // the song's bend automation (same semantics as dragging the slider).
-mic.onGlobalBend = () => { if (songPlayer.playing) songPlayer.bendPaused = true; };
+inputs.onGlobalBend = () => { if (songPlayer.playing) songPlayer.bendPaused = true; };
 // Route mic CC events: transport buttons handled here, encoders to controller.
-mic.onCC = (cc, val) => {
+inputs.onCC = (cc, val) => {
   // Play button (CC 85) toggles audio out. Only on press (val > 0).
   if (cc === 85 && val > 0) { synthBtn.click(); return; }
   // + button (CC 32) adds a new element (same as the Add button).
   if (cc === 32 && val > 0) { document.getElementById('add-btn').click(); return; }
   // Page buttons (CC 62/63): shift keyboard octave like , and . keys.
-  if (cc === 62 && val > 0) { mic.keyboardOctave--; return; }
-  if (cc === 63 && val > 0) { mic.keyboardOctave++; return; }
+  if (cc === 62 && val > 0) { inputs.keyboardOctave--; return; }
+  if (cc === 63 && val > 0) { inputs.keyboardOctave++; return; }
   // Volume encoder (CC 79) adjusts synth master volume.
   if (cc === 79) {
     const dir = val >= 64 ? -1 : 1;
@@ -315,25 +315,25 @@ mic.onCC = (cc, val) => {
 function _syncKbdMidiBase() {
   const hz = currentBaseHz();
   // Convert Hz to MIDI note: note = 12 * log2(hz / 440) + 69.
-  mic._kbdMidiBase = Math.round(12 * Math.log2(hz / 440) + 69);
+  inputs._kbdMidiBase = Math.round(12 * Math.log2(hz / 440) + 69);
 }
 midi.keyboard.onAttach = _syncKbdMidiBase;
 
 function attachPush() {
-  if (mic.source !== 'midi') return;
-  const res = midi.attach(mic._midiAccess, mic._midiInput, mic);
+  if (inputs.source !== 'midi') return;
+  const res = midi.attach(inputs._midiAccess, inputs._midiInput, inputs);
   if (!res) return;
-  mic._padMapper = res.padMapper;
+  inputs._padMapper = res.padMapper;
   const ml = document.getElementById('midi-mapper');
   if (ml) ml.textContent = res.label;
 }
 function detachPush() {
   midi.detach();
-  mic._padMapper = null;
+  inputs._padMapper = null;
 }
 
 function currentBaseHz() {
-  return parseFloat(document.getElementById('mic-base').value);
+  return parseFloat(document.getElementById('input-base').value);
 }
 let lastBaseHz = null;
 
@@ -341,16 +341,16 @@ let lastBaseHz = null;
 // match the input scale.  Called on mode/base/span change and on
 // keyboard source selection.
 function syncKeyboardScale() {
-  const mode = document.getElementById('mic-mode').value;
+  const mode = document.getElementById('input-mode').value;
   const base = currentBaseHz();
   const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
   const scaleName = (mode === 'log' || mode === 'voice') ? 'chromatic' : mode;
-  mic.setKeyboardScale(scaleName, base, step);
+  inputs.setKeyboardScale(scaleName, base, step);
   midi.setScale(scaleName);
 }
 
 function syncBaseSelect(hz) {
-  const sel = document.getElementById('mic-base');
+  const sel = document.getElementById('input-base');
   let best = null, bestDist = Infinity;
   for (const opt of sel.options) {
     const d = Math.abs(parseFloat(opt.value) - hz);
@@ -497,7 +497,7 @@ synthBtn.addEventListener('click', async () => {
 });
 
 function syncSpanVisibility() {
-  const m = document.getElementById('mic-mode').value;
+  const m = document.getElementById('input-mode').value;
   const on = m !== 'log' && m !== 'voice';
   document.getElementById('chromatic-span-row').style.visibility = on ? 'visible' : 'hidden';
 }
@@ -508,7 +508,7 @@ syncSpanVisibility();
 const synthIndep = () => document.getElementById('synth-independent').checked;
 const synthMode  = () => synthIndep()
   ? document.getElementById('synth-mode').value
-  : document.getElementById('mic-mode').value;
+  : document.getElementById('input-mode').value;
 const synthBase  = () => synthIndep()
   ? parseFloat(document.getElementById('synth-base').value)
   : currentBaseHz();
@@ -521,7 +521,7 @@ function pushSynthScale() {
   synth.setStep(synthStep());
 }
 
-document.getElementById('mic-mode').addEventListener('change', e => {
+document.getElementById('input-mode').addEventListener('change', e => {
   if (!synthIndep()) synth.setMode(e.target.value);
   syncSpanVisibility();
   syncKeyboardScale();
@@ -547,12 +547,12 @@ function syncSynthIndepVisibility() {
   }
 }
 document.getElementById('synth-independent').addEventListener('change', e => {
-  // When turning on, copy current mic-side values into the synth controls
+  // When turning on, copy current input-side values into the synth controls
   // so the audible output doesn't jump until the user explicitly tweaks
   // them. Both dropdowns share option values so direct assignment works.
   if (e.target.checked) {
-    document.getElementById('synth-mode').value = document.getElementById('mic-mode').value;
-    document.getElementById('synth-base').value = document.getElementById('mic-base').value;
+    document.getElementById('synth-mode').value = document.getElementById('input-mode').value;
+    document.getElementById('synth-base').value = document.getElementById('input-base').value;
     const span = document.getElementById('chromatic-span').value;
     document.getElementById('synth-span').value = span;
     document.getElementById('synth-span-val').textContent = span;
@@ -579,7 +579,7 @@ const wlBendSlider = document.getElementById('wl-bend');
 const wlBendLabel = document.getElementById('wl-bend-val');
 wlBendSlider.addEventListener('input', () => {
   const v = parseInt(wlBendSlider.value, 10);
-  mic._globalBend = v / 100;
+  inputs._globalBend = v / 100;
   wlBendLabel.textContent = v;
   // User has taken ownership of bend — stop the song's bend automation
   // lerps (parallel to how scene edits stop keyframe element lerps).
@@ -588,7 +588,7 @@ wlBendSlider.addEventListener('input', () => {
 });
 // Called from the frame loop to sync slider with MIDI pitch bend.
 function syncBendSlider() {
-  const gb = mic._globalBend || 0;
+  const gb = inputs._globalBend || 0;
   const sv = Math.round(gb * 100);
   if (parseInt(wlBendSlider.value, 10) !== sv) {
     wlBendSlider.value = sv;
@@ -639,12 +639,12 @@ function syncBenchAspectDropdown() {
 syncBenchAspectDropdown();
 benchAspectSel.addEventListener('change', applyBenchAspect);
 
-const smoothingSlider = document.getElementById('mic-smoothing');
-const smoothingLabel = document.getElementById('mic-smoothing-val');
+const smoothingSlider = document.getElementById('input-smoothing');
+const smoothingLabel = document.getElementById('input-smoothing-val');
 const applySmoothing = () => {
   const v = parseInt(smoothingSlider.value, 10) / 100;
   smoothingLabel.textContent = v.toFixed(2);
-  mic.setSmoothing(v);
+  inputs.setSmoothing(v);
 };
 applySmoothing();
 smoothingSlider.addEventListener('input', applySmoothing);
@@ -665,7 +665,7 @@ function rebuildEmitterLabels() {
   host.innerHTML = '';
   const n = scene.emitter.count;
   if (n <= 0 || host.offsetHeight / n < MIN_LABEL_PX) return;
-  const mode = document.getElementById('mic-mode').value;
+  const mode = document.getElementById('input-mode').value;
   const base = currentBaseHz();
   const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
   for (let i = 0; i < n; i++) {
@@ -693,9 +693,9 @@ const _onLadderChange = () => {
   // colors don't disagree with the new ladder.
   renderer.resetEdgeGlow();
 };
-['mic-mode', 'mic-base', 'mic-source', 'chromatic-span', 'emitter-count']
+['input-mode', 'input-base', 'input-source', 'chromatic-span', 'emitter-count']
   .forEach(id => document.getElementById(id).addEventListener('input', _onLadderChange));
-['mic-mode', 'mic-base', 'mic-source']
+['input-mode', 'input-base', 'input-source']
   .forEach(id => document.getElementById(id).addEventListener('change', _onLadderChange));
 
 function rebuildSensorLabels() {
@@ -729,7 +729,7 @@ rebuildSensorLabels();
 // Sensor labels track synth-side params plus sensor count. Anything that
 // changes either side should refresh them.
 ['sensor-count', 'synth-mode', 'synth-base', 'synth-span', 'synth-independent',
- 'mic-mode', 'mic-base', 'mic-source', 'chromatic-span']
+ 'input-mode', 'input-base', 'input-source', 'chromatic-span']
   .forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('input', rebuildSensorLabels);
@@ -772,7 +772,7 @@ function bindOptionsMenu(toggleId, menuId) {
     if (e.key === 'Escape' && menu.classList.contains('open')) menu.classList.remove('open');
   });
 }
-bindOptionsMenu('mic-options', 'mic-menu');
+bindOptionsMenu('input-options', 'input-menu');
 bindOptionsMenu('synth-options', 'synth-menu');
 bindOptionsMenu('bench-options', 'bench-menu');
 bindOptionsMenu('bench-toggle', 'bench-menu');
@@ -786,8 +786,8 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     if (helpDialog.open) helpDialog.close(); else helpDialog.showModal();
   }
-  // Floating window toggles: 1=mic spectrum, 2=synth spectrum, 3=synth waveform, 4=stats.
-  if (e.key === '1') { document.getElementById('mic-spectrum-toggle').click(); }
+  // Floating window toggles: 1=input spectrum, 2=synth spectrum, 3=synth waveform, 4=stats.
+  if (e.key === '1') { document.getElementById('input-spectrum-toggle').click(); }
   if (e.key === '2') { document.getElementById('synth-spectrum-toggle').click(); }
   if (e.key === '3') { document.getElementById('synth-waveform-toggle').click(); }
   if (e.key === '4') { document.getElementById('stats-toggle').click(); }
@@ -843,15 +843,15 @@ async function populateDevices(selectId, kind, fallbackName) {
   } catch {}
   sel.value = cur;
 }
-const populateMicDevices    = () => populateDevices('mic-device',   'audioinput',  'input');
+const populateMicDevices    = () => populateDevices('input-device',   'audioinput',  'input');
 const populateSynthDevices  = () => populateDevices('synth-device', 'audiooutput', 'output');
 
-document.getElementById('mic-device').addEventListener('change', async () => {
-  if (!mic.active || mic.source !== 'mic') return;
-  mic.disable();
+document.getElementById('input-device').addEventListener('change', async () => {
+  if (!inputs.active || inputs.source !== 'mic') return;
+  inputs.disable();
   try {
-    const dev = document.getElementById('mic-device').value || null;
-    await mic.enable('mic', dev);
+    const dev = document.getElementById('input-device').value || null;
+    await inputs.enable('mic', dev);
     scheduleFrame();
   } catch (err) {
     alert('Microphone: ' + err.message);
@@ -876,8 +876,8 @@ navigator.mediaDevices?.addEventListener?.('devicechange', () => {
 });
 
 function syncMicDeviceVisibility() {
-  const src = document.getElementById('mic-source').value;
-  document.getElementById('mic-device-row').style.display = src === 'mic' ? '' : 'none';
+  const src = document.getElementById('input-source').value;
+  document.getElementById('input-device-row').style.display = src === 'mic' ? '' : 'none';
   document.getElementById('midi-device-row').style.display = src === 'midi' ? '' : 'none';
   document.getElementById('midi-gain-row').style.display = src === 'midi' ? '' : 'none';
   document.getElementById('midi-mapper-row').style.display = src === 'midi' ? '' : 'none';
@@ -894,17 +894,17 @@ const fileTimeLabel = document.getElementById('file-time');
 const fileTransportRow = document.getElementById('file-transport-row');
 
 filePlayBtn.addEventListener('click', () => {
-  if (mic._filePlaying) {
-    mic.filePause();
+  if (inputs._filePlaying) {
+    inputs.filePause();
     filePlayBtn.textContent = '▶';
   } else {
-    mic.fileResume();
+    inputs.fileResume();
     filePlayBtn.textContent = '❚❚';
     scheduleFrame();
   }
 });
 fileRestartBtn.addEventListener('click', () => {
-  mic.fileRestart();
+  inputs.fileRestart();
   filePlayBtn.textContent = '❚❚';
   scheduleFrame();
 });
@@ -917,11 +917,11 @@ document.getElementById('audio-file-input').addEventListener('change', async e =
   e.target.value = '';
   const arrayBuf = await file.arrayBuffer();
   // Auto-enable with the file source.
-  if (mic.active) { mic.disable(); }
-  document.getElementById('mic-source').value = 'file';
+  if (inputs.active) { inputs.disable(); }
+  document.getElementById('input-source').value = 'file';
   syncMicDeviceVisibility();
   try {
-    await mic.enable('file', arrayBuf);
+    await inputs.enable('file', arrayBuf);
     micBtn.textContent = 'Audio in: on';
     micBtn.classList.add('active');
     filePlayBtn.disabled = false;
@@ -937,7 +937,7 @@ document.getElementById('audio-file-input').addEventListener('change', async e =
 document.getElementById('midi-gain').addEventListener('input', e => {
   const v = parseInt(e.target.value, 10) / 100;
   document.getElementById('midi-gain-val').textContent = v.toFixed(2);
-  mic.midiGain = v;
+  inputs.midiGain = v;
 });
 
 // --- Emitter highlight on hover ---
@@ -971,7 +971,7 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     e.preventDefault();  // prevent browser pan/drag gesture
     e.stopPropagation(); // prevent UI emitter toggle / element select
     _touchPointers.set(e.pointerId, idx);
-    mic.setTouchLevel(idx, 1);
+    inputs.setTouchLevel(idx, 1);
     if (cv.hideWelcome) cv.hideWelcome();
     setDirty();
   });
@@ -982,8 +982,8 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     const newIdx = touchEmitterIdx(e);
     if (newIdx < 0) return;
     if (newIdx !== oldIdx) {
-      mic.setTouchLevel(oldIdx, 0);
-      mic.setTouchLevel(newIdx, 1);
+      inputs.setTouchLevel(oldIdx, 0);
+      inputs.setTouchLevel(newIdx, 1);
       _touchPointers.set(e.pointerId, newIdx);
       setDirty();
     }
@@ -992,7 +992,7 @@ document.getElementById('midi-gain').addEventListener('input', e => {
     if (!_touchPointers.has(e.pointerId)) return;
     e.stopPropagation();
     const idx = _touchPointers.get(e.pointerId);
-    mic.setTouchLevel(idx, 0);
+    inputs.setTouchLevel(idx, 0);
     _touchPointers.delete(e.pointerId);
     setDirty();
   };
@@ -1123,11 +1123,11 @@ async function populateMidiDevices() {
 }
 
 document.getElementById('midi-device').addEventListener('change', async () => {
-  if (!mic.active || mic.source !== 'midi') return;
+  if (!inputs.active || inputs.source !== 'midi') return;
   detachPush();
-  mic.disable();
+  inputs.disable();
   try {
-    await mic.enable('midi', document.getElementById('midi-device').value || null);
+    await inputs.enable('midi', document.getElementById('midi-device').value || null);
     populateMidiDevices();
     attachPush();
     scheduleFrame();
@@ -1140,7 +1140,7 @@ document.getElementById('midi-device').addEventListener('change', async () => {
   }
 });
 
-document.getElementById('mic-source').addEventListener('change', async e => {
+document.getElementById('input-source').addEventListener('change', async e => {
   syncMicDeviceVisibility();
   // Pick a reasonable chromatic base for each debug source so its main
   // content lands inside the ladder. Microphone and noises keep C3.
@@ -1154,7 +1154,7 @@ document.getElementById('mic-source').addEventListener('change', async e => {
     'midi':      '130.81',
   };
   const nextBase = baseBySource[e.target.value];
-  if (nextBase) document.getElementById('mic-base').value = nextBase;
+  if (nextBase) document.getElementById('input-base').value = nextBase;
   if (e.target.value === 'keyboard') {
     syncKeyboardScale();
   }
@@ -1168,9 +1168,9 @@ document.getElementById('mic-source').addEventListener('change', async e => {
   filePlayBtn.textContent = '▶';
   fileTimeLabel.textContent = '0:00';
 
-  if (!mic.active) return;
+  if (!inputs.active) return;
   detachPush();
-  mic.disable();
+  inputs.disable();
   // File source: don't auto-re-enable — wait for the file picker.
   if (e.target.value === 'file') {
     micBtn.textContent = 'Audio in: off';
@@ -1180,8 +1180,8 @@ document.getElementById('mic-source').addEventListener('change', async e => {
   try {
     let dev;
     if (e.target.value === 'midi') dev = document.getElementById('midi-device').value || null;
-    else dev = document.getElementById('mic-device').value || null;
-    await mic.enable(e.target.value, dev);
+    else dev = document.getElementById('input-device').value || null;
+    await inputs.enable(e.target.value, dev);
     if (e.target.value === 'midi') attachPush();
     scheduleFrame();
   } catch (err) {
@@ -1194,7 +1194,7 @@ document.getElementById('mic-source').addEventListener('change', async e => {
   }
 });
 
-document.getElementById('mic-base').addEventListener('change', e => {
+document.getElementById('input-base').addEventListener('change', e => {
   if (!synthIndep()) synth.setBase(parseFloat(e.target.value));
   syncKeyboardScale();
   rebuildEmitterLabels();
@@ -1309,18 +1309,18 @@ const _applyInitialPartials = () => {
   syncCarrierVisibility();
 };
 
-const micBtn = document.getElementById('mic-toggle');
+const micBtn = document.getElementById('input-toggle');
 micBtn.addEventListener('click', async () => {
-  if (!mic.active) {
+  if (!inputs.active) {
     try {
-      const src = document.getElementById('mic-source').value;
+      const src = document.getElementById('input-source').value;
       let dev;
       if (src === 'midi') dev = document.getElementById('midi-device').value || null;
-      else if (src === 'file') dev = null; // re-uses mic._decodedFile
-      else dev = document.getElementById('mic-device').value || null;
-      await mic.enable(src, dev);
+      else if (src === 'file') dev = null; // re-uses inputs._decodedFile
+      else dev = document.getElementById('input-device').value || null;
+      await inputs.enable(src, dev);
       if (src === 'midi') { populateMidiDevices(); attachPush(); }
-      if (src === 'file' && mic._fileBuffer) {
+      if (src === 'file' && inputs._fileBuffer) {
         filePlayBtn.disabled = false;
         fileRestartBtn.disabled = false;
         filePlayBtn.textContent = '❚❚';
@@ -1336,7 +1336,7 @@ micBtn.addEventListener('click', async () => {
     }
   } else {
     detachPush();
-    mic.disable();
+    inputs.disable();
     scene.runtime.micLevels = null;
     scene.runtime.wlPerSource = null;
     micBtn.textContent = 'Audio in: off';
@@ -1349,9 +1349,9 @@ micBtn.addEventListener('click', async () => {
 // starts responsive to touch immediately. Without this, mic is off and
 // all emitters fire at full intensity (the null-micLevels fallback).
 {
-  const src = document.getElementById('mic-source').value;
+  const src = document.getElementById('input-source').value;
   if (src === 'touch') {
-    mic.enable('touch').then(() => {
+    inputs.enable('touch').then(() => {
       micBtn.textContent = 'Audio in: on';
       micBtn.classList.add('active');
       scheduleFrame();
@@ -1545,10 +1545,10 @@ window.addEventListener('resize', () => {
 
 // --- Mic spectrum debug window ---
 {
-  const specWin = document.getElementById('mic-spectrum-window');
-  const specToggle = document.getElementById('mic-spectrum-toggle');
+  const specWin = document.getElementById('input-spectrum-window');
+  const specToggle = document.getElementById('input-spectrum-toggle');
   const specClose = specWin.querySelector('.fw-close');
-  const specCanvas = document.getElementById('mic-spectrum-canvas');
+  const specCanvas = document.getElementById('input-spectrum-canvas');
   const specCtx = specCanvas.getContext('2d');
   const titlebar = specWin.querySelector('.fw-titlebar');
 
@@ -1587,15 +1587,15 @@ window.addEventListener('resize', () => {
   // Render raw FFT (grey) + micBands bucket levels (colored bars) on a
   // shared log-frequency axis so both align visually.
   cv.updateMicSpectrum = function() {
-    if (specWin.hidden || !mic.active) return;
+    if (specWin.hidden || !inputs.active) return;
     const W = specCanvas.width, H = specCanvas.height;
     specCtx.fillStyle = '#000';
     specCtx.fillRect(0, 0, W, H);
 
-    const fd = mic.freqData;
+    const fd = inputs.freqData;
     const n = scene.emitter.count;
-    const micMode = document.getElementById('mic-mode').value;
-    const baseHz = parseFloat(document.getElementById('mic-base').value) || 130.81;
+    const micMode = document.getElementById('input-mode').value;
+    const baseHz = parseFloat(document.getElementById('input-base').value) || 130.81;
     const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
 
     // Compute the frequency range from the bucket endpoints.
@@ -1612,8 +1612,8 @@ window.addEventListener('resize', () => {
     const freqToX = hz => hz <= 0 ? -1 : (Math.log(hz) - logLo) / (logHi - logLo) * W;
 
     // Raw FFT on log frequency axis.
-    if (fd && fd.length > 0 && mic.ctx) {
-      const nyquist = mic.ctx.sampleRate / 2;
+    if (fd && fd.length > 0 && inputs.ctx) {
+      const nyquist = inputs.ctx.sampleRate / 2;
       specCtx.strokeStyle = '#555';
       specCtx.lineWidth = 1;
       specCtx.beginPath();
@@ -1711,8 +1711,8 @@ window.addEventListener('resize', () => {
   titlebar.addEventListener('pointerup', () => { dragOff = null; });
   titlebar.addEventListener('lostpointercapture', () => { dragOff = null; });
 
-  // Render actual synth output FFT — same approach as the mic spectrum
-  // but reading from synth.analyser instead of mic.analyser.
+  // Render actual synth output FFT — same approach as the input spectrum
+  // but reading from synth.analyser instead of inputs.analyser.
   cv.updateSynthSpectrum = function() {
     if (specWin.hidden || !synth.active || !synth.analyser) return;
     const W = specCanvas.width, H = specCanvas.height;
@@ -1726,9 +1726,9 @@ window.addEventListener('resize', () => {
     const nyquist = synth.ctx.sampleRate / 2;
     const binCount = fd.length;
 
-    // Match mic spectrum's frequency range so both views align.
-    const micMode = document.getElementById('mic-mode').value;
-    const baseHz = parseFloat(document.getElementById('mic-base').value) || 130.81;
+    // Match input spectrum's frequency range so both views align.
+    const micMode = document.getElementById('input-mode').value;
+    const baseHz = parseFloat(document.getElementById('input-base').value) || 130.81;
     const step = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
     const n = scene.emitter.count;
     let loHz, hiHz;
@@ -2350,8 +2350,8 @@ window.addEventListener('resize', () => {
     else if (param === 'bend') {
       // Wavelength bend: linear in [-1, +1]. Update mic state and the
       // UI slider so the label + any MIDI-sync reads stay consistent.
-      mic._globalBend = Math.max(-1, Math.min(1, value));
-      const sv = Math.round(mic._globalBend * 100);
+      inputs._globalBend = Math.max(-1, Math.min(1, value));
+      const sv = Math.round(inputs._globalBend * 100);
       if (parseInt(wlBendSlider.value, 10) !== sv) {
         wlBendSlider.value = sv;
         wlBendLabel.textContent = sv;
@@ -2364,14 +2364,14 @@ window.addEventListener('resize', () => {
   // Apply global scale/carrier settings from song on first play frame.
   songPlayer.onGlobal = g => {
     if (g.mode) {
-      document.getElementById('mic-mode').value = g.mode;
+      document.getElementById('input-mode').value = g.mode;
       synth.setMode(g.mode);
       syncSpanVisibility();
       syncKeyboardScale();
       rebuildEmitterLabels();
     }
     if (g.base) {
-      const baseSel = document.getElementById('mic-base');
+      const baseSel = document.getElementById('input-base');
       // Find closest option.
       let best = baseSel.options[0];
       for (const opt of baseSel.options) {
@@ -2431,11 +2431,11 @@ function frame() {
   scene.runtime.wlPerSource = null;
 
   // Ramp touch levels toward targets (prevents clicks from instant 0→1 steps).
-  mic.smoothTouchLevels();
+  inputs.smoothTouchLevels();
   // Keep retracing while levels are ramping.
-  if (mic._touchLevels && mic._touchTargets) {
-    for (let i = 0; i < mic._touchLevels.length; i++) {
-      if (Math.abs(mic._touchLevels[i] - mic._touchTargets[i]) > 0.001) { dirty = true; break; }
+  if (inputs._touchLevels && inputs._touchTargets) {
+    for (let i = 0; i < inputs._touchLevels.length; i++) {
+      if (Math.abs(inputs._touchLevels[i] - inputs._touchTargets[i]) > 0.001) { dirty = true; break; }
     }
   }
 
@@ -2444,46 +2444,46 @@ function frame() {
     const n = scene.emitter.count;
     if (!scene.runtime.micLevels) scene.runtime.micLevels = new Float32Array(n);
     // Touch/keys overlay.
-    if (mic._touchLevels) {
+    if (inputs._touchLevels) {
       for (let i = 0; i < n; i++) {
-        const tv = mic._touchLevels[i] || 0;
+        const tv = inputs._touchLevels[i] || 0;
         if (tv > scene.runtime.micLevels[i]) scene.runtime.micLevels[i] = tv;
       }
     }
     // MIDI pad overlay.
-    if (mic.active && mic.source === 'midi' && mic._midiNotes && mic._midiNotes.size > 0) {
-      const padMapper = mic._padMapper || padNoteToEmitter;
-      for (const [note, vel] of mic._midiNotes) {
+    if (inputs.active && inputs.source === 'midi' && inputs._midiNotes && inputs._midiNotes.size > 0) {
+      const padMapper = inputs._padMapper || padNoteToEmitter;
+      for (const [note, vel] of inputs._midiNotes) {
         const idx = padMapper(note);
         if (idx >= 0 && idx < n) {
-          const v = Math.min(1, vel * mic.midiGain);
+          const v = Math.min(1, vel * inputs.midiGain);
           if (v > scene.runtime.micLevels[idx]) scene.runtime.micLevels[idx] = v;
         }
       }
     }
   }
 
-  if (mic.active && !songPlayer.playing) {
-    const s = mic.sample();
+  if (inputs.active && !songPlayer.playing) {
+    const s = inputs.sample();
     if (s) {
       // Each source maps to one audio bucket; bucket amplitude scales that
       // source's ray intensity. Optionally, each source also gets its own
       // narrow wavelength band derived from its bucket position.
-      const micMode = document.getElementById('mic-mode').value;
+      const micMode = document.getElementById('input-mode').value;
       const baseHz = currentBaseHz();
       const stepSemi = parseInt(document.getElementById('chromatic-span').value, 10) || 1;
       // Deterministic sources (keyboard, sine, harmonics): bypass FFT and
       // set emitter levels directly from known frequencies. FFT bin
       // resolution is too coarse to separate adjacent scale degrees,
       // causing spectral leakage into neighboring buckets.
-      scene.runtime.micLevels = mic.directLevels(scene.emitter.count, micMode, baseHz, stepSemi)
-        || micBands(mic, scene.emitter.count, micMode, baseHz, stepSemi);
+      scene.runtime.micLevels = inputs.directLevels(scene.emitter.count, micMode, baseHz, stepSemi)
+        || micBands(inputs, scene.emitter.count, micMode, baseHz, stepSemi);
       // Overlay touch/keys input on top of any source — max of both.
-      if (mic._touchLevels && mic.source !== 'touch') {
+      if (inputs._touchLevels && inputs.source !== 'touch') {
         const n = scene.emitter.count;
         if (!scene.runtime.micLevels) scene.runtime.micLevels = new Float32Array(n);
         for (let i = 0; i < n; i++) {
-          const tv = mic._touchLevels[i] || 0;
+          const tv = inputs._touchLevels[i] || 0;
           if (tv > scene.runtime.micLevels[i]) scene.runtime.micLevels[i] = tv;
         }
       }
@@ -2506,15 +2506,15 @@ function frame() {
         scene.runtime.wlPerSource = { min, max };
       } else {
         // MPE slide → per-emitter wavelength shift.
-        scene.runtime.wlPerSource = mic.mpeWavelengths(
+        scene.runtime.wlPerSource = inputs.mpeWavelengths(
           scene.emitter.count, scene.emitter.wlMin, scene.emitter.wlMax,
-          mic._padMapper || null);
+          inputs._padMapper || null);
       }
       // MPE pitch bend → per-emitter frequency detune (applied as
       // wavelength scaling: bend shifts the emitter's wavelength band
       // center up or down by ±2 semitones worth of frequency shift).
-      const bendMults = mic.mpeBendMultipliers(
-        scene.emitter.count, mic._padMapper || null);
+      const bendMults = inputs.mpeBendMultipliers(
+        scene.emitter.count, inputs._padMapper || null);
       if (bendMults && scene.runtime.wlPerSource) {
         const wp = scene.runtime.wlPerSource;
         for (let i = 0; i < scene.emitter.count; i++) {
@@ -2551,7 +2551,7 @@ function frame() {
   // range for all emitters. ±150 nm at full bend. Built fresh from
   // base values every frame — never reads previous frame's wlPerSource.
   syncBendSlider();
-  const gb = mic._globalBend || 0;
+  const gb = inputs._globalBend || 0;
   if (Math.abs(gb) > 0.001) {
     const n = scene.emitter.count;
     const offset = gb * 200;
@@ -2651,9 +2651,9 @@ function frame() {
   cv.updateSynthSpectrum();
   cv.updateSynthWaveform();
   // File playback time display.
-  if (mic.source === 'file' && mic._fileBuffer) {
-    const t = mic.fileTime();
-    const d = mic.fileDuration();
+  if (inputs.source === 'file' && inputs._fileBuffer) {
+    const t = inputs.fileTime();
+    const d = inputs.fileDuration();
     const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`;
     fileTimeLabel.textContent = `${fmt(t)} / ${fmt(d)}`;
   }
@@ -2663,23 +2663,23 @@ function frame() {
   const hasSpinning = scene.elements.some(e => e.spin);
   // Touch levels still ramping toward targets?
   let touchRamping = false;
-  if (mic._touchLevels && mic._touchTargets) {
-    for (let i = 0; i < mic._touchLevels.length; i++) {
-      if (Math.abs(mic._touchLevels[i] - mic._touchTargets[i]) > 0.001) { touchRamping = true; break; }
+  if (inputs._touchLevels && inputs._touchTargets) {
+    for (let i = 0; i < inputs._touchLevels.length; i++) {
+      if (Math.abs(inputs._touchLevels[i] - inputs._touchTargets[i]) > 0.001) { touchRamping = true; break; }
     }
   }
   const readoutDecaying = renderer._peakMax > 0.001;
   const needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
     || readoutDecaying
-    || songPlayer.playing || (mic.active && mic.source !== 'touch')
-    || (mic._filePlaying)
+    || songPlayer.playing || (inputs.active && inputs.source !== 'touch')
+    || (inputs._filePlaying)
     || renderer.smokeEnabled // animated background needs continuous frames
     || renderer.hasActivePointers // swirl sources fading out
     || renderer.edgeGlowEnabled; // wall-glow decay clock
   if (needsFrame) scheduleFrame();
 }
 // Expose key objects for console debugging: chromavox.scene, chromavox.synth, etc.
-Object.assign(cv, { scene, renderer, tracer, cpuTracer, gpuTracer, ui, mic, synth, songPlayer, scheduleFrame });
+Object.assign(cv, { scene, renderer, tracer, cpuTracer, gpuTracer, ui, inputs, synth, songPlayer, scheduleFrame });
 scheduleFrame();
 
 // Pause audio when the page is hidden (tab switch, screen off).
@@ -2693,11 +2693,11 @@ scheduleFrame();
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     if (synth.ctx && synth.ctx.state === 'running') synth.ctx.suspend();
-    if (mic.ctx && mic.ctx.state === 'running') mic.ctx.suspend();
+    if (inputs.ctx && inputs.ctx.state === 'running') inputs.ctx.suspend();
     if (songPlayer.playing) songPlayer.pause();
   } else {
     if (synth.ctx && synth.ctx.state === 'suspended') synth.ctx.resume();
-    if (mic.ctx && mic.ctx.state === 'suspended') mic.ctx.resume();
+    if (inputs.ctx && inputs.ctx.state === 'suspended') inputs.ctx.resume();
     scheduleFrame();
   }
 });

@@ -737,10 +737,10 @@ let _peakHold = 0;
 let _peakLastTime = 0;
 const PEAK_HALF_LIFE = 0.23; // seconds
 
-export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
-  if (!mic.active || !mic.freqFloat) return null;
-  const fd = mic.freqFloat;
-  const nyquist = mic.ctx.sampleRate / 2;
+export function micBands(inputs, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
+  if (!inputs.active || !inputs.freqFloat) return null;
+  const fd = inputs.freqFloat;
+  const nyquist = inputs.ctx.sampleRate / 2;
   const binCount = fd.length;
   const out = new Float32Array(n);
 
@@ -751,8 +751,8 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
   const peakDecay = Math.pow(0.5, dt / PEAK_HALF_LIFE);
 
   // Work in linear amplitude so dynamic range is preserved.
-  const minDb = mic.analyser.minDecibels;   // default -100
-  const maxDb = mic.analyser.maxDecibels;   // default -30
+  const minDb = inputs.analyser.minDecibels;   // default -100
+  const maxDb = inputs.analyser.maxDecibels;   // default -30
   const dbRange = maxDb - minDb;
   const dbToLin = db => db <= minDb ? 0 : Math.pow(10, db / 20);
   // dB-normalized 0-1 for absolute (non-file) sources.
@@ -760,7 +760,7 @@ export function micBands(mic, n, mode = 'log', baseHz = 130.81, stepSemi = 1) {
 
   // File source uses peak-normalized linear; everything else uses the
   // original absolute dB mapping so silence looks quiet.
-  const isFile = mic.source === 'file';
+  const isFile = inputs.source === 'file';
 
   const NOISE_GATE = 0.10;          // absolute dB-norm threshold
   const NOISE_GATE_LIN = 0.001;     // linear threshold for file

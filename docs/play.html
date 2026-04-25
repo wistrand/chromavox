@@ -55,18 +55,18 @@
         <div class="row" id="smoke-hue-row"><label>Smoke hue <input id="smoke-hue" type="range" min="0" max="360" value="220" step="1"><span id="smoke-hue-val">220</span></label></div>
         <div class="row" id="bloom-spread-row"><label>Bloom <input id="bloom-spread" type="range" min="1.0" max="2.5" value="1.6" step="0.05"><span id="bloom-spread-val">1.6</span></label></div>
         <div class="row"><label><input id="stats-toggle" type="checkbox"> Stats</label></div>
-        <div class="row"><label><input id="mic-spectrum-toggle" type="checkbox"> Mic spectrum</label></div>
+        <div class="row"><label><input id="input-spectrum-toggle" type="checkbox"> Input spectrum</label></div>
         <div class="row"><label><input id="synth-spectrum-toggle" type="checkbox"> Synth spectrum</label></div>
         <div class="row"><label><input id="synth-waveform-toggle" type="checkbox"> Synth waveform</label></div>
         <div class="row"><span id="tracer-indicator" style="font-size:11px;color:var(--muted)">Tracer: —</span></div>
       </div>
     </div>
     <div class="tool-menu-wrap">
-      <button id="mic-toggle">Audio in: off</button>
-      <button id="mic-options" type="button" class="opts-toggle" aria-label="Audio in options">▾</button>
-      <div id="mic-menu" class="options-menu">
-        <div class="row"><label>Source <select id="mic-source"><option value="touch" selected>touch/keys</option><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keys (debug)</option><option value="midi">MIDI in</option><option value="file">audio file</option></select></label></div>
-        <div class="row" id="mic-device-row"><label>Device <select id="mic-device"><option value="">default</option></select></label></div>
+      <button id="input-toggle">Audio in: off</button>
+      <button id="input-options" type="button" class="opts-toggle" aria-label="Audio in options">▾</button>
+      <div id="input-menu" class="options-menu">
+        <div class="row"><label>Source <select id="input-source"><option value="touch" selected>touch/keys</option><option value="mic">microphone</option><option value="sine">sine 440</option><option value="harmonics">harmonics 220</option><option value="white">white noise</option><option value="pink">pink noise</option><option value="keyboard">keys (debug)</option><option value="midi">MIDI in</option><option value="file">audio file</option></select></label></div>
+        <div class="row" id="input-device-row"><label>Device <select id="input-device"><option value="">default</option></select></label></div>
         <div class="row" id="midi-device-row" style="display:none"><label>MIDI device <select id="midi-device"><option value="">first available</option></select></label></div>
         <div class="row" id="file-source-row" style="display:none"><label>File <input id="audio-file-input" type="file" accept="audio/*" style="font-size:11px;max-width:180px"></label></div>
         <div class="row" id="file-transport-row" style="display:none">
@@ -77,7 +77,7 @@
         <div class="row" id="midi-gain-row" style="display:none"><label>MIDI gain <input id="midi-gain" type="range" min="10" max="300" value="100"><span id="midi-gain-val">1.00</span></label></div>
         <div class="row" id="midi-mapper-row" style="display:none"><span id="midi-mapper" style="font-size:11px;color:var(--muted)">Mapper: —</span></div>
         <div class="row" id="midi-debug-row" style="display:none"><label>MIDI log<br><textarea id="midi-debug" rows="4" readonly style="width:100%;font:11px monospace;background:#0b0d10;color:#8a93a0;border:1px solid var(--border);resize:vertical;margin-top:4px"></textarea></div>
-        <div class="row"><label>Mode <select id="mic-mode">
+        <div class="row"><label>Mode <select id="input-mode">
           <option value="log">log</option>
           <option value="voice">voice</option>
           <option value="chromatic" selected>chromatic</option>
@@ -89,8 +89,8 @@
           <option value="blues">blues</option>
         </select></label></div>
         <div class="row" id="chromatic-span-row"><label>Span <input id="chromatic-span" type="range" min="1" max="12" value="1" step="1"><span id="chromatic-span-val">1</span></label></div>
-        <div class="row"><label>Smoothing <input id="mic-smoothing" type="range" min="0" max="95" value="60"><span id="mic-smoothing-val">0.60</span></label></div>
-        <div class="row"><label>Base <select id="mic-base">
+        <div class="row"><label>Smoothing <input id="input-smoothing" type="range" min="0" max="95" value="60"><span id="input-smoothing-val">0.60</span></label></div>
+        <div class="row"><label>Base <select id="input-base">
           <option value="32.70">C1</option>
           <option value="65.41">C2</option>
           <option value="87.31">F2</option>
@@ -179,7 +179,7 @@
       <li><b>Backspace / Delete</b> — delete selected</li>
       <li><b>Ctrl+Z / Ctrl+Shift+Z</b> — undo / redo</li>
       <li><b>Q</b> — toggle audio out</li>
-      <li><b>1</b> / <b>2</b> / <b>3</b> / <b>4</b> — mic spectrum / synth spectrum / synth waveform / stats</li>
+      <li><b>1</b> / <b>2</b> / <b>3</b> / <b>4</b> — input spectrum / synth spectrum / synth waveform / stats</li>
       <li><b>F</b> — fullscreen (bench + sensors only)</li>
       <li><b>H</b> or <b>?</b> — this help</li>
     </ul>
@@ -209,13 +209,13 @@
 
   </aside>
 
-  <div id="mic-spectrum-window" class="floating-window" hidden>
+  <div id="input-spectrum-window" class="floating-window" hidden>
     <div class="fw-titlebar">
-      <span class="fw-title">Mic Spectrum</span>
+      <span class="fw-title">Input Spectrum</span>
       <button class="fw-close" aria-label="Close">×</button>
     </div>
     <div class="fw-body">
-      <canvas id="mic-spectrum-canvas" width="400" height="120" style="display:block;background:#000;border-radius:3px"></canvas>
+      <canvas id="input-spectrum-canvas" width="400" height="120" style="display:block;background:#000;border-radius:3px"></canvas>
     </div>
   </div>
 

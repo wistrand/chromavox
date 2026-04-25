@@ -100,7 +100,7 @@ key bindings — they include:
 - Keyboard claviature (works alongside any source — see
   architecture-audio.md): bottom-row piano layout, comma / period to
   shift octave.
-- 1/2/3/4 toggle floating windows: 1=mic spectrum, 2=synth spectrum,
+- 1/2/3/4 toggle floating windows: 1=input spectrum, 2=synth spectrum,
   3=synth waveform, 4=stats.
 - F to toggle fullscreen mode.
 
@@ -456,23 +456,23 @@ in shape to saved scenes.
 
 ## Device pickers
 
-`mic-device` and `synth-device` dropdowns enumerate `audioinput` and
+`input-device` and `synth-device` dropdowns enumerate `audioinput` and
 `audiooutput` devices. Labels only populate after the first mic
 permission grant; before that, options show as "input N". Both
 re-populate on the `devicechange` event and after the first successful
-`mic.enable`. The mic-device row is hidden (via `visibility: hidden`
-so space is preserved) when `mic-source` isn't the microphone.
+`inputs.enable`. The input-device row is hidden (via `visibility: hidden`
+so space is preserved) when `input-source` isn't the microphone.
 
 ## Vertical frequency labels
 
 Two overlays inside `#bench-viewport`:
 
-- `#emitter-labels` on the left edge — mic-side scale (`micMode()`,
-  `currentBaseHz()`, `chromaticSpan`). Rebuilt on mic-side or
+- `#emitter-labels` on the left edge — input-side scale (`micMode()`,
+  `currentBaseHz()`, `chromaticSpan`). Rebuilt on input-side or
   emitter-count changes.
 - `#sensor-labels` on the right edge — synth-side scale (`synthMode`,
   `synthBase`, `synthStep`). Rebuilt on synth-side, sensor-count, or
-  Independent toggle changes (and also on mic-side changes when the
+  Independent toggle changes (and also on input-side changes when the
   synth is following the mic). Diverges from emitter labels when
   `Independent scale` is on.
 
@@ -596,7 +596,7 @@ Three-tier scheduling:
 
 The idle check at the end of each frame:
 `needsFrame = dirty || particlesInFlight || hasSpinning || touchRamping
-|| songPlayer.playing || (mic.active && source !== 'touch') || synth.active`
+|| songPlayer.playing || (inputs.active && source !== 'touch') || synth.active`
 
 ## Touch level ramping
 
@@ -604,6 +604,6 @@ The idle check at the end of each frame:
 `smoothTouchLevels()` is called once per frame in the main loop, ramping
 actual levels toward targets (attack 0.2/frame, release 0.15/frame).
 Prevents clicks from instant 0→1 steps into vocoder or other carriers.
-`mic.onTouchChange` callback calls `setDirty()` in `main.js` to wake
+`inputs.onTouchChange` callback calls `setDirty()` in `main.js` to wake
 the frame loop on keyboard note on/off. The idle check keeps the loop
 running while any touch level differs from its target (`touchRamping`).

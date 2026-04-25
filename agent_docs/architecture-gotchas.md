@@ -122,7 +122,7 @@
   control; verify with OS tools like `pavucontrol`.
 - `navigator.mediaDevices` is only defined in a **secure context** —
   HTTPS or `localhost`. Plain HTTP on a LAN hostname leaves it
-  `undefined`, so `mic.enable('mic')` throws a clear guard error
+  `undefined`, so `inputs.enable('mic')` throws a clear guard error
   instead of crashing. Workarounds: serve over HTTPS (e.g. `ngrok`,
   `cloudflared`), flip the browser's "treat insecure origin as
   secure" override flag (Chrome:
