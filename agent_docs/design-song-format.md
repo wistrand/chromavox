@@ -96,10 +96,10 @@ restore.
   per-emitter carrier override that propagates with each ray through
   optics and reaches sensors as a separate timbre channel. Names
   match the keys in `carriers.js` (`sine`, `noise`, `acid`, `fm`,
-  `supersaw`, `pulse`, `vocoder`, `karplus`, `piano`). Emitters not
-  listed default to "use the global synth-carrier dropdown's value."
-  Per-note `carrier` (see `notes`) overrides this for the note's
-  duration.
+  `supersaw`, `pulse`, `vocoder`, `karplus`, `piano`, `bell`, `brass`,
+  `bowed`, `tankdrum`). Emitters not listed default to "use the
+  global synth-carrier dropdown's value." Per-note `carrier` (see
+  `notes`) overrides this for the note's duration.
 - `partials`, `volume`: synth settings
 
 The `global` section is applied once on load via the `onGlobal`
@@ -161,7 +161,8 @@ Array of parameter automation lanes. Each lane:
 - `param`: parameter name (string). Supported:
   - `volume` — master synth volume (0-1)
   - `carrier` — carrier mode string (discrete, e.g. "sine", "piano",
-    "acid", "vocoder", "karplus", "noise", "fm", "supersaw", "pulse")
+    "acid", "vocoder", "karplus", "noise", "fm", "supersaw", "pulse",
+    "bell", "brass", "bowed", "tankdrum")
   - `partials` — partial count (1-8, stepped)
   - `mode` — scale mode (discrete)
   - `base` — base frequency Hz
@@ -389,9 +390,13 @@ Mapping:
   scale-quantisation).
 - `base` Hz = one octave below the lowest note, aligned to an octave
   boundary. Emitter count spans lowest→highest, capped at 64 (the
-  GPU tracer's `wlPerSource` texture width). Overflow drops low-
-  octave headroom first, then high notes if the piece still exceeds
-  64 semitones.
+  GPU tracer's `wlPerSource` texture width). Overflow strategy:
+  shift `baseMidi` up to anchor the highest pitch at emitter `64-1`
+  so the lead/melody is always preserved. Pitches that fall below
+  the new baseMidi are octave-folded up at routing time so bass
+  isn't silently dropped — only octave-shifted. Drum mode reserves
+  the bottom 4 emitters (`drumOffset`), reducing melodic capacity
+  to 60 emitters and triggering octave-fold of the lowest notes.
 - `carrier` defaults to `sine`, but auto-switches to `piano` if any
   of `<movement-title>`, `<work-title>`, `<part-name>`,
   `<instrument-name>`, `<part-abbreviation>`, `<score-instrument>`

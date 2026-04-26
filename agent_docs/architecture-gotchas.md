@@ -166,6 +166,30 @@
   (`1 - (1 - smooth)^blockLength`), not per-sample. This gives the
   correct smoothing time constant regardless of block size. Applying
   the per-sample coefficient once per block would under-smooth.
+- **PolyBLEP pre-step correction sign**: the pre-step correction must
+  go in the OPPOSITE direction from the post-step correction, even
+  though both compute `(1 - t)²`. A historical bug had `saw +=
+  (1-t)²` on both sides, which made the saw overshoot to ~+1.8 just
+  before each wrap (instead of smoothing toward 0). Same bug in pulse
+  for both wrap-up and duty-down steps. Now fixed in saw carriers
+  (replaced by wavetable read entirely) and pulse. Rule of thumb:
+  step-up sites smooth UP toward 0, step-down sites smooth DOWN.
+- **Carrier-change crossfade uses LINEAR fade-out, not exponential**.
+  An exponential lerp toward 0 with fast smoothing produces a 30%
+  first-sample step (the click). Linear weight `1 - i/len` gives a
+  per-sample step of 1/len ≈ 0.8% — inaudible.
+- **Stale resonant peaks on carrier swap**: piano/bell/tankdrum's
+  output is `sum(sin(phase) × peak) × OUT_SCALE` — completely
+  decoupled from voiceGain. Peaks decay only when their carrier
+  function runs. If the voice swaps to a different carrier for many
+  blocks, peaks freeze at their previous value. On swap-back, the
+  first sample writes a stale-loud impulse. Fix: zero `pianoPeak`,
+  `bellPeak`, `tdPeak` in the carrier-change crossfade when those
+  carriers become the new carrier.
+- **Carrier-mode count**: 13 carriers as of the recent additions
+  (sine=0 … tankdrum=12). Update `_CARRIER_NAMES_BY_IDX` in
+  `synth-worklet.js`, the `CARRIERS` map in `carriers.js`, and
+  `_CARRIER_LABEL` in `main.js` together when adding a new one.
 
 ## UI / state
 

@@ -117,13 +117,42 @@ export function parseMidi(arrayBuffer) {
   }
   tempoMap.sort((a, b) => a.tick - b.tick || 0);
 
+  // Decode SMF text meta events. The MIDI spec leaves text encoding
+  // unspecified; in practice files use UTF-8 / ASCII (modern), Shift-JIS
+  // (older Japanese sequencers — Yamaha / Roland / Korg), Windows-1251
+  // (Russian/Cyrillic — common in CIS-region cover-MIDI sites), or
+  // Windows-1252 (Latin-1). For non-UTF-8 / non-JIS we pick between
+  // 1251 and 1252 by SCORING the decoded text: prefer Cyrillic letters
+  // and ASCII, penalize accented Latin (typical mojibake signature).
+  function _scoreDecoded(s) {
+    let score = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.codePointAt(i);
+      // Plain ASCII letters / digits / punctuation: cheap win.
+      if (c < 0x80) score += 1;
+      // Cyrillic letters: real signal that Windows-1251 was the right pick.
+      else if (c >= 0x0410 && c <= 0x044F) score += 2;
+      // Accented Latin in 0x80-0xFF: usually mojibake of a non-Latin
+      // source. Penalize so 1252 doesn't win for Cyrillic content.
+      else if (c >= 0x80 && c < 0x180) score -= 1;
+    }
+    return score;
+  }
+  function decodeMidiText(data) {
+    if (!data || !data.length) return '';
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(data).trim(); } catch {}
+    try { return new TextDecoder('shift-jis', { fatal: true }).decode(data).trim(); } catch {}
+    const w1251 = new TextDecoder('windows-1251').decode(data).trim();
+    const w1252 = new TextDecoder('windows-1252').decode(data).trim();
+    return _scoreDecoded(w1251) >= _scoreDecoded(w1252) ? w1251 : w1252;
+  }
+
   // Split Format 0 into virtual per-channel "tracks" so the UI has
   // something meaningful to toggle. Meta events (name, tempo) stay
   // attached to a synthetic track-header bucket.
   let trackEventLists;
   let sharedName = '';
   {
-    const td = new TextDecoder('utf-8');
     if (format === 0) {
       const byCh = new Map();
       for (const ev of rawTracks[0]) {
@@ -131,7 +160,7 @@ export function parseMidi(arrayBuffer) {
           if (!byCh.has(ev.ch)) byCh.set(ev.ch, []);
           byCh.get(ev.ch).push(ev);
         } else if (ev.type === 'meta' && ev.metaType === 0x03) {
-          sharedName = td.decode(ev.data).trim();
+          sharedName = decodeMidiText(ev.data);
         }
       }
       trackEventLists = [...byCh.entries()]
@@ -143,7 +172,7 @@ export function parseMidi(arrayBuffer) {
       for (const events of rawTracks) {
         for (const ev of events) {
           if (ev.type === 'meta' && ev.metaType === 0x03 && ev.data.length) {
-            sharedName = td.decode(ev.data).trim();
+            sharedName = decodeMidiText(ev.data);
             if (sharedName) break;
           }
         }
@@ -154,7 +183,6 @@ export function parseMidi(arrayBuffer) {
 
   // Analyze each (virtual) track into note pairs + metadata.
   const tracks = [];
-  const td = new TextDecoder('utf-8');
   for (let ti = 0; ti < trackEventLists.length; ti++) {
     const { events, virtualChannel } = trackEventLists[ti];
     let name = '';
@@ -179,7 +207,7 @@ export function parseMidi(arrayBuffer) {
     for (const ev of events) {
       if (ev.type === 'meta') {
         if (ev.metaType === 0x03 && ev.data.length && !name) {
-          name = td.decode(ev.data).trim();
+          name = decodeMidiText(ev.data);
         }
         continue;
       }

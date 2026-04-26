@@ -157,9 +157,13 @@ hiccups. The graph is `workletNode → master → destination`; the
   defaults). Each carrier is a standalone function in the worklet
   (`_carrierSine`, `_carrierAcid`, `_carrierFM`, `_carrierSupersaw`,
   `_carrierNoise`, `_carrierPulse`, `_carrierVocoder`,
-  `_carrierKarplus`), dispatched via a constant map
+  `_carrierKarplus`, `_carrierPiano`, `_carrierBell`, `_carrierBrass`,
+  `_carrierBowed`, `_carrierTankDrum`), dispatched via a constant map
   `_CARRIERS = { sine: _carrierSine, ... }`. The voice loop calls
-  `_CARRIERS[this.carrier](v, ctx)` — no if/else chain. Nine modes:
+  `_CARRIERS[this.carrier](v, ctx)` — no if/else chain. **13 modes**
+  (index order: sine=0, noise=1, acid=2, fm=3, supersaw=4, pulse=5,
+  vocoder=6, karplus=7, piano=8, bell=9, brass=10, bowed=11,
+  tankdrum=12):
   - `sine` (default): harmonic partials with 1/k rolloff for
     neutral sawtooth-like timbre from white light. Bin-to-partial
     mapping is **inverted**: blue light (low wavelength bins) drives
@@ -175,17 +179,27 @@ hiccups. The graph is `workletNode → master → destination`; the
     for resonance. Sensor energy drives filter cutoff (the squelch):
     `cutoff = freq × 2^(1 + voiceGain × envAmount × 5 octaves)`.
     Per-voice state: `sawPhase`, `lp1`, `lp2`, `lp3`. Resonance,
-    Env Amount, Cutoff, Decay, and Drive sliders posted via
-    MessagePort. Post-filter drive via `tanh(s3 × 2.5)`.
+    Env Amount, Cutoff, Decay, Drive, and Formant sliders posted via
+    MessagePort. Post-filter drive via `tanh(s3 × 2.5)`. Optional
+    Dittytoy/Oxygene-style varsaw shaping when `acidFormant > 0`:
+    `saw *= tanh(F · phase · (1-phase))` where `F` is driven by the
+    same envelope that opens the filter — adds dynamic odd harmonics
+    that move with the envelope without an explicit filter sweep.
   - `fm`: FM synthesis carrier. Ratio slider (1-8) sets the
     modulator:carrier frequency ratio. Depth slider (0-1) sets
     modulation index.
   - `supersaw`: 7 detuned sawtooth oscillators. Detune slider (0-1)
-    controls spread.
+    controls spread. Saws read from a **bandlimited wavetable**
+    (see "Wavetable saws" below). Per-saw stereo spread via
+    `_SS_PAN_L/R` constant-power tables: center saw centered, detuned
+    pairs lean opposite channels for inter-channel decorrelation
+    without amplitude loss.
   - `pulse`: PolyBLEP variable-width pulse wave. **Width** slider
-    (0.05-0.95, default 0.5) sets the base duty cycle. Two PolyBLEP
-    corrections (at 0 and at the duty cycle crossing) give clean
-    anti-aliased edges.
+    (0.05-0.95, default 0.5) sets the base duty cycle. Four PolyBLEP
+    corrections per cycle (post-wrap up-step, pre-wrap up-step,
+    post-duty down-step, pre-duty down-step) for clean anti-aliased
+    edges. Wrong-signed pre-step corrections were a historical bug
+    causing audible click character — see Gotchas.
   - `vocoder`: classic vocoder topology — shared broadband excitation
     → 4th-order bandpass (two cascaded biquads in DF-II Transposed
     form, 24 dB/oct) → envelope-modulated output per voice. Shared
@@ -230,7 +244,75 @@ hiccups. The graph is `workletNode → master → destination`; the
     pianoDecayPerSample`, each `Float32Array(12)`) is pre-allocated
     in `_rebuildPartials` for hidden-class stability; `pianoDts` is
     rebuilt on freq or stretch change (`pianoDtsFreq` +
-    `pianoDtsStretch` guards).
+    `pianoDtsStretch` guards). Per-partial stereo spread via
+    `_PIANO_PAN_L/R` (amplitude-preserving: fundamental full in both
+    channels, upper partials lean L/R for decorrelation).
+  - `bell`: tubular-bell modal synthesis. 5 partials at the real
+    transverse-vibration mode ratios `[1.0, 2.76, 5.40, 8.93, 13.34]`
+    with per-partial mix amplitudes `_BELL_MIX = [1.0, 0.55, 0.42,
+    0.30, 0.18]` and decay rates `_BELL_DECAY = [1.7, 2.8, 4.5, 7.0,
+    11.0]` (high partials decay much faster — bright attack, clean
+    fundamental ring tail). Strike model identical to piano: rising
+    `voiceGain` injects energy into per-partial peaks, capped at the
+    partial's mix weight to prevent unbounded accumulation under
+    overlapping notes. Random initial phases at first activation so
+    the strike doesn't hit `sin(0)=0` constructive beating. Per-partial
+    stereo spread via `_BELL_PAN_L/R`. Two sliders: **Decay**
+    (`bellDecay`), **Brightness** (`bellBrightness`).
+  - `brass`: 2-saw unison detune (±5 cents) → 2-pole bandpass formant.
+    Saws read from the bandlimited wavetable. Inner stereo: voice 1
+    leans L, voice 2 leans R via `_BRASS_UPAN_L/R = (1.0, 0.5)`. Vibrato
+    at 5 Hz, ±0.3% pitch. Bandpass Q range 2–5 (was 4–10 — high Q
+    amplified saw-wrap residue into clicks). Mix: `dry × 0.3 +
+    bandpass × 2.0`. Two sliders: **Formant** (`brsFormant`),
+    **Bite** (`brsBite`).
+  - `bowed`: 2-saw unison detune (±10 cents — wider chorus for pad
+    character) → 1-pole LP per voice (unity DC gain). Wavetable saws
+    + inner stereo spread, like brass. Slow attack smoothing (100 ms)
+    gives a bow-stroke onset. Vibrato at 5 Hz, ±1.2% pitch. Two
+    sliders: **Brightness** (`bowBright`), **Vibrato** (`bowVibrato`).
+  - `tankdrum`: pitched-sine drum carrier (Korg Minipops 7 inspired).
+    Strike-driven peak with frequency-dependent exponential body decay
+    (low freq rings longer than high). Pitch-sweep on each strike:
+    sweep multiplier on phase increment, decays from 1.0 to 0 with
+    rate driven by `tdPunch`. Random initial phase. Used for kick/tom
+    drum lanes (replaces karplus there — the karplus noise strike
+    smeared mid-range; tankdrum's clean sine fundamental sits cleanly
+    out of the mix). Two sliders: **Decay** (`tdDecay`),
+    **Punch** (`tdPunch`).
+- **Wavetable saws**: `supersaw`, `brass`, `bowed`, and the vocoder
+  pulse-excitation read from `_SAW_TABLES` — 11 octave-band tables,
+  each 2048 samples, with maxHarmonic doubling per band (1, 2, 4, …,
+  1024). Built once at module load by summing
+  `−(2/π) · Σ sin(h·θ)/h` for harmonics 1..maxH. Replaced PolyBLEP
+  saws because PolyBLEP's 2-sample wrap correction left residual d2
+  artifacts (~0.1 amplitude) that read as click character through
+  bandpass filters. Wavetable saws have no wrap discontinuity by
+  construction — a closed-form bandlimited signal stored as a
+  precomputed table. `_pickSawTable(freq)` picks the table with the
+  most harmonics whose highest harmonic stays below
+  `sampleRate × 0.45` — called once per voice per block. Inner-loop
+  read: `phase × tableSize | 0` index + linear interpolation. Memory
+  ~90 KB; build cost ~5 ms one-time.
+- **Carrier-change crossfade**: when a voice's effective carrier index
+  differs from the previous block's, the worklet renders the OLD
+  carrier into a scratch L/R buffer, then renders the NEW carrier
+  (with `gains[k]=0`, ramping up via its own attack smoothing) into
+  the live buffer, then mixes scratch with a **linear fade-out**
+  (weight `1 - i/len`). Linear (not exponential) because exponential
+  fade with fast smoothing produced a ~30% first-sample step (the
+  click). Continuity: sample 0 ≈ old's continuation; sample len-1 ≈
+  new's ramped output. Resonant accumulators (`pianoPeak`, `bellPeak`,
+  `tdPeak`) are zeroed on swap-in to prevent stale-loud impulses on
+  the first sample (those decay only when their carrier function
+  runs, so they freeze when swapped away).
+- **Per-voice release envelope**: when at least one `gains[k] >
+  targetGains[k] - 1e-4` (note ending), the per-sample lerp uses a
+  **release smoothing** rate (~30 ms) instead of the carrier's faster
+  attack rate. Prevents same-emitter retrigger clicks where rapid
+  note-on / note-off cycles pulled gain to absolute zero between
+  strikes. Bowed (already 100 ms attack) stays at attack rate during
+  release.
 - **Spectral centroid**: for all non-sine carriers, each voice
   computes a spectral centroid from its wavelength bins. The centroid
   is **inverted**: blue (short wavelength, low bins) → 1.0 (bright),
@@ -302,9 +384,17 @@ hiccups. The graph is `workletNode → master → destination`; the
   outside `process()`):
   - `_SINGLE_BAND` — which carriers use `gainK=1` (single-band
     normalization instead of multi-partial `K`).
-  - `_SMOOTH_SEC` — per-carrier gain smoothing time constants
-    (karplus 5 ms, pulse 30 ms, acid 40 ms, noise/FM/supersaw 60 ms,
-    sine 80 ms).
+  - `_SMOOTH_SEC` — per-carrier gain smoothing time constants. Tightened
+    from earlier 15–80 ms values to 2–5 ms on every carrier whose
+    attack character matters: piano 2 ms, bell 2 ms, karplus 2 ms,
+    tankdrum 1 ms, sine/pulse/acid/noise/fm/supersaw/vocoder/brass 5 ms.
+    Bowed alone keeps 100 ms because its attack character IS the bow
+    stroke. Long smoothing audibly low-passes transient brightness;
+    the previous "no-click" value of 15 ms cost the top end on every
+    strike. Stateful **release envelope** (~30 ms uniform) handles
+    deactivation tails that would otherwise click on retrigger — see
+    "Per-voice release envelope" above. Click suppression and attack
+    brightness are different concerns and need different mechanisms.
   - `_CARRIERS` — function dispatch table mapping carrier name to
     function.
   - Replaced 7 `isXxx` boolean flags with one `isVocoder` (for shared
