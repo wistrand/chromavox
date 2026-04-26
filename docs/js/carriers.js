@@ -32,6 +32,7 @@ export const CARRIERS = {
       { id: 'acidCutoff', label: 'Cutoff',      min: 0, max: 1, default: 0.50 },
       { id: 'acidDecay',  label: 'Decay',       min: 0, max: 1, default: 0.40 },
       { id: 'acidDrive',  label: 'Drive',       min: 0, max: 1, default: 0.60 },
+      { id: 'acidFormant', label: 'Formant',    min: 0, max: 1, default: 0.0 },
     ],
   },
   fm: {
@@ -102,6 +103,13 @@ export const CARRIERS = {
     params: [
       { id: 'bowBright',  label: 'Brightness', min: 0, max: 1, default: 0.5 },
       { id: 'bowVibrato', label: 'Vibrato',    min: 0, max: 1, default: 0.5 },
+    ],
+  },
+  tankdrum: {
+    label: 'tank drum',
+    params: [
+      { id: 'tdDecay', label: 'Decay', min: 0.2, max: 3, default: 1.0 },
+      { id: 'tdPunch', label: 'Punch', min: 0,   max: 1, default: 0.5 },
     ],
   },
 };

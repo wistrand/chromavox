@@ -43,6 +43,48 @@ function fsinFast(x) {
   return a + (b - a) * f;
 }
 
+// Bandlimited saw wavetables. Replaces PolyBLEP saw in brass, bowed,
+// supersaw, vocoder. PolyBLEP's 2-sample wrap correction has residual
+// d2 artifacts (~0.1 amplitude) that read as click character through
+// the bandpass filters in brass/bowed. A wavetable saw is constructed
+// by summing N sines (Σ sin(h·θ)/h for h=1..N), which contains no
+// discontinuity by construction — N is chosen per pitch band so the
+// highest harmonic stays below Nyquist.
+//
+// Tables: 11 bands, 2048 samples each, harmonics doubling per band.
+// Memory: 11 × 2048 × 4 = ~90 KB. Build cost: ~5 ms one-time.
+const _SAW_TABLE_SIZE = 2048;
+const _SAW_TABLE_MASK = _SAW_TABLE_SIZE - 1;
+const _SAW_NUM_TABLES = 11;
+const _SAW_HARMS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+const _SAW_TABLES = new Array(_SAW_NUM_TABLES);
+for (let t = 0; t < _SAW_NUM_TABLES; t++) {
+  const maxH = _SAW_HARMS[t];
+  const tbl = new Float32Array(_SAW_TABLE_SIZE);
+  // Saw waveform: -2/π · Σ sin(h·θ)/h. Negative so it ramps up from -1
+  // toward +1 across [0, 1) — same convention as 2*phase-1.
+  for (let i = 0; i < _SAW_TABLE_SIZE; i++) {
+    const theta = (i / _SAW_TABLE_SIZE) * 2 * Math.PI;
+    let s = 0;
+    for (let h = 1; h <= maxH; h++) s += Math.sin(h * theta) / h;
+    tbl[i] = -s * 2 / Math.PI;
+  }
+  _SAW_TABLES[t] = tbl;
+}
+// Pick the table with the most harmonics whose highest harmonic stays
+// below Nyquist · 0.95 at this voice's frequency. Called once per voice
+// per block — cheap.
+function _pickSawTable(freq) {
+  if (freq < 1) return _SAW_NUM_TABLES - 1;
+  const maxH = (sampleRate * 0.45) / freq;
+  for (let t = _SAW_NUM_TABLES - 1; t > 0; t--) {
+    if (_SAW_HARMS[t] <= maxH) return t;
+  }
+  return 0;
+}
+// Read a saw sample at `phase` ∈ [0, 1) from the chosen table with
+// linear interpolation. Inlined manually in carriers for speed.
+
 // Mulberry32 PRNG for non-inner-loop noise paths. Used only for vocoder
 // shared excitation (one PRNG, not per-voice) and karplus init bursts
 // (one-shot per note-on). Hot per-sample-per-voice paths (_carrierNoise,
@@ -72,6 +114,12 @@ function _carrierAcid(v, ctx) {
   const envSmooth = 1 - Math.exp(-1 / (decayMs * sampleRate));
   const driveAmt = 1 + ctx.P.acidDrive * 4;
   const k = ctx.P.acidRes * 4.5;
+  // Varsaw formant shaping (Dittytoy/Oxygene trick): saw is multiplied
+  // by a softclipped parabola of the phase, with formant strength
+  // driven by the same envelope that opens the filter. Adds dynamic
+  // odd harmonics that move *with* the envelope — perceived motion
+  // without an explicit filter sweep. formantBase=0 disables (default).
+  const formantBase = (ctx.P.acidFormant ?? 0) * 12;
   let phase = v.sawPhase;
   let s1 = v.lp1, s2 = v.lp2, s3 = v.lp3;
   let sCutoff = v.smoothCutoff;
@@ -93,6 +141,12 @@ function _carrierAcid(v, ctx) {
     if (phase >= 1) { phase -= 1; saw = 2 * phase - 1; }
     if (phase < dt) { const t = phase / dt; saw += (1 - t) * (1 - t); }
     else if (phase > 1 - dt) { const t = (1 - phase) / dt; saw += (1 - t) * (1 - t); }
+    if (formantBase > 0) {
+      const F = formantBase * (0.2 + voiceGain * 1.8);
+      const x = phase;
+      const fx = F * x * (1 - x);
+      saw *= ftanh(fx);
+    }
     sCutoff += (targetCutoff - sCutoff) * envSmooth;
     if ((i & 31) === 31) {
       targetCutoff = Math.min(cutoffCeil,
@@ -140,6 +194,13 @@ function _carrierFM(v, ctx) {
   v.modPhase = mPhase; v.gains[0] = voiceGain;
 }
 
+// Supersaw per-saw stereo spread. Center saw full in both channels;
+// detuned pairs lean opposite channels. Amplitude-preserving so the
+// summed channel level matches the mono mix (1/7 sum) — width comes
+// from inter-channel decorrelation, not from gain splitting.
+const _SS_PAN_L = new Float32Array([1.0, 1.0, 0.6, 1.0, 0.4, 1.0, 0.3]);
+const _SS_PAN_R = new Float32Array([1.0, 0.6, 1.0, 0.4, 1.0, 0.3, 1.0]);
+
 function _carrierSupersaw(v, ctx) {
   v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
   let voiceGain = v.gains[0];
@@ -158,21 +219,28 @@ function _carrierSupersaw(v, ctx) {
   dts[0] = bfi; dts[1] = bfi * c3; dts[2] = bfi / c3;
   dts[3] = bfi * c6; dts[4] = bfi / c6; dts[5] = bfi * c9; dts[6] = bfi / c9;
   const ph = v.ssPhases;
+  // Bandlimited wavetable read replaces PolyBLEP. Highest detuned saw
+  // determines the table choice (it has the broadest harmonic range).
+  const tbl = _SAW_TABLES[_pickSawTable(baseFreq * c9)];
+  const TS = _SAW_TABLE_SIZE;
   for (let i = 0; i < ctx.len; i++) {
     voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
-    let sum = 0;
+    let sumL = 0, sumR = 0;
     for (let j = 0; j < 7; j++) {
       ph[j] += dts[j];
-      let saw = 2 * ph[j] - 1;
-      if (ph[j] >= 1) { ph[j] -= 1; saw = 2 * ph[j] - 1; }
-      const t1 = ph[j] / dts[j];
-      if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
-      const t2 = (1 - ph[j]) / dts[j];
-      if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
-      sum += saw;
+      if (ph[j] >= 1) ph[j] -= 1;
+      const p = ph[j] * TS;
+      const i0 = p | 0;
+      const frac = p - i0;
+      const a = tbl[i0], b = tbl[(i0 + 1) & _SAW_TABLE_MASK];
+      const saw = a + (b - a) * frac;
+      sumL += saw * _SS_PAN_L[j];
+      sumR += saw * _SS_PAN_R[j];
     }
-    const _s = sum * (1/7) * voiceGain;
-    ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
+    const inv7 = (1/7) * voiceGain;
+    const sL = sumL * inv7;
+    const sR = sumR * inv7;
+    ctx.bufL[i] += sL * ctx.panL; ctx.bufR[i] += sR * ctx.panR;
   }
   v.gains[0] = voiceGain;
 }
@@ -216,14 +284,22 @@ function _carrierPulse(v, ctx) {
     phase += dt;
     if (phase >= 1) phase -= 1;
     let pulse = phase < duty ? 1 : -1;
+    // Two discontinuities per cycle:
+    //   end-of-cycle wrap (phase 1→0): UP step (-1 → +1)
+    //   duty crossing (phase duty-/+): DOWN step (+1 → -1)
+    // Each side of each step needs its own PolyBLEP polarity:
+    //   UP-step post-wrap: pulse at +1, smooth DOWN → SUBTRACT correction
+    //   UP-step pre-wrap:  pulse at -1, smooth UP   → ADD correction
+    //   DOWN-step post-duty: pulse at -1, smooth UP   → ADD correction
+    //   DOWN-step pre-duty:  pulse at +1, smooth DOWN → SUBTRACT correction
     const t1 = phase / dt;
-    if (t1 < 1) pulse += t1 + t1 - t1 * t1 - 1;
+    if (t1 < 1) pulse += t1 + t1 - t1 * t1 - 1;          // post-wrap: -= (1-t1)² (smooth down)
     const t1b = (1 - phase) / dt;
-    if (t1b < 1) pulse -= t1b * t1b - t1b - t1b + 1;
+    if (t1b < 1) pulse += t1b * t1b - t1b - t1b + 1;      // pre-wrap:  += (1-t1b)² (smooth up)
     const t2 = (phase - duty) / dt;
-    if (t2 > 0 && t2 < 1) pulse -= t2 + t2 - t2 * t2 - 1;
+    if (t2 > 0 && t2 < 1) pulse -= t2 + t2 - t2 * t2 - 1; // post-duty: += (1-t2)² (smooth up)
     const t2b = (duty - phase) / dt;
-    if (t2b > 0 && t2b < 1) pulse += t2b * t2b - t2b - t2b + 1;
+    if (t2b > 0 && t2b < 1) pulse -= t2b * t2b - t2b - t2b + 1;  // pre-duty: -= (1-t2b)² (smooth down)
     const _s = pulse * voiceGain;
     ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
   }
@@ -357,6 +433,12 @@ const _PIANO_MIX = new Float32Array([1.0, 0.6, 0.38, 0.26, 0.20, 0.15, 0.11, 0.0
 // Base decay rates (60dB-down time = 6.9/rate seconds at decayScale=1,
 // freqDecayFactor=1). Lower index = longer ring.
 const _PIANO_DECAY = new Float32Array([0.7, 0.95, 1.3, 1.7, 2.2, 2.8, 3.5, 4.3, 5.2, 6.3, 7.5, 9.0]);
+// Per-partial stereo spread. Fundamental full in both channels, upper
+// partials lean L/R. Amplitude-preserving (not constant-power) so the
+// visible waveform stays at mono level — width comes from decorrelation
+// on the upper partials rather than splitting the fundamental.
+const _PIANO_PAN_L = new Float32Array([1.0, 1.0, 0.6, 1.0, 0.5, 0.6, 1.0, 0.5, 1.0, 0.8, 0.6, 1.0]);
+const _PIANO_PAN_R = new Float32Array([1.0, 0.6, 1.0, 0.5, 1.0, 1.0, 0.6, 1.0, 0.5, 0.8, 1.0, 0.6]);
 
 function _carrierPiano(v, ctx) {
   v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
@@ -427,18 +509,23 @@ function _carrierPiano(v, ctx) {
       }
     }
 
-    // Sum output and apply decay.
-    let sample = 0;
+    // Sum output and apply decay. Partials spread L/R for stereo width.
+    let sampleL = 0, sampleR = 0;
     for (let n = 0; n < _PIANO_K; n++) {
       peaks[n] *= decs[n];
-      if (peaks[n] > 1e-6) sample += fsinFast(phases[n]) * peaks[n];
+      if (peaks[n] > 1e-6) {
+        const s = fsinFast(phases[n]) * peaks[n];
+        sampleL += s * _PIANO_PAN_L[n];
+        sampleR += s * _PIANO_PAN_R[n];
+      }
       phases[n] += dts[n];
       if (phases[n] >= _SIN_N) phases[n] -= _SIN_N;
     }
-    sample *= OUT_SCALE;
+    sampleL *= OUT_SCALE;
+    sampleR *= OUT_SCALE;
 
-    bufL[i] += sample * panL;
-    bufR[i] += sample * panR;
+    bufL[i] += sampleL * panL;
+    bufR[i] += sampleR * panR;
   }
 
   // Denormal guard on per-partial peaks. Without this, silently-ringing
@@ -465,6 +552,13 @@ const _BELL_MIX   = new Float32Array([1.0, 0.55, 0.42, 0.30, 0.18]);
 // High partials decay much faster than the fundamental — that's what
 // makes the attack bright but the tail a clean fundamental ring.
 const _BELL_DECAY = new Float32Array([1.7, 2.8, 4.5, 7.0, 11.0]);
+// Per-partial stereo spread. Fundamental fully centered (full
+// amplitude in both channels), upper partials lean L/R. Amplitude-
+// preserving rather than constant-power: keeps the visible waveform
+// level identical to mono while still widening the image via
+// inter-channel decorrelation on the upper partials.
+const _BELL_PAN_L = new Float32Array([1.0, 1.0, 0.5, 1.0, 0.5]);
+const _BELL_PAN_R = new Float32Array([1.0, 0.5, 1.0, 0.5, 1.0]);
 
 function _carrierBell(v, ctx) {
   v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
@@ -554,16 +648,21 @@ function _carrierBell(v, ctx) {
       }
     }
 
-    let sample = 0;
+    let sampleL = 0, sampleR = 0;
     for (let n = 0; n < _BELL_K; n++) {
       peaks[n] *= decs[n];
-      if (peaks[n] > 1e-6) sample += fsinFast(phases[n]) * peaks[n];
+      if (peaks[n] > 1e-6) {
+        const s = fsinFast(phases[n]) * peaks[n];
+        sampleL += s * _BELL_PAN_L[n];
+        sampleR += s * _BELL_PAN_R[n];
+      }
       phases[n] += dts[n];
       if (phases[n] >= _SIN_N) phases[n] -= _SIN_N;
     }
-    sample *= OUT_SCALE;
-    bufL[i] += sample * panL;
-    bufR[i] += sample * panR;
+    sampleL *= OUT_SCALE;
+    sampleR *= OUT_SCALE;
+    bufL[i] += sampleL * panL;
+    bufR[i] += sampleR * panR;
   }
 
   for (let n = 0; n < _BELL_K; n++) if (peaks[n] < 1e-20) peaks[n] = 0;
@@ -576,6 +675,17 @@ function _carrierBell(v, ctx) {
 // + slight 5 Hz vibrato. The bandpass gives the saw a brass-section
 // presence peak that distinguishes it from supersaw's pad-flat
 // spectrum.
+// Brass unison: 2 detuned saws panned L/R. Detune in CENTS, not
+// semitones — ±5 cents (=10 cents total spread) is the chorus sweet
+// spot. Larger values shift into "two notes" territory.
+const _BRASS_DETUNE = Math.pow(2, 0.05 / 12); // ±5 cents ≈ 1.00289
+const _BRASS_INV_DET = 1 / _BRASS_DETUNE;
+// Inner unison pan: dominant voice full (1.0), opposite voice half (0.5).
+// Amplitude-preserving — mono sum (saw + saw2) * 0.5 was the pre-stereo
+// level; new per-channel mix (saw * 1.0 + saw2 * 0.5) etc. matches that
+// scale within ~1 dB so the visible waveform doesn't shrink.
+const _BRASS_UPAN_L = 1.0, _BRASS_UPAN_R = 0.5;
+
 function _carrierBrass(v, ctx) {
   v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
   let voiceGain = v.gains[0];
@@ -586,12 +696,15 @@ function _carrierBrass(v, ctx) {
   const invSr = ctx.invSr;
   const smooth = ctx.smooth;
 
-  if (v.brsBp1 === undefined) { v.brsBp1 = 0; v.brsBp2 = 0; v.brsVibPhase = 0; }
+  if (v.brsBp1 === undefined) { v.brsBp1 = 0; v.brsBp2 = 0; v.brsVibPhase = 0; v.sawPhase2 = 0.5; }
   // Formant centre Hz; centroid pushes it up for brighter (blue)
   // input and down for darker (red).
   const formant = 700 + (ctx.P.brsFormant ?? 0.5) * 1800 * (1 + (v.centroid - 0.5));
   const fHz = Math.min(sampleRate * 0.45, Math.max(200, formant));
-  const Q = 4 + (ctx.P.brsBite ?? 0.5) * 6;
+  // Q range tamed from 4–10 to 2–5: high-Q bandpass amplifies each
+  // saw-wrap discontinuity ~4.5×, audible as click character on top of
+  // the brass timbre. Lower Q gives a less honky but cleaner brass.
+  const Q = 2 + (ctx.P.brsBite ?? 0.5) * 3;
   // 2-pole resonator coefficients (bandpass).
   const w = ctx.twoPi * fHz * invSr;
   const r = Math.max(0.9, Math.min(0.9999, 1 - Math.PI * fHz / (Q * sampleRate)));
@@ -602,33 +715,52 @@ function _carrierBrass(v, ctx) {
   const vibDepth = 0.003;
 
   let phase = v.sawPhase;
+  let phase2 = v.sawPhase2;
   let y1 = v.brsBp1, y2 = v.brsBp2;
   let vibPhase = v.brsVibPhase;
+  // Bandlimited wavetable read. Pick table once per block based on the
+  // higher-pitched unison voice (worst case for aliasing).
+  const tbl = _SAW_TABLES[_pickSawTable(v.freq * _BRASS_DETUNE)];
+  const TS = _SAW_TABLE_SIZE;
   for (let i = 0; i < len; i++) {
     voiceGain += (voiceTarget - voiceGain) * smooth;
     const vib = 1 + Math.sin(vibPhase) * vibDepth;
     vibPhase += vibRate; if (vibPhase > ctx.twoPi) vibPhase -= ctx.twoPi;
-    const dt = v.freq * vib * invSr;
+    const fBase = v.freq * vib;
+    const dt = fBase * _BRASS_DETUNE * invSr;
+    const dt2 = fBase * _BRASS_INV_DET * invSr;
     phase += dt;
     if (phase >= 1) phase -= 1;
-    let saw = 2 * phase - 1;
-    const t1 = phase / dt;
-    if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
-    const t1b = (1 - phase) / dt;
-    if (t1b < 1) saw += t1b * t1b - t1b - t1b + 1;
-    // Bandpass-process the saw.
-    const y0 = saw + c1 * y1 + c2 * y2;
+    let p = phase * TS;
+    let i0 = p | 0;
+    const a1 = tbl[i0], b1 = tbl[(i0 + 1) & _SAW_TABLE_MASK];
+    const saw = a1 + (b1 - a1) * (p - i0);
+    phase2 += dt2;
+    if (phase2 >= 1) phase2 -= 1;
+    p = phase2 * TS;
+    i0 = p | 0;
+    const a2 = tbl[i0], b2 = tbl[(i0 + 1) & _SAW_TABLE_MASK];
+    const saw2 = a2 + (b2 - a2) * (p - i0);
+    // Sum unison voices into the bandpass (mono filter — cheaper and
+    // the chorusing survives because the dry saw mix is per-channel).
+    const sawSum = (saw + saw2) * 0.5;
+    const y0 = sawSum + c1 * y1 + c2 * y2;
     const bp = (y0 - y2) * norm;
     y2 = y1; y1 = y0;
-    // Mix dry saw + bandpass: keeps low-end body while adding the
-    // formant peak. 30/70 mix found to read clearly as "brass".
-    const _s = (saw * 0.3 + bp * 4.5) * voiceGain;
-    bufL[i] += _s * panL;
-    bufR[i] += _s * panR;
+    // Stereo width comes from the dry mix: voice 1 leans L, voice 2 R.
+    // Bandpass formant stays mono (centered). BP mix reduced from 4.5
+    // to 2.0 to tame saw-wrap ringing through the bandpass.
+    const dryL = saw * _BRASS_UPAN_L + saw2 * _BRASS_UPAN_R;
+    const dryR = saw * _BRASS_UPAN_R + saw2 * _BRASS_UPAN_L;
+    const sL = (dryL * 0.3 + bp * 2.0) * voiceGain;
+    const sR = (dryR * 0.3 + bp * 2.0) * voiceGain;
+    bufL[i] += sL * panL;
+    bufR[i] += sR * panR;
   }
   if (Math.abs(y1) < 1e-20) y1 = 0;
   if (Math.abs(y2) < 1e-20) y2 = 0;
-  v.sawPhase = phase; v.brsBp1 = y1; v.brsBp2 = y2; v.brsVibPhase = vibPhase;
+  v.sawPhase = phase; v.sawPhase2 = phase2;
+  v.brsBp1 = y1; v.brsBp2 = y2; v.brsVibPhase = vibPhase;
   v.gains[0] = voiceGain;
 }
 
@@ -636,6 +768,13 @@ function _carrierBrass(v, ctx) {
 // PolyBLEP saw + 1-pole lowpass (unity-gain at DC) + slow attack +
 // light vibrato. The LP softens supersaw's edge; the slow gain
 // smoothing (0.10s) gives a bow-stroke attack instead of struck.
+// Bowed unison: 2 detuned saws panned L/R. Detune in CENTS — pads can
+// take a bit more chorus than brass without sounding out of tune.
+const _BOWED_DETUNE = Math.pow(2, 0.10 / 12); // ±10 cents ≈ 1.00579
+const _BOWED_INV_DET = 1 / _BOWED_DETUNE;
+// Same amplitude-preserving inner pan as brass — see _BRASS_UPAN_L note.
+const _BOWED_UPAN_L = 1.0, _BOWED_UPAN_R = 0.5;
+
 function _carrierBowed(v, ctx) {
   v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
   let voiceGain = v.gains[0];
@@ -646,7 +785,7 @@ function _carrierBowed(v, ctx) {
   const invSr = ctx.invSr;
   const smooth = ctx.smooth;
 
-  if (v.bowLp1 === undefined) { v.bowLp1 = 0; v.bowVibPhase = 0; }
+  if (v.bowLp1 === undefined) { v.bowLp1 = 0; v.bowLp2 = 0; v.bowVibPhase = 0; v.sawPhase2 = 0.5; }
   // 1-pole LP cutoff (centroid + slider). Unity gain at DC keeps
   // the carrier at parity with supersaw / acid output levels — the
   // 2-pole resonator I tried first had ~10× DC gain (1/(1-r)² with
@@ -663,27 +802,109 @@ function _carrierBowed(v, ctx) {
   const vibDepth = 0.012 * (ctx.P.bowVibrato ?? 0.5);
 
   let phase = v.sawPhase;
+  let phase2 = v.sawPhase2;
   let lp = v.bowLp1;
+  let lp2 = v.bowLp2;
   let vibPhase = v.bowVibPhase;
+  // Bandlimited wavetable read replaces PolyBLEP — same pattern as brass.
+  const tbl = _SAW_TABLES[_pickSawTable(v.freq * _BOWED_DETUNE)];
+  const TS = _SAW_TABLE_SIZE;
   for (let i = 0; i < len; i++) {
     voiceGain += (voiceTarget - voiceGain) * smooth;
     const vib = 1 + Math.sin(vibPhase) * vibDepth;
     vibPhase += vibRate; if (vibPhase > ctx.twoPi) vibPhase -= ctx.twoPi;
-    const dt = v.freq * vib * invSr;
+    const fBase = v.freq * vib;
+    const dt = fBase * _BOWED_DETUNE * invSr;
+    const dt2 = fBase * _BOWED_INV_DET * invSr;
     phase += dt;
     if (phase >= 1) phase -= 1;
-    let saw = 2 * phase - 1;
-    const t1 = phase / dt;
-    if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
-    const t1b = (1 - phase) / dt;
-    if (t1b < 1) saw += t1b * t1b - t1b - t1b + 1;
+    let p = phase * TS;
+    let i0 = p | 0;
+    const a1 = tbl[i0], b1 = tbl[(i0 + 1) & _SAW_TABLE_MASK];
+    const saw = a1 + (b1 - a1) * (p - i0);
+    phase2 += dt2;
+    if (phase2 >= 1) phase2 -= 1;
+    p = phase2 * TS;
+    i0 = p | 0;
+    const a2 = tbl[i0], b2 = tbl[(i0 + 1) & _SAW_TABLE_MASK];
+    const saw2 = a2 + (b2 - a2) * (p - i0);
     lp = alpha * saw + oneMinusAlpha * lp;
-    const _s = lp * voiceGain;
-    bufL[i] += _s * panL;
-    bufR[i] += _s * panR;
+    lp2 = alpha * saw2 + oneMinusAlpha * lp2;
+    // Stereo spread: each unison voice leans opposite channels.
+    const sL = (lp * _BOWED_UPAN_L + lp2 * _BOWED_UPAN_R) * voiceGain;
+    const sR = (lp * _BOWED_UPAN_R + lp2 * _BOWED_UPAN_L) * voiceGain;
+    bufL[i] += sL * panL;
+    bufR[i] += sR * panR;
   }
   if (Math.abs(lp) < 1e-20) lp = 0;
-  v.sawPhase = phase; v.bowLp1 = lp; v.bowVibPhase = vibPhase;
+  if (Math.abs(lp2) < 1e-20) lp2 = 0;
+  v.sawPhase = phase; v.sawPhase2 = phase2;
+  v.bowLp1 = lp; v.bowLp2 = lp2; v.bowVibPhase = vibPhase;
+  v.gains[0] = voiceGain;
+}
+
+// --- Tank drum carrier (Korg Minipops style) ---
+// Pitched sine + brief pitch sweep + exponential body decay. The pitch
+// sweep (start ~1.5× target, drop to target in ~30ms) gives the
+// "tk-toomp" attack character of analog drum machines without
+// distortion-noise spectrum pollution. Strike injects energy into a
+// per-voice peak that decays exponentially per sample. Frequency
+// determines drum "type" implicitly: low → kick, mid → tom, high → bongo.
+function _carrierTankDrum(v, ctx) {
+  v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
+  const voiceTarget = v.targetGains[0];
+  let voiceGain = v.gains[0];
+  const bufL = ctx.bufL, bufR = ctx.bufR;
+  const panL = ctx.panL, panR = ctx.panR;
+  const len = ctx.len;
+  const invSr = ctx.invSr;
+  const smooth = ctx.smooth;
+
+  // Body decay rate scales inversely with frequency: low drums (kick)
+  // ring longer than high drums (claves/bongos). Slider scales overall.
+  const decayMul = ctx.P.tdDecay ?? 1.0;
+  // 60-dB time at decayMul=1: ~0.4s @ 60Hz, ~0.10s @ 300Hz, ~0.04s @ 1.5kHz.
+  const decayRate = (8 + v.freq * 0.025) / decayMul;
+  const dec = Math.exp(-decayRate * invSr);
+  // Pitch sweep: each strike sets sweep=1; sweep multiplier on phase
+  // increment is (1 + sweep * sweepDepth). Decays at sweepRate to 0.
+  const sweepDepth = 0.5 + (ctx.P.tdPunch ?? 0.5) * 1.5;
+  const sweepRate = 50 + (ctx.P.tdPunch ?? 0.5) * 100; // 50-150 /sec
+  const sweepDec = Math.exp(-sweepRate * invSr);
+
+  if (v.tdPeak === undefined) {
+    v.tdPeak = 0;
+    v.tdPhase = Math.random() * _SIN_N;
+    v.tdSweep = 0;
+    v.tdPrevGain = 0;
+  }
+  let peak = v.tdPeak;
+  let phase = v.tdPhase;
+  let sweep = v.tdSweep;
+  let prevGain = v.tdPrevGain;
+  const baseInc = v.freq * invSr * _SIN_N;
+
+  for (let i = 0; i < len; i++) {
+    voiceGain += (voiceTarget - voiceGain) * smooth;
+    const gainRise = voiceGain - prevGain;
+    prevGain = voiceGain;
+    if (gainRise > 0) {
+      // Strike: inject peak energy; reset sweep to 1 (full pitch boost).
+      // Cap peak so repeated strikes don't pile unbounded.
+      peak = Math.min(1.0, peak + gainRise * 1.4);
+      sweep = 1;
+    }
+    peak *= dec;
+    sweep *= sweepDec;
+    const inc = baseInc * (1 + sweep * sweepDepth);
+    const s = fsinFast(phase) * peak;
+    phase += inc;
+    if (phase >= _SIN_N) phase -= _SIN_N;
+    bufL[i] += s * panL;
+    bufR[i] += s * panR;
+  }
+  if (peak < 1e-20) peak = 0;
+  v.tdPeak = peak; v.tdPhase = phase; v.tdSweep = sweep; v.tdPrevGain = prevGain;
   v.gains[0] = voiceGain;
 }
 
@@ -693,14 +914,15 @@ const _CARRIERS = {
   noise: _carrierNoise, pulse: _carrierPulse, vocoder: _carrierVocoder,
   karplus: _carrierKarplus, sine: _carrierSine, piano: _carrierPiano,
   bell: _carrierBell, brass: _carrierBrass, bowed: _carrierBowed,
+  tankdrum: _carrierTankDrum,
 };
 
 // Index-keyed dispatch table. Order matches `Object.keys(CARRIERS)` in
 // `carriers.js`: sine=0, noise=1, acid=2, fm=3, supersaw=4, pulse=5,
-// vocoder=6, karplus=7, piano=8, bell=9, brass=10, bowed=11. Used by
-// the per-(sensor, carrier) voice path; the per-voice carrierIdx
+// vocoder=6, karplus=7, piano=8, bell=9, brass=10, bowed=11, tankdrum=12.
+// Used by the per-(sensor, carrier) voice path; the per-voice carrierIdx
 // field directly indexes this.
-const _CARRIER_NAMES_BY_IDX = ['sine', 'noise', 'acid', 'fm', 'supersaw', 'pulse', 'vocoder', 'karplus', 'piano', 'bell', 'brass', 'bowed'];
+const _CARRIER_NAMES_BY_IDX = ['sine', 'noise', 'acid', 'fm', 'supersaw', 'pulse', 'vocoder', 'karplus', 'piano', 'bell', 'brass', 'bowed', 'tankdrum'];
 const _CARRIERS_BY_IDX = _CARRIER_NAMES_BY_IDX.map(n => _CARRIERS[n]);
 const _NAME_TO_IDX = {};
 for (let i = 0; i < _CARRIER_NAMES_BY_IDX.length; i++) _NAME_TO_IDX[_CARRIER_NAMES_BY_IDX[i]] = i;
@@ -709,17 +931,17 @@ const _PIANO_IDX = _NAME_TO_IDX.piano;
 const _SINE_IDX = _NAME_TO_IDX.sine;
 
 // Carriers that use a single gain band (gainK=1) vs sine's multi-partial.
-const _SINGLE_BAND = { noise:1, acid:1, fm:1, supersaw:1, pulse:1, karplus:1, vocoder:1, piano:1, bell:1, brass:1, bowed:1 };
+const _SINGLE_BAND = { noise:1, acid:1, fm:1, supersaw:1, pulse:1, karplus:1, vocoder:1, piano:1, bell:1, brass:1, bowed:1, tankdrum:1 };
 // Index-keyed: 1 if the carrier uses a single gain band.
 const _SINGLE_BAND_BY_IDX = _CARRIER_NAMES_BY_IDX.map(n => (n in _SINGLE_BAND) ? 1 : 0);
 
-// Per-carrier gain smoothing time constants (seconds). Tightened to 2ms
-// on transient carriers (piano/bell) to preserve attack brightness;
-// previous 15ms rolled off the top end audibly. Sustained carriers keep
-// their slower smoothing since their attack character isn't strike-based.
-const _SMOOTH_SEC = { karplus: 0.005, pulse: 0.03, acid: 0.04,
-  noise: 0.06, fm: 0.06, supersaw: 0.06, vocoder: 0.06, piano: 0.002,
-  bell: 0.002, brass: 0.04, bowed: 0.10 };
+// Per-carrier gain smoothing time constants (seconds). Kept short on
+// every carrier whose attack character matters — long smoothing low-passes
+// transient brightness audibly. Bowed alone keeps a slow ramp because its
+// attack character IS the bow stroke.
+const _SMOOTH_SEC = { karplus: 0.002, pulse: 0.005, acid: 0.005,
+  noise: 0.005, fm: 0.005, supersaw: 0.005, vocoder: 0.005, piano: 0.002,
+  bell: 0.002, brass: 0.005, bowed: 0.10, sine: 0.005, tankdrum: 0.001 };
 const _SMOOTH_SEC_BY_IDX = _CARRIER_NAMES_BY_IDX.map(n => _SMOOTH_SEC[n] ?? 0.08);
 
 // Freeverb (Jezar Wakefield) constants. Delay lengths are the tuned
@@ -1099,17 +1321,19 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       if (!this._vocPhase) this._vocPhase = 0;
       if (!this._vocExcBuf || this._vocExcBuf.length < len) this._vocExcBuf = new Float32Array(len);
       _vocExc = this._vocExcBuf;
+      // Bandlimited wavetable saw replaces PolyBLEP for vocoder excitation.
+      const vocTbl = _SAW_TABLES[_pickSawTable(basePitch)];
+      const TS = _SAW_TABLE_SIZE;
       for (let i = 0; i < len; i++) {
         let exc = 0;
         if (useNoise) exc += (_rng() * 2 - 1) * noiseMix;
         if (usePulse) {
           this._vocPhase += pdt;
           if (this._vocPhase >= 1) this._vocPhase -= 1;
-          let saw = 2 * this._vocPhase - 1;
-          const t1 = this._vocPhase / pdt;
-          if (t1 < 1) saw -= t1 + t1 - t1 * t1 - 1;
-          const t2 = (1 - this._vocPhase) / pdt;
-          if (t2 < 1) saw += t2 * t2 - t2 - t2 + 1;
+          const p = this._vocPhase * TS;
+          const i0 = p | 0;
+          const a = vocTbl[i0], b = vocTbl[(i0 + 1) & _SAW_TABLE_MASK];
+          const saw = a + (b - a) * (p - i0);
           exc += saw * pulseMix;
         }
         _vocExc[i] = exc;
@@ -1149,9 +1373,27 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       const s = (vIdx / cc) | 0;
       const v = voices[vIdx];
       const eIdx = effectiveIdx(vIdx);
-      // Per-voice smoothing — each carrier has its own time constant.
+      // Per-voice smoothing. Two rates: fast for attack (carrier-specific,
+      // 2–10ms) and slow for release (30ms uniform). Release rate matters
+      // because consecutive same-emitter notes were seeing voiceGain hit
+      // floor + rise again with the same fast time constant — audible as
+      // a click on each retrigger. With a 30ms release tail, the gain
+      // envelope returns to silence smoothly instead of cliff-like, and
+      // the next note's attack starts from a non-zero baseline.
       const smoothSec = _SMOOTH_SEC_BY_IDX[eIdx];
-      const smooth = 1 - Math.exp(-1 / (smoothSec * sampleRate));
+      const attackSmooth = 1 - Math.exp(-1 / (smoothSec * sampleRate));
+      // Detect "release" state: any gains[k] > targetGains[k] means we're
+      // currently sliding down toward silence (note has ended).
+      let releasing = false;
+      for (let k = 0; k < v.gains.length; k++) {
+        if (v.targetGains[k] < v.gains[k] - 1e-4) { releasing = true; break; }
+      }
+      // Bowed already has a slow attack (100ms) — its release shouldn't be
+      // faster than its attack; fall through to attackSmooth.
+      const releaseSmooth = smoothSec >= 0.030
+        ? attackSmooth
+        : 1 - Math.exp(-1 / (0.030 * sampleRate));
+      const smooth = releasing ? releaseSmooth : attackSmooth;
       ctx.smooth = smooth;
       ctx.centroidSmooth = 1 - Math.pow(1 - smooth, len);
       const pan = sc > 1 ? 0.5 + (s / panDen - 0.5) * PAN_WIDTH : 0.5;
@@ -1179,6 +1421,9 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           if (v.bellPeak[n] > 1e-5) { anyActive = true; break; }
         }
       }
+      if (!anyActive && eIdx === _NAME_TO_IDX.tankdrum && v.tdPeak > 1e-5) {
+        anyActive = true;
+      }
       if (anyActive) v.coast = 3;
       else if (v.coast > 0) { v.coast--; anyActive = true; }
       if (!anyActive) {
@@ -1191,7 +1436,84 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       _activeCount++;
 
       const fn = _CARRIERS_BY_IDX[eIdx] || _carrierSine;
+      // Carrier-change crossfade: when this voice's effective carrier
+      // differs from last block's, render the OLD carrier into a
+      // scratch buffer at FULL output (normal smoothing, original
+      // targets — no forced zero) and apply a LINEAR fade-out at
+      // mix time. The new carrier renders from gains=0 into the real
+      // buffer and ramps up via its own attack smoothing.
+      //
+      // Linear fade is critical: an exponential lerp toward 0 with
+      // fast smooth (e.g., 0.3) drops the first sample by 30% of its
+      // amplitude — that *is* the click. Linear weight w = 1 - i/len
+      // gives a per-sample step of just 1/len = ~0.8%, inaudible.
+      const prevEIdx = v.prevEIdx;
+      if (prevEIdx !== undefined && prevEIdx !== eIdx && prevEIdx >= 0) {
+        const oldFn = _CARRIERS_BY_IDX[prevEIdx];
+        if (oldFn) {
+          if (!ctx._scratchL || ctx._scratchL.length < len) {
+            ctx._scratchL = new Float32Array(len);
+            ctx._scratchR = new Float32Array(len);
+          } else {
+            ctx._scratchL.fill(0); ctx._scratchR.fill(0);
+          }
+          const realL = ctx.bufL, realR = ctx.bufR;
+          // Snapshot gains so the new carrier starts cleanly. The old
+          // carrier mutates gains[] during its render; we restore and
+          // then zero them so the new carrier ramps up from silence.
+          if (!v._savedGains || v._savedGains.length < v.gains.length) {
+            v._savedGains = new Float32Array(v.gains.length);
+          }
+          const savedGains = v._savedGains;
+          for (let k = 0; k < v.gains.length; k++) savedGains[k] = v.gains[k];
+          ctx.bufL = ctx._scratchL; ctx.bufR = ctx._scratchR;
+          oldFn(v, ctx);
+          ctx.bufL = realL; ctx.bufR = realR;
+          // Reset gains so the new carrier ramps up from silence via
+          // its own smoothing. Linear fade-out on scratch handles the
+          // continuity at sample 0.
+          for (let k = 0; k < v.gains.length; k++) v.gains[k] = 0;
+          // Reset resonant accumulators on the NEW carrier. Piano/bell/
+          // tankdrum hold their output in a peak[] array that decays
+          // ONLY when their carrier function runs. When the carrier was
+          // swapped away for many blocks, peaks freeze at their last
+          // value. On swap-back, the next call writes
+          //   bufL[0] += sum(sin(phase) * peak) * OUT_SCALE
+          // which is a stale-loud impulse independent of voiceGain —
+          // the dominant source of boundary clicks in the audit. Zero
+          // them so the new carrier starts cleanly.
+          if (eIdx === _PIANO_IDX && v.pianoPeak) {
+            for (let n = 0; n < _PIANO_K; n++) v.pianoPeak[n] = 0;
+            v.pianoPrevGain = 0;
+          }
+          if (eIdx === _NAME_TO_IDX.bell && v.bellPeak) {
+            for (let n = 0; n < _BELL_K; n++) v.bellPeak[n] = 0;
+            v.bellPrevGain = 0;
+          }
+          if (eIdx === _NAME_TO_IDX.tankdrum && v.tdPeak !== undefined) {
+            v.tdPeak = 0;
+            v.tdSweep = 0;
+            v.tdPrevGain = 0;
+          }
+        }
+      }
+      v.prevEIdx = eIdx;
       fn(v, ctx);
+      // Mix the old-carrier scratch into the live buffer with a linear
+      // fade-out (weight 1.0 at sample 0, 0.0 at sample len-1). Done
+      // AFTER the new carrier renders so we preserve continuity:
+      //   sample 0  = old_full * 1.0 + new_~0    ≈ continuous with prev block
+      //   sample N-1 = old_~ * 0.0  + new_full   ≈ continuous with next block
+      if (prevEIdx !== undefined && prevEIdx !== eIdx && prevEIdx >= 0
+          && _CARRIERS_BY_IDX[prevEIdx]) {
+        const sL = ctx._scratchL, sR = ctx._scratchR;
+        const invLen = 1 / len;
+        for (let i = 0; i < len; i++) {
+          const w = 1 - i * invLen;
+          ctx.bufL[i] += sL[i] * w;
+          ctx.bufR[i] += sR[i] * w;
+        }
+      }
     }
     this._lastActiveCount = _activeCount;
     // Freeverb (Jezar-style Schroeder): post-sum, pre-limiter. Fully

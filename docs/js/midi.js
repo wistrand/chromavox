@@ -581,10 +581,11 @@ function drumLane(pitch) {
   return 3;                                                // cymbals / shakers / bells / etc.
 }
 const DRUM_LANE_COUNT = 4;
-// Per-lane carrier choice. karplus gives a tuned plucked-string thump
-// for kick + tom (decays naturally, reads as a body); noise gives
-// broadband attack for snare + hat (sticks, rattles, shimmer).
-const DRUM_LANE_CARRIER = ['karplus', 'noise', 'karplus', 'noise'];
+// Per-lane carrier choice. tankdrum gives a clean pitched-sine thump
+// for kick + tom (no broadband strike noise to compete with the mid-range
+// mix — Korg Minipops style); noise gives broadband bandpass attack for
+// snare + hat (sticks, rattles, shimmer).
+const DRUM_LANE_CARRIER = ['tankdrum', 'noise', 'tankdrum', 'noise'];
 // Per-lane forced max duration in seconds. Short so each hit reads as
 // a punctuation, not a held tone. Slightly longer for kick/tom (body
 // resonance), shorter for snare/hat (transient).
@@ -715,10 +716,17 @@ export function midiToSong(parsed, options = {}) {
     baseMidi = Math.floor(minPitch / 12) * 12 - 12;
     emitterCount = (maxPitch - baseMidi) + 1 + drumOffset;
     if (emitterCount > 64) {
-      const overflow = emitterCount - 64;
-      baseMidi += overflow;
-      if (baseMidi > minPitch) baseMidi = minPitch;
-      emitterCount = Math.min(64, (maxPitch - baseMidi) + 1 + drumOffset);
+      // Bench overflow: shift baseMidi UP enough to fit the high pitches
+      // (the lead/melody) — losing any low notes (bass) is preferable
+      // to losing the lead. Bass notes that fall below the new baseMidi
+      // are octave-folded up at note-routing time so nothing is silently
+      // dropped. Previously we clamped baseMidi at minPitch to preserve
+      // bass — but that pushed the maxPitch one or more emitters past 64
+      // and the LEAD got dropped instead. Drum mode amplifies this by
+      // stealing 4 emitters: melodic range 60+1 fits without drums but
+      // overflows by 1 with drums, dropping the topmost lead note.
+      baseMidi = maxPitch - (64 - drumOffset) + 1;
+      emitterCount = 64;
     }
   } else {
     baseMidi = 60; // C4 fallback for drum-only songs
@@ -737,7 +745,12 @@ export function midiToSong(parsed, options = {}) {
     return Number((x * 0.85 + 0.15).toFixed(2));
   };
   for (const n of rawNotes) {
-    const emitter = (n.pitch - baseMidi) + drumOffset;
+    // Octave-fold pitches below baseMidi up into range — preserves the
+    // bass content (transposed up an octave or more) instead of silently
+    // dropping it when bench overflow forced baseMidi above minPitch.
+    let pitch = n.pitch;
+    while (pitch < baseMidi) pitch += 12;
+    const emitter = (pitch - baseMidi) + drumOffset;
     if (emitter < drumOffset || emitter >= emitterCount) { outOfRange++; continue; }
     const note = {
       time: Number(n.time.toFixed(4)),

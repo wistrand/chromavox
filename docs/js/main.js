@@ -663,7 +663,7 @@ const MIN_LABEL_PX = 12;
 // `_CARRIERS_BY_IDX` in synth-worklet.js / `Object.keys(CARRIERS)` in
 // carriers.js. Index 0 (sine = "use global synth-carrier") shows
 // nothing — labels stay clean for the default case.
-const _CARRIER_LABEL = ['', 'n', 'a', 'fm', 'ss', 'pu', 'vc', 'kp', 'pn', 'bl', 'br', 'bw'];
+const _CARRIER_LABEL = ['', 'n', 'a', 'fm', 'ss', 'pu', 'vc', 'kp', 'pn', 'bl', 'br', 'bw', 'td'];
 // Last-stamped carrier text per emitter, indexed by emitter idx.
 // `rebuildEmitterLabels()` clears this when label DOM is rebuilt
 // (cache stale), so the next frame writes through. Declared up here
@@ -2162,7 +2162,7 @@ window.addEventListener('resize', () => {
     return 'FX';
   }
 
-  function _applyMidiSelection() {
+  function _applyMidiSelection(resetTime = false) {
     if (!_midiParsed) return;
     try {
       const song = midiToSong(_midiParsed, {
@@ -2172,12 +2172,12 @@ window.addEventListener('resize', () => {
         includeDrums: _midiIncludeDrums,
       });
       songSelect.value = '';
-      // Preserve playback position across the regenerate so toggles
-      // (track enable/disable, per-track-instruments) feel instant
-      // instead of restarting from 0. The song's note timing is
-      // unchanged; only metadata (carriers / track set) shifts.
+      // For track-toggle regenerates we preserve playback position so
+      // the change feels instant. For a fresh MIDI drop (resetTime=true)
+      // we start from 0 — preserving the previous song's playhead time
+      // would seek into an unrelated song's timeline.
       const wasPlaying = songPlayer.playing;
-      const prevTime = songPlayer.time;
+      const prevTime = resetTime ? 0 : songPlayer.time;
       loadSongJson(song);
       if (loopBtn) loopBtn.disabled = false;
       const hadPosition = wasPlaying || prevTime > 0;
@@ -2259,7 +2259,7 @@ window.addEventListener('resize', () => {
       }
     }
     if (_midiReopenBtn) _midiReopenBtn.hidden = false;
-    if (!_midiPanel) { _applyMidiSelection(); return; }
+    if (!_midiPanel) { _applyMidiSelection(!rerenderOnly); return; }
 
     const totalSec = parsed.tracks.reduce((m, t) => Math.max(m, t.lastTick), 0) /
       parsed.ticksPerQuarter * (parsed.tempoMap[0].tempoUs / 1e6);
@@ -2298,7 +2298,7 @@ window.addEventListener('resize', () => {
       _midiList.appendChild(label);
     }
     _openMidiPanel();
-    _applyMidiSelection();
+    _applyMidiSelection(!rerenderOnly);
   }
 
   // Close the panel but keep parsed state around so the ♪ button can
