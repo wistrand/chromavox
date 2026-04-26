@@ -455,13 +455,28 @@ const _CARRIERS = {
   karplus: _carrierKarplus, sine: _carrierSine, piano: _carrierPiano,
 };
 
+// Index-keyed dispatch table. Order matches `Object.keys(CARRIERS)` in
+// `carriers.js`: sine=0, noise=1, acid=2, fm=3, supersaw=4, pulse=5,
+// vocoder=6, karplus=7, piano=8. Used by the per-(sensor, carrier)
+// voice path; the per-voice carrierIdx field directly indexes this.
+const _CARRIER_NAMES_BY_IDX = ['sine', 'noise', 'acid', 'fm', 'supersaw', 'pulse', 'vocoder', 'karplus', 'piano'];
+const _CARRIERS_BY_IDX = _CARRIER_NAMES_BY_IDX.map(n => _CARRIERS[n]);
+const _NAME_TO_IDX = {};
+for (let i = 0; i < _CARRIER_NAMES_BY_IDX.length; i++) _NAME_TO_IDX[_CARRIER_NAMES_BY_IDX[i]] = i;
+const _VOCODER_IDX = _NAME_TO_IDX.vocoder;
+const _PIANO_IDX = _NAME_TO_IDX.piano;
+const _SINE_IDX = _NAME_TO_IDX.sine;
+
 // Carriers that use a single gain band (gainK=1) vs sine's multi-partial.
 const _SINGLE_BAND = { noise:1, acid:1, fm:1, supersaw:1, pulse:1, karplus:1, vocoder:1, piano:1 };
+// Index-keyed: 1 if the carrier uses a single gain band.
+const _SINGLE_BAND_BY_IDX = _CARRIER_NAMES_BY_IDX.map(n => (n in _SINGLE_BAND) ? 1 : 0);
 
 // Per-carrier gain smoothing time constants (seconds). Piano uses a
 // moderately fast smoothing so attacks stay crisp without clicking.
 const _SMOOTH_SEC = { karplus: 0.005, pulse: 0.03, acid: 0.04,
   noise: 0.06, fm: 0.06, supersaw: 0.06, vocoder: 0.06, piano: 0.015 };
+const _SMOOTH_SEC_BY_IDX = _CARRIER_NAMES_BY_IDX.map(n => _SMOOTH_SEC[n] ?? 0.08);
 
 // Freeverb (Jezar Wakefield) constants. Delay lengths are the tuned
 // primes from the original C++ reference at 44.1 kHz; we use them as
@@ -483,10 +498,11 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     this.voices = [];
     this.bins = null;
     this.binCount = 64;
+    this.carrierCount = 1;     // grows when runtime.carrierPerSource is set in scene
     this.fullScale = 1;
     this.sensorCount = 0;
     this.partials = 1;
-    this.carrier = 'sine';
+    this.carrier = 'sine';      // global synth-carrier: used by voices with carrierIdx 0
     // Carrier params — defaults injected from carriers.js at build time.
     this.P = __PARAM_DEFAULTS__;
     // Freeverb reverb params (live in the same P namespace as carrier
@@ -524,7 +540,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       if (d.type === 'bins') {
         this.bins = d.bins;
       } else if (d.type === 'rebuild') {
-        this._rebuild(d.freqs, d.binCount, d.sensorCount, d.fullScale);
+        this._rebuild(d.freqs, d.binCount, d.sensorCount, d.fullScale, d.carrierCount);
       } else if (d.type === 'partials') {
         this.partials = d.value;
         this.P.partials = d.value;
@@ -541,10 +557,12 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         // reference to its current smoothed gain. Otherwise the first
         // piano block sees gainRise = voiceGain - stale_pianoPrevGain
         // and injects a phantom strike proportional to whatever the
-        // previous carrier's gain state was.
+        // previous carrier's gain state was. Only applies to voices
+        // that actually follow the global carrier (carrierIdx === 0);
+        // voices with a fixed carrierIdx > 0 are unaffected.
         if (d.value === 'piano' && this.voices) {
           for (const v of this.voices) {
-            v.pianoPrevGain = v.gains[0] || 0;
+            if ((v.carrierIdx | 0) === 0) v.pianoPrevGain = v.gains[0] || 0;
           }
         }
         this.carrier = d.value;
@@ -553,10 +571,11 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       }
     };
   }
-  _rebuild(freqs, binCount, sensorCount, fullScale) {
+  _rebuild(freqs, binCount, sensorCount, fullScale, carrierCount) {
     this.binCount = binCount;
     this.sensorCount = sensorCount;
     if (fullScale) this.fullScale = fullScale;
+    if (carrierCount !== undefined) this.carrierCount = Math.max(1, carrierCount | 0);
     this._freqs = freqs;
     this._rebuildPartials();
   }
@@ -671,6 +690,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const nyq = sampleRate / 2;
     const freqs = this._freqs;
     if (!freqs) return;
+    const cc = Math.max(1, this.carrierCount | 0);
     for (let i = 0; i < this.sensorCount; i++) {
       const f = freqs[i];
       // Count partials that fit under Nyquist, then allocate typed
@@ -682,34 +702,35 @@ class ChromavoxSynth extends AudioWorkletProcessor {
         if (f * k >= nyq) break;
         nk++;
       }
-      const phases      = new Float32Array(nk);
-      const gains       = new Float32Array(nk);
-      const targetGains = new Float32Array(nk);
-      // Bandpass IIR state for noise carrier (single 2-pole resonator).
-      // Acid carrier: PolyBLEP saw phase + 3-pole TPT ladder filter state
-      // + smoothed cutoff to avoid clicks from abrupt sweeps.
-      // Karplus-Strong delay line: length = ceil(sampleRate / freq).
+      // Allocate one voice per (sensor, carrier) slot. carrierIdx 0 is
+      // the "use the global synth-carrier" channel — voices for
+      // emitters that didn't override default into this column. Slots
+      // 1..cc-1 each play a fixed carrier from `_CARRIER_NAMES_BY_IDX`.
+      // When `cc === 1`, the layout collapses to today's one-voice-
+      // per-sensor (always carrierIdx 0 → global).
       const kpLen = Math.max(2, Math.ceil(sampleRate / f));
-      this.voices.push({ freq: f, phases, gains, targetGains,
-        bp1: 0, bp2: 0,
-        sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: -1,
-        modPhase: 0,
-        ssPhases: new Float32Array(7),
-        centroid: 0.5, targetCentroid: 0.5,
-        pulsePhase: 0,
-        kpBuf: new Float32Array(kpLen), kpIdx: 0, kpPrev: 0, kpGainPrev: 0,
-        kpExLp: 0,
-        // Vocoder: 4th-order bandpass = two cascaded biquads.
-        voc1: new Float32Array(2), voc2: new Float32Array(2), // DF-IIT state [z1,z2] per biquad
-        vocEnv: 0, vocPulsePhase: 0,
-        // Piano: 12 modal partials. Peaks persist between blocks and
-        // keep ringing after voiceGain drops, so the active-voice gate
-        // in process() consults these too.
-        pianoPhases: new Float32Array(12), pianoPeak: new Float32Array(12),
-        pianoDts: new Float32Array(12), pianoDecayPerSample: new Float32Array(12),
-        pianoDtsFreq: 0, pianoDtsStretch: -1, pianoPrevGain: 0,
-        // Coast counter — see the active-voice gate in process().
-        coast: 0 });
+      for (let c = 0; c < cc; c++) {
+        const phases      = new Float32Array(nk);
+        const gains       = new Float32Array(nk);
+        const targetGains = new Float32Array(nk);
+        this.voices.push({ freq: f, carrierIdx: c, phases, gains, targetGains,
+          bp1: 0, bp2: 0,
+          sawPhase: 0, lp1: 0, lp2: 0, lp3: 0, smoothCutoff: -1,
+          modPhase: 0,
+          ssPhases: new Float32Array(7),
+          centroid: 0.5, targetCentroid: 0.5,
+          pulsePhase: 0,
+          kpBuf: new Float32Array(kpLen), kpIdx: 0, kpPrev: 0, kpGainPrev: 0,
+          kpExLp: 0,
+          // Vocoder: 4th-order bandpass = two cascaded biquads.
+          voc1: new Float32Array(2), voc2: new Float32Array(2),
+          vocEnv: 0, vocPulsePhase: 0,
+          // Piano: 12 modal partials.
+          pianoPhases: new Float32Array(12), pianoPeak: new Float32Array(12),
+          pianoDts: new Float32Array(12), pianoDecayPerSample: new Float32Array(12),
+          pianoDtsFreq: 0, pianoDtsStretch: -1, pianoPrevGain: 0,
+          coast: 0 });
+      }
     }
   }
   process(inputs, outputs) {
@@ -740,25 +761,34 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     const K = this.partials;
     const bc = this.binCount;
     const sc = this.sensorCount;
-    const isVocoder = this.carrier === 'vocoder';
-    // Compute target gains from latest bins snapshot.
-    // Normalize by fullScale (BASE_INTENSITY * sqrt(raysPer)) to recover
-    // the 0-1 micGain scale, then apply floor + gamma. This matches the
-    // input spectrum's absolute scaling so quiet voices stay quiet.
-    // Noise and acid carriers use K=1 (single band per voice).
-    if (bins && bins.length >= sc * bc) {
+    const cc = Math.max(1, this.carrierCount | 0);
+    // Resolve per-voice carrier index. carrierIdx 0 is the "use global
+    // synth-carrier" channel — emitters without an override fall here
+    // (Stage-0 plan invariant). Slots 1..cc-1 fix to a specific carrier.
+    const globalIdx = _NAME_TO_IDX[this.carrier] ?? _SINE_IDX;
+    const effectiveIdx = (vIdx) => {
+      const ci = this.voices[vIdx].carrierIdx | 0;
+      return ci === 0 ? globalIdx : ci;
+    };
+    // Compute target gains from latest bins snapshot. Wide bin layout:
+    //   bins[s * bc * cc + c * bc + b]
+    //   When cc === 1, this collapses to `s * bc + b` (legacy).
+    // Each (s, c) voice draws from its own carrier slice. Per-voice
+    // gainK depends on its carrier (sine multi-partial vs single band).
+    const expectedBinsLen = sc * bc * cc;
+    if (bins && bins.length >= expectedBinsLen) {
       const fs = this.fullScale;
-      const gainK = (this.carrier in _SINGLE_BAND) ? 1 : K;
-      const partialFS = fs / gainK;
-      const voiceScale = 1 / Math.sqrt(sc * gainK);
-      const singleBand = gainK === 1;
-      for (let s = 0; s < sc; s++) {
-        const v = this.voices[s];
+      for (let vIdx = 0; vIdx < this.voices.length; vIdx++) {
+        const v = this.voices[vIdx];
+        const s = (vIdx / cc) | 0;
+        const c = vIdx - s * cc;
+        const eIdx = effectiveIdx(vIdx);
+        const gainK = _SINGLE_BAND_BY_IDX[eIdx] ? 1 : K;
+        const partialFS = fs / gainK;
+        const voiceScale = 1 / Math.sqrt(sc * gainK);
+        const singleBand = gainK === 1;
+        const sensorBase = s * bc * cc + c * bc;
         const nk = v.targetGains.length;
-        // For non-sine carriers (single band), compute spectral centroid
-        // from the wavelength bins: sum(val * idx) / sum(val), 0-1.
-        // Falls back to voice position (sensor index / count) when the
-        // sensor-side wavelength distribution is uniform (passthrough).
         let centroidNum = 0, centroidDen = 0;
         for (let k = 0; k < nk; k++) {
           if (k >= gainK) { v.targetGains[k] = 0; continue; }
@@ -770,7 +800,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
           const b1 = ((rk + 1) * bc / gainK) | 0;
           let sum = 0;
           for (let b = b0; b < b1; b++) {
-            const val = bins[s * bc + b];
+            const val = bins[sensorBase + b];
             sum += val;
             if (singleBand) {
               centroidNum += val * b;
@@ -782,19 +812,10 @@ class ChromavoxSynth extends AudioWorkletProcessor {
             : ((g - 0.02) / 0.98) * voiceScale / (k + 1);
         }
         if (singleBand) {
-          // Spectral centroid from wavelength bins, inverted so that
-          // blue (short wavelength, low bins) → 1.0 (brighter/higher)
-          // and red (long wavelength, high bins) → 0.0 (duller/lower).
-          // Normalise by max bin index (bc - 1). Guard bc >= 2 with
-          // Math.max so a degenerate single-bin configuration doesn't
-          // divide by zero and propagate NaN through the centroid.
           const rawCentroid = centroidDen > 1e-6
             ? centroidNum / (centroidDen * Math.max(1, bc - 1)) : 0.5;
           const wlCentroid = 1 - rawCentroid;
-          // Position centroid: sensor 0 = bottom = short wavelength = blue → 1.0.
           const posCentroid = sc > 1 ? 1 - s / (sc - 1) : 0.5;
-          // Blend: use wavelength centroid when it deviates from the
-          // uniform baseline (~0.575 after inversion); otherwise position.
           const wlDeviation = Math.abs(wlCentroid - 0.575);
           const blend = Math.min(1, wlDeviation * 10);
           v.targetCentroid = wlCentroid * blend + posCentroid * (1 - blend);
@@ -804,20 +825,26 @@ class ChromavoxSynth extends AudioWorkletProcessor {
     // Synthesise.
     const twoPi = 2 * Math.PI;
     const invSr = 1 / sampleRate;
-    const smoothSec = _SMOOTH_SEC[this.carrier] ?? 0.08;
-    const smooth = 1 - Math.exp(-1 / (smoothSec * sampleRate));
-    // Block-rate smoothing for centroid (applied once per block, not per sample).
-    const centroidSmooth = 1 - Math.pow(1 - smooth, len);
     for (let i = 0; i < len; i++) { bufL[i] = 0; bufR[i] = 0; }
     const voices = this.voices;
     const voiceCount = voices.length;
     let _activeCount = 0;
 
-    // Vocoder shared excitation: one broadband signal for all voices.
-    // Pulse is a PolyBLEP saw at a fixed low pitch (100 Hz) so all
-    // bandpass filters extract harmonics from the same rich spectrum.
+    // Detect whether any active voice will use the vocoder carrier
+    // this block. The vocoder needs a shared excitation buffer; only
+    // build it when at least one voice routes there. With per-voice
+    // carriers, vocoder may be present even if `this.carrier !== 'vocoder'`.
+    let _anyVocoder = false;
+    for (let vIdx = 0; vIdx < voiceCount; vIdx++) {
+      if (effectiveIdx(vIdx) === _VOCODER_IDX) { _anyVocoder = true; break; }
+    }
+
+    // Vocoder shared excitation: one broadband signal for all vocoder
+    // voices. Pulse is a PolyBLEP saw at a fixed low pitch (100 Hz)
+    // so all bandpass filters extract harmonics from the same rich
+    // spectrum.
     let _vocExc = null;
-    if (isVocoder) {
+    if (_anyVocoder) {
       const excite = this.P.vocExcite ?? 0.5;
       const useNoise = excite < 0.66;
       const usePulse = excite > 0.33;
@@ -845,47 +872,52 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       }
     }
     // Shared context object passed to all carrier functions. Built once
-    // per process() call; panL/panR updated per voice.
+    // per process() call; per-voice fields (smooth, panL/panR) updated
+    // inside the dispatch loop because each voice's effective carrier
+    // determines its own smoothing time constant.
     // Reuse ctx object across calls — update properties, no allocation.
     if (!this._ctx) this._ctx = { bufL: null, bufR: null, len: 0, smooth: 0,
       centroidSmooth: 0, twoPi: 0, invSr: 0, sc: 0, P: null, vocExc: null,
       vocQ: 0, vocAtk: 0, vocRel: 0, panL: 0, panR: 0 };
     const ctx = this._ctx;
-    ctx.bufL = bufL; ctx.bufR = bufR; ctx.len = len; ctx.smooth = smooth;
-    ctx.centroidSmooth = centroidSmooth; ctx.twoPi = twoPi; ctx.invSr = invSr;
+    ctx.bufL = bufL; ctx.bufR = bufR; ctx.len = len;
+    ctx.twoPi = twoPi; ctx.invSr = invSr;
     ctx.sc = sc; ctx.P = this.P; ctx.vocExc = _vocExc;
     // Vocoder per-block constants: depend on sc and P only (not per voice).
-    // vocQ is the unmodulated base; the carrier applies centroid-based
-    // per-voice scaling on top. Avoids N_voices × 2×Math.exp per block.
-    if (isVocoder) {
+    if (_anyVocoder) {
       const ratio = sc > 1 ? Math.pow(6000 / 80, 1 / sc) : 2;
       ctx.vocQ = Math.max(1, 1 / (ratio - 1));
       ctx.vocAtk = 1 - Math.exp(-1 / ((this.P.vocAttack ?? 5) * 0.001 * sampleRate));
       ctx.vocRel = 1 - Math.exp(-1 / ((this.P.vocRelease ?? 20) * 0.001 * sampleRate));
     }
     const _halfPi = Math.PI * 0.5;
-    for (let s = 0; s < voiceCount; s++) {
-      const pan = voiceCount > 1 ? s / (voiceCount - 1) : 0.5;
+    // Pan based on the SENSOR position (left→right across the bench),
+    // not the voice index — otherwise carrierCount > 1 would interleave
+    // pan positions. Each (s, c) voice at sensor s gets the same pan.
+    const panDen = sc > 1 ? sc - 1 : 1;
+    for (let vIdx = 0; vIdx < voiceCount; vIdx++) {
+      const s = (vIdx / cc) | 0;
+      const v = voices[vIdx];
+      const eIdx = effectiveIdx(vIdx);
+      // Per-voice smoothing — each carrier has its own time constant.
+      const smoothSec = _SMOOTH_SEC_BY_IDX[eIdx];
+      const smooth = 1 - Math.exp(-1 / (smoothSec * sampleRate));
+      ctx.smooth = smooth;
+      ctx.centroidSmooth = 1 - Math.pow(1 - smooth, len);
+      const pan = sc > 1 ? s / panDen : 0.5;
       ctx.panL = Math.cos(pan * _halfPi);
       ctx.panR = Math.sin(pan * _halfPi);
-      const v = voices[s];
       let anyActive = false;
       for (let k = 0; k < v.gains.length; k++) {
         if (v.gains[k] > 1e-5 || v.targetGains[k] > 1e-5) { anyActive = true; break; }
       }
       // Piano: partial peaks persist between blocks and keep ringing
       // after voiceGain drops — keep the voice running until they decay.
-      if (!anyActive && this.carrier === 'piano' && v.pianoPeak) {
+      if (!anyActive && eIdx === _PIANO_IDX && v.pianoPeak) {
         for (let n = 0; n < 12; n++) {
           if (v.pianoPeak[n] > 1e-5) { anyActive = true; break; }
         }
       }
-      // Coast: keep running the carrier for a few blocks after dropping
-      // below the activity threshold. The per-sample gain smoothing
-      // then pulls gains[k] continuously through ~0, instead of the
-      // voice's output cliff-edging from "summed in" to "not summed in"
-      // at a block boundary. Firefox Mobile's output resampler
-      // specifically amplifies those cliffs into audible clicks.
       if (anyActive) v.coast = 3;
       else if (v.coast > 0) { v.coast--; anyActive = true; }
       if (!anyActive) {
@@ -897,7 +929,7 @@ class ChromavoxSynth extends AudioWorkletProcessor {
       }
       _activeCount++;
 
-      const fn = _CARRIERS[this.carrier] || _carrierSine;
+      const fn = _CARRIERS_BY_IDX[eIdx] || _carrierSine;
       fn(v, ctx);
     }
     this._lastActiveCount = _activeCount;

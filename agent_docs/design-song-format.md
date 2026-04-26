@@ -92,6 +92,14 @@ restore.
 - `mode`, `base`, `span`: input-side scale settings (applied via
   `onGlobal` callback to `input-mode`, `input-base`, `chromatic-span`)
 - `carrier`: synth carrier mode (applied to `synth-carrier`)
+- `carriers`: optional `{emitterIdx: carrierName}` map — assigns a
+  per-emitter carrier override that propagates with each ray through
+  optics and reaches sensors as a separate timbre channel. Names
+  match the keys in `carriers.js` (`sine`, `noise`, `acid`, `fm`,
+  `supersaw`, `pulse`, `vocoder`, `karplus`, `piano`). Emitters not
+  listed default to "use the global synth-carrier dropdown's value."
+  Per-note `carrier` (see `notes`) overrides this for the note's
+  duration.
 - `partials`, `volume`: synth settings
 
 The `global` section is applied once on load via the `onGlobal`
@@ -131,6 +139,11 @@ Array of note events sorted by `time` (seconds). Each note:
   onset (attack ~5ms) and ramps to 0 at offset (release ~20ms).
 - `wl` (optional): override wavelength for this note's emitter.
   Sets `wlPerSource` for that emitter during the note.
+- `carrier` (optional): carrier name to use for this note. Overrides
+  any `global.carriers` default for the note's duration. When two
+  overlapping notes on the same emitter specify different carriers,
+  the louder (highest `vel * envelope`) one wins. Names match the
+  keys in `carriers.js`.
 
 Notes are the input to the optical system — they replace touch/mic
 input during playback. Multiple notes on the same emitter overlap

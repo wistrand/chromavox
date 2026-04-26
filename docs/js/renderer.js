@@ -1266,6 +1266,7 @@ export class Renderer {
     // Right wall — sensors, weighted by per-bin wavelength.
     if (tracer && tracer.sensorBins && tracer.binCount > 0) {
       const binCount = tracer.binCount;
+      const carrierCount = tracer.carrierCount || 1;
       // Per-bin RGB lookup, rebuilt only when binCount changes.
       if (!this._sensorRgbCache || this._sensorRgbCacheBins !== binCount) {
         this._sensorRgbCache = new Float32Array(binCount * 3);
@@ -1280,18 +1281,23 @@ export class Renderer {
       }
       const wlRgb = this._sensorRgbCache;
       const nS = Math.min(this.MAX_GLOW_ROWS, scene.sensorCount | 0);
+      const stride = binCount * carrierCount;
       for (let s = 0; s < nS; s++) {
-        const base = s * binCount;
+        const sensorBase = s * stride;
         let tr = 0, tg = 0, tb = 0;
         for (let b = 0; b < binCount; b++) {
-          const v = tracer.sensorBins[base + b];
+          // Sum across carriers: `s * binCount * carrierCount +
+          // c * binCount + b`. Visualization treats per-carrier energy
+          // as one channel; the carrier identity matters at the synth,
+          // not on the bench display. carrierCount === 1 collapses to
+          // the legacy `s * binCount + b` layout.
+          let v = 0;
+          for (let c = 0; c < carrierCount; c++) {
+            v += tracer.sensorBins[sensorBase + c * binCount + b];
+          }
           // Strict-positive: rejects 0, negatives, and NaN. NaN <= 0
           // is false, so without `> 0` a NaN bin slips through, taints
-          // tr/tg/tb, and pollutes _sensorGlow[s] permanently — once
-          // an EMA slot is NaN, k*(target - NaN) = NaN forever, and
-          // that sensor row stays dead until resetEdgeGlow(). Bins
-          // can occasionally be NaN around scene transitions before
-          // the tracer settles; this is the consumer-side guard.
+          // tr/tg/tb, and pollutes _sensorGlow[s] permanently.
           if (!(v > 0)) continue;
           tr += wlRgb[b * 3    ] * v;
           tg += wlRgb[b * 3 + 1] * v;
@@ -1769,15 +1775,28 @@ export class Renderer {
         const stripH = Math.min(6, senStripH * 0.45);
         const x0 = bench.w - 2 - stripW;
         const binW = stripW / binCount;
+        // Mini-spectrum collapses the carrier axis: visualization shows
+        // the wavelength distribution per sensor regardless of carrier
+        // identity. carrierCount === 1 short-circuits to the legacy
+        // `s * binCount + b` indexing.
+        const carrierCount = tracer.carrierCount || 1;
+        const stride = binCount * carrierCount;
+        const valAt = (s, b) => {
+          if (carrierCount === 1) return tracer.sensorBins[s * binCount + b];
+          const base = s * stride;
+          let v = 0;
+          for (let c = 0; c < carrierCount; c++) v += tracer.sensorBins[base + c * binCount + b];
+          return v;
+        };
         for (let s = 0; s < scene.sensorCount; s++) {
           const y = (scene.sensorCount - 1 - s + 0.5) * senStripH;
           let maxVal = 1e-6;
           for (let b = 0; b < binCount; b++) {
-            const v = tracer.sensorBins[s * binCount + b];
+            const v = valAt(s, b);
             if (v > maxVal) maxVal = v;
           }
           for (let b = 0; b < binCount; b++) {
-            const v = tracer.sensorBins[s * binCount + b] / maxVal;
+            const v = valAt(s, b) / maxVal;
             if (v < 0.02) continue;
             const wl = 380 + (b + 0.5) / binCount * 400;
             const rgb = wavelengthToRGB(wl);
@@ -1951,12 +1970,28 @@ export class Renderer {
       this._readoutWlRgbBins = binCount;
     }
 
-    // Temporal IIR: displayBins lerps toward sensorBins.
+    // Temporal IIR: displayBins lerps toward sensorBins. The readout
+    // shows wavelength distribution per sensor — carrier identity is
+    // collapsed (summed) on the way in. carrierCount === 1 short-
+    // circuits to a flat copy.
     const IIR = 0.3;
     const displayBins = this._displayBins;
     const rawBins = tracer.sensorBins;
-    for (let i = 0; i < totalBins; i++) {
-      displayBins[i] += (rawBins[i] - displayBins[i]) * IIR;
+    const carrierCount = tracer.carrierCount || 1;
+    if (carrierCount === 1) {
+      for (let i = 0; i < totalBins; i++) {
+        displayBins[i] += (rawBins[i] - displayBins[i]) * IIR;
+      }
+    } else {
+      for (let s = 0; s < sensorCount; s++) {
+        const dst = s * binCount;
+        const srcBase = s * binCount * carrierCount;
+        for (let b = 0; b < binCount; b++) {
+          let v = 0;
+          for (let c = 0; c < carrierCount; c++) v += rawBins[srcBase + c * binCount + b];
+          displayBins[dst + b] += (v - displayBins[dst + b]) * IIR;
+        }
+      }
     }
 
     // Slow-decaying peak normalization.

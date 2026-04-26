@@ -9,6 +9,19 @@
 //   player.update(scene, dt);  // mutates scene.elements + scene.runtime.micLevels
 
 import { makeElement, bumpGeneration, ensureRuntimeSize } from './scene.js';
+import { CARRIERS } from './carriers.js';
+
+// Carrier name → integer index. Order in CARRIERS is the source of
+// truth and must match `_CARRIERS` in synth-worklet.js. Index 0 is
+// "no override / use the global synth-carrier dropdown's value".
+// Names: sine=0, noise=1, acid=2, fm=3, supersaw=4, pulse=5,
+// vocoder=6, karplus=7, piano=8.
+export const CARRIER_INDEX = {};
+{
+  let i = 0;
+  for (const k of Object.keys(CARRIERS)) CARRIER_INDEX[k] = i++;
+}
+export const CARRIER_COUNT = Object.keys(CARRIERS).length;
 
 export class SongPlayer {
   constructor() {
@@ -163,6 +176,28 @@ export class SongPlayer {
         bumpGeneration(scene);
         ensureRuntimeSize(scene);
       }
+      // Per-emitter carrier defaults from `global.carriers`. Map of
+      // `{emitterIdx: carrierName}`. Applies the named carrier index
+      // to each listed emitter; absent entries stay at 0 (== "use the
+      // global synth-carrier dropdown's value"). Allocated lazily —
+      // only when the song actually specifies carriers.
+      if (g.carriers) {
+        const n = scene.emitter.count;
+        let cps = scene.runtime.carrierPerSource;
+        if (!cps || cps.length !== n) {
+          cps = new Int8Array(n);
+          scene.runtime.carrierPerSource = cps;
+        } else {
+          // Clear stale per-note overrides from previous frames so
+          // the keyframe defaults apply cleanly.
+          cps.fill(0);
+        }
+        for (const [k, name] of Object.entries(g.carriers)) {
+          const idx = k | 0;
+          const cIdx = CARRIER_INDEX[name];
+          if (idx >= 0 && idx < n && cIdx !== undefined) cps[idx] = cIdx;
+        }
+      }
       // Scale / carrier settings. Applied once on play via onGlobal callback.
       if (!this._globalApplied) {
         this._globalApplied = true;
@@ -260,19 +295,53 @@ export class SongPlayer {
     const notes = this.song.notes;
     const n = scene.emitter.count;
     const levels = new Float32Array(n);
+    // Track the strongest active note per emitter for carrier-override
+    // arbitration: when two notes overlap on the same emitter with
+    // different carriers, the louder one wins. Default 0 = no override
+    // recorded for this emitter (fall through to keyframe default).
+    let topVel = null;       // Float32Array(n), only allocated if any note has a carrier
+    let carrierOverrides = null;
 
     for (const note of notes) {
       if (note.time === undefined) continue; // skip comment entries
       const env = this._noteEnvelope(note);
       if (env <= 0) continue;
       const emitters = Array.isArray(note.emitter) ? note.emitter : [note.emitter];
+      const vel = note.vel || 1;
+      const cIdx = note.carrier !== undefined ? CARRIER_INDEX[note.carrier] : undefined;
       for (const e of emitters) {
         if (e >= 0 && e < n) {
-          levels[e] = Math.min(1, levels[e] + (note.vel || 1) * env);
+          levels[e] = Math.min(1, levels[e] + vel * env);
+          if (cIdx !== undefined) {
+            if (!carrierOverrides) {
+              carrierOverrides = new Int8Array(n);
+              topVel = new Float32Array(n);
+            }
+            const w = vel * env;
+            if (w > topVel[e]) {
+              topVel[e] = w;
+              carrierOverrides[e] = cIdx;
+            }
+          }
         }
       }
     }
     scene.runtime.micLevels = levels;
+
+    // Per-note carrier overrides: stamp them onto carrierPerSource.
+    // The keyframe-default base is preserved — we only overwrite slots
+    // with a *recorded* override (topVel[e] > 0). Slots without an
+    // active override keep whatever the keyframe wrote.
+    if (carrierOverrides) {
+      let cps = scene.runtime.carrierPerSource;
+      if (!cps || cps.length !== n) {
+        cps = new Int8Array(n);
+        scene.runtime.carrierPerSource = cps;
+      }
+      for (let i = 0; i < n; i++) {
+        if (topVel[i] > 0) cps[i] = carrierOverrides[i];
+      }
+    }
   }
 
   _noteEnvelope(note) {

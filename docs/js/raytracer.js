@@ -101,9 +101,15 @@ export class Tracer {
   constructor() {
     this.segmentData = new Float32Array(0);
     this.segmentCount = 0;
-    this.sensorBins = null;                    // Float32Array [sensor][bin] flat
+    this.sensorBins = null;                    // Float32Array [sensor][carrier][bin] flat
     this.sensorCount = 0;
     this.binCount = 64;
+    // Carrier-axis size for sensor bins. CPU tracer always emits the
+    // collapsed (carrierCount === 1) layout — `s * binCount + b`. GPU
+    // tracer can emit a wider layout when `runtime.carrierPerSource`
+    // is set (Stage 1 of the per-ray-carrier plan). Consumers must
+    // index as `s * binCount * carrierCount + c * binCount + b`.
+    this.carrierCount = 1;
     // Stateful per-delay-element particle pools keyed by element id.
     this._pools = new Map();
     // Generation counter — compared against scene.generation each

@@ -278,7 +278,7 @@ export class PushController {
 
   // Send bench canvas (downscaled, left) + sensor spectrograms (right)
   // as two region updates. Throttled to ~10fps.
-  updateDisplay(sensorBins, binCount, sensorCount, glCanvas) {
+  updateDisplay(sensorBins, binCount, sensorCount, glCanvas, carrierCount = 1) {
     if (!this.displayConnected || !sensorBins) return;
     const now = performance.now();
     if (now - this._lastDisplaySend < 100) return;
@@ -375,9 +375,24 @@ export class PushController {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, specW, regionH);
 
+      // Display collapses carrier axis: per-(sensor, wavelength)
+      // energy is the sum across all carriers. carrierCount === 1
+      // takes the legacy `s * binCount + b` path with no inner sum.
+      const stride = binCount * carrierCount;
+      const valAt = (s, b) => {
+        if (carrierCount === 1) return sensorBins[s * binCount + b];
+        const base = s * stride;
+        let v = 0;
+        for (let c = 0; c < carrierCount; c++) v += sensorBins[base + c * binCount + b];
+        return v;
+      };
+
       let maxVal = 1e-6;
-      for (let i = 0; i < sensorBins.length; i++) {
-        if (sensorBins[i] > maxVal) maxVal = sensorBins[i];
+      for (let s = 0; s < sensorCount; s++) {
+        for (let b = 0; b < binCount; b++) {
+          const v = valAt(s, b);
+          if (v > maxVal) maxVal = v;
+        }
       }
 
       const barH = Math.max(1, Math.floor(regionH / sensorCount));
@@ -386,7 +401,7 @@ export class PushController {
         if (dy >= regionH) break;
         for (let x = 0; x < specW; x++) {
           const b = Math.floor(x / specW * binCount);
-          const v = sensorBins[s * binCount + b] / maxVal;
+          const v = valAt(s, b) / maxVal;
           if (v < 0.01) continue;
           const wl = 380 + (b + 0.5) / binCount * 400;
           const rgb = wavelengthToRGB(wl);
@@ -662,7 +677,7 @@ export class PushController {
 
   // --- High-level: update pixel map from sensor/emitter state ---
 
-  updateFromSensors(sensorBins, binCount, sensorCount, emitter, runtime) {
+  updateFromSensors(sensorBins, binCount, sensorCount, emitter, runtime, carrierCount = 1) {
     if (this.animating) return;
     const scaleLength = _scaleLength;
     if (!sensorBins) return;
@@ -698,9 +713,14 @@ export class PushController {
       // Find the dominant wavelength bin (highest intensity) across the
       // sensor group — shows the strongest color, not a washed-out average.
       let bestV = 0, bestWl = 0, totalI = 0;
+      const stride = binCount * carrierCount;
       for (let s = s0; s < s1; s++) {
+        const base = s * stride;
         for (let b = 0; b < binCount; b++) {
-          const v = sensorBins[s * binCount + b];
+          // Sum across carriers; carrierCount === 1 collapses to the
+          // legacy `s * binCount + b` offset with one term.
+          let v = 0;
+          for (let c = 0; c < carrierCount; c++) v += sensorBins[base + c * binCount + b];
           totalI += v;
           if (v > bestV) { bestV = v; bestWl = 380 + (b + 0.5) / binCount * 400; }
         }

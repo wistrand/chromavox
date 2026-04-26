@@ -26,14 +26,16 @@ let _generation = 0;
 export function bumpGeneration(scene) { scene.generation = ++_generation; }
 
 // Single owner of `scene.runtime` array sizing. Resizes (or freshly
-// allocates) `micLevels` and any present `wlPerSource` arrays to match
-// `scene.emitter.count`. Idempotent: cheap no-op when already correct.
+// allocates) `micLevels`, any present `wlPerSource`, and any present
+// `carrierPerSource` arrays to match `scene.emitter.count`. Idempotent:
+// cheap no-op when already correct.
 //
 // This is the linchpin of the "trust internally" boundary: once this
 // has been called for a given (scene.generation, scene.emitter.count)
-// state, every consumer can index `runtime.micLevels[i]` and
-// `runtime.wlPerSource.{min,max}[i]` for `i < emitter.count` without
-// bounds checks. Call it from any site that mutates emitter.count.
+// state, every consumer can index `runtime.micLevels[i]`,
+// `runtime.wlPerSource.{min,max}[i]`, and `runtime.carrierPerSource[i]`
+// for `i < emitter.count` without bounds checks. Call it from any site
+// that mutates emitter.count.
 export function ensureRuntimeSize(scene) {
   const n = scene.emitter.count | 0;
   const r = scene.runtime;
@@ -44,6 +46,17 @@ export function ensureRuntimeSize(scene) {
     const wp = r.wlPerSource;
     if (!wp.min || wp.min.length !== n) wp.min = new Float32Array(n);
     if (!wp.max || wp.max.length !== n) wp.max = new Float32Array(n);
+  }
+  // Per-emitter carrier index (0..CARRIER_COUNT-1). Optional: only
+  // allocated by song keyframes / per-note overrides. When null, the
+  // tracer falls back to "use the global synth-carrier" (carrier index
+  // 0 from the consumer's perspective). Same allocation pattern as
+  // wlPerSource — present only when something has populated it.
+  if (r.carrierPerSource && r.carrierPerSource.length !== n) {
+    const fresh = new Int8Array(n);
+    const copy = Math.min(r.carrierPerSource.length, n);
+    for (let i = 0; i < copy; i++) fresh[i] = r.carrierPerSource[i];
+    r.carrierPerSource = fresh;
   }
 }
 
@@ -58,7 +71,7 @@ export function createScene() {
     // Transient per-frame state that is never serialized. Replaced
     // wholesale on scene transitions (clear / load / preset) so
     // nothing needs to be manually nulled.
-    runtime: { micLevels: null, wlPerSource: null },
+    runtime: { micLevels: null, wlPerSource: null, carrierPerSource: null },
     sensorCount: 24,
     elements: [],
     version: 1,

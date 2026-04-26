@@ -42,6 +42,7 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [GPU tracer](agent_docs/architecture-gpu-tracer.md)
 - [Song format design](agent_docs/design-song-format.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
+- [Plan: per-ray carrier (per-note instruments)](agent_docs/plan-per-ray-carrier.md)
 
 Note: `agent_docs/plan-element-schema.md` was removed (implemented).
 

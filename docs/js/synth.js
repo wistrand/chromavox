@@ -177,7 +177,7 @@ export class SensorSynth {
     if (this.active) this.rebuild(this.count);
   }
 
-  rebuild(sensorCount) {
+  rebuild(sensorCount, carrierCount = this.carrierCount || 1) {
     if (!this.ctx || !this.workletNode) return;
     const isLog = this.mode === 'log' || this.mode === 'voice';
     const loHz = this.mode === 'voice' ? 100 : 80;
@@ -199,15 +199,25 @@ export class SensorSynth {
       freqs,
       binCount: 64,
       sensorCount,
+      carrierCount,
       fullScale: 1.6 * Math.sqrt(this.raysPer),
     });
     this.count = sensorCount;
+    this.carrierCount = carrierCount;
   }
 
-  update(sensorBins, binCount, sensorCount) {
+  update(sensorBins, binCount, sensorCount, carrierCount = 1) {
     if (!this.active) return;
-    if (sensorCount !== this.count) this.rebuild(sensorCount);
+    // Rebuild the worklet voice array when sensor count or carrier
+    // count changes — voices are allocated as `sensorCount × carrierCount`.
+    if (sensorCount !== this.count || carrierCount !== (this.carrierCount || 1)) {
+      this.rebuild(sensorCount, carrierCount);
+    }
     if (!this.workletNode) return;
+    // Forward the wide layout directly. The worklet allocates voices
+    // as sensorCount × carrierCount and indexes bins as
+    // `s * binCount * carrierCount + c * binCount + b`. carrierCount=1
+    // collapses to the legacy `s * binCount + b` layout.
     this.workletNode.port.postMessage({
       type: 'bins',
       bins: sensorBins,

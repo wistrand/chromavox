@@ -297,16 +297,77 @@ export function guessCarrier(parsed, enabled) {
   return sawString ? 'supersaw' : 'sine';
 }
 
+// GM (General MIDI) program number → Chromavox carrier name. Each note
+// of a MIDI track carries its track's program; this mapping picks the
+// carrier that best matches the GM instrument family. Returns null for
+// programs outside 0..127 (uses caller's fallback).
+//
+// Covered families (GM groups of 8 programs each):
+//   0-7   Piano      → piano       (acoustic / electric / grand)
+//   8-15  Chrom perc → karplus     (celesta, vibraphone, kalimba — plucked/struck mallet)
+//   16-23 Organ      → pulse       (square-wave organ tone)
+//   24-31 Guitar     → karplus     (plucked string)
+//   32-39 Bass       → acid        (electric bass / fat synth bass)
+//   40-47 Strings    → supersaw    (violin/viola/cello — sustained, pad-like)
+//   48-55 Ensemble   → supersaw    (string ens / choir / voice oohs / orch hit)
+//   56-63 Brass      → supersaw    (fat saw stack reads as brass section)
+//   64-71 Reed       → pulse       (sax / oboe / clarinet — square approximation)
+//   72-79 Pipe       → sine        (flute / recorder / ocarina — pure tones)
+//   80-87 Synth lead → supersaw
+//   88-95 Synth pad  → supersaw
+//   96-103 Synth FX  → noise
+//   104-111 Ethnic   → karplus     (sitar / banjo / shamisen — plucked)
+//   112-119 Percuss. → noise
+//   120-127 Sound FX → noise
+//
+// fm and vocoder are intentionally not used as default MIDI targets —
+// they're musically valid carriers but read as too weird/specific for
+// generic GM mapping. Users can override via the Synth carrier
+// dropdown if they want them.
+const _GM_GROUP_TO_CARRIER = [
+  'piano', 'karplus', 'pulse', 'karplus',
+  'acid', 'supersaw', 'supersaw', 'supersaw',
+  'pulse', 'sine', 'supersaw', 'supersaw',
+  'noise', 'karplus', 'noise', 'noise',
+];
+export function programToCarrier(program) {
+  if (typeof program !== 'number' || program < 0 || program > 127) return null;
+  return _GM_GROUP_TO_CARRIER[program >> 3];
+}
+
+// Per-track carrier: name-based first (more reliable when present —
+// some files set generic programs but expressive names), then program-
+// based, then null (caller falls back to the global default).
+export function trackCarrier(track) {
+  if (!track) return null;
+  const n = track.name || '';
+  if (_PIANO_RE.test(n)) return 'piano';
+  if (_STRING_RE.test(n)) return 'supersaw';
+  return programToCarrier(track.program);
+}
+
 export function midiToSong(parsed, options = {}) {
   const enabled = options.enabledTracks || defaultEnabled(parsed);
+  // The global synth carrier is the user's dropdown selection (or a
+  // best-guess from track names if absent). It drives any voice that
+  // ends up at carrierIdx 0 — emitters with no active note (or all
+  // tracks when `perTrackInstruments === false`).
   const carrier = options.carrier || guessCarrier(parsed, enabled);
   const volume = options.volume ?? 0.5;
+  // perTrackInstruments: when true (default), each track's notes carry
+  // its inferred carrier (GM program → carrier mapping). When false,
+  // every note plays through the global synth carrier — same as
+  // pre-Stage-3 behavior, single-instrument song.
+  const perTrack = options.perTrackInstruments !== false;
 
-  // Collect notes from enabled tracks in absolute seconds.
+  // Collect notes from enabled tracks in absolute seconds. Each note
+  // carries its track's carrier (per-track GM program mapping) so the
+  // synth plays each note in its source instrument's voice.
   const rawNotes = [];
   let minPitch = Infinity, maxPitch = -Infinity;
   for (const t of parsed.tracks) {
     if (!enabled.has(t.index)) continue;
+    const tCarrier = perTrack ? (trackCarrier(t) || carrier) : carrier;
     for (const n of t.notes) {
       if (n.endTick <= n.startTick) continue;
       if (n.pitch < minPitch) minPitch = n.pitch;
@@ -317,6 +378,7 @@ export function midiToSong(parsed, options = {}) {
                   tickToSec(n.startTick, parsed.tempoMap, parsed.ticksPerQuarter),
         pitch: n.pitch,
         vel: n.vel,
+        carrier: tCarrier,
       });
     }
   }
@@ -344,12 +406,18 @@ export function midiToSong(parsed, options = {}) {
   for (const n of rawNotes) {
     const emitter = n.pitch - baseMidi;
     if (emitter < 0 || emitter >= emitterCount) { outOfRange++; continue; }
-    notes.push({
+    const note = {
       time: Number(n.time.toFixed(4)),
       emitter,
       vel: Number((n.vel * 0.9 + 0.1).toFixed(2)), // soft floor so tiny-velocity notes still register
       dur: Math.max(0.05, Number(n.duration.toFixed(4))),
-    });
+    };
+    // Only stamp the carrier when it differs from the song-wide
+    // default (`carrier`). Saves bytes on single-instrument files
+    // and matches the design-song-format default behaviour: notes
+    // without a carrier field inherit the global setting.
+    if (n.carrier && n.carrier !== carrier) note.carrier = n.carrier;
+    notes.push(note);
   }
   notes.sort((a, b) => a.time - b.time);
 
@@ -360,9 +428,50 @@ export function midiToSong(parsed, options = {}) {
   const bpm = Math.round(60_000_000 / parsed.tempoMap[0].tempoUs);
 
   const title = parsed.title || 'MIDI import';
+  // Per-emitter dominant carrier — vote across all notes weighted by
+  // velocity*duration, pick the winner per emitter. Stamped into
+  // `global.carriers` so per-emitter indicators show on the bench
+  // immediately at song-load (otherwise they'd only appear once each
+  // emitter's first note fires, then linger from the last-played
+  // carrier — visually inconsistent at song start and after seeking).
+  const voteByEmitter = new Map();
+  for (const n of notes) {
+    const c = n.carrier || carrier;
+    let row = voteByEmitter.get(n.emitter);
+    if (!row) { row = {}; voteByEmitter.set(n.emitter, row); }
+    row[c] = (row[c] || 0) + n.vel * n.dur;
+  }
+  const carriers = {};
+  for (const [emitterIdx, row] of voteByEmitter) {
+    let best = null, bestVal = 0;
+    for (const [name, v] of Object.entries(row)) {
+      if (v > bestVal) { bestVal = v; best = name; }
+    }
+    if (best && best !== carrier) carriers[emitterIdx] = best;
+  }
+  // Multi-instrument banner: show the unique carriers detected across
+  // notes when more than one is in play.
+  const carrierSet = new Set();
+  for (const n of notes) carrierSet.add(n.carrier || carrier);
+  const multiInstr = carrierSet.size > 1
+    ? `\nInstruments: ${[...carrierSet].sort().join(', ')}`
+    : '';
   const welcome = outOfRange > 0
-    ? `${title}\n(MIDI import; ${outOfRange} of ${rawNotes.length} notes out of range)\nPress ▶ to play`
-    : `${title}\n(MIDI import)\nPress ▶ to play`;
+    ? `${title}\n(MIDI import; ${outOfRange} of ${rawNotes.length} notes out of range)${multiInstr}\nPress ▶ to play`
+    : `${title}\n(MIDI import)${multiInstr}\nPress ▶ to play`;
+
+  const global = {
+    emitter: { count: emitterCount, wlMin: 400, wlMax: 700, raysPerSource: 320 },
+    sensorCount: emitterCount,
+    mode: 'chromatic',
+    base: Number(baseHz.toFixed(2)),
+    span: 1,
+    carrier,
+    volume,
+  };
+  // Only emit `carriers` when at least one emitter has a non-default
+  // dominant carrier — keeps single-instrument MIDI imports tidy.
+  if (Object.keys(carriers).length > 0) global.carriers = carriers;
 
   return {
     version: 1,
@@ -371,15 +480,7 @@ export function midiToSong(parsed, options = {}) {
     bpm,
     duration: Number(durationSec.toFixed(3)),
     loop: true,
-    global: {
-      emitter: { count: emitterCount, wlMin: 400, wlMax: 700, raysPerSource: 320 },
-      sensorCount: emitterCount,
-      mode: 'chromatic',
-      base: Number(baseHz.toFixed(2)),
-      span: 1,
-      carrier,
-      volume,
-    },
+    global,
     keyframes: [{ time: 0, elements: [] }],
     notes,
     automation: [],

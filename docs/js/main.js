@@ -13,7 +13,7 @@ import { MidiRouter } from './midi-devices/router.js';
 import { scaleFreq } from './spectrum.js';
 import { SongPlayer } from './song.js';
 import { musicxmlToSong } from './musicxml.js';
-import { parseMidi, midiToSong, defaultEnabled } from './midi.js';
+import { parseMidi, midiToSong, defaultEnabled, trackCarrier } from './midi.js';
 import { CARRIERS, ALL_PARAM_IDS } from './carriers.js';
 
 const STORAGE_KEY = 'chromavox-scene';
@@ -659,10 +659,25 @@ function freqToNote(hz) {
 // stay legible; below that we skip rendering them entirely so they don't
 // crush into an unreadable blur.
 const MIN_LABEL_PX = 12;
+// Carrier indicator codes for per-emitter labels. Order matches
+// `_CARRIERS_BY_IDX` in synth-worklet.js / `Object.keys(CARRIERS)` in
+// carriers.js. Index 0 (sine = "use global synth-carrier") shows
+// nothing — labels stay clean for the default case.
+const _CARRIER_LABEL = ['', 'n', 'a', 'fm', 'ss', 'pu', 'vc', 'kp', 'pn'];
+// Last-stamped carrier text per emitter, indexed by emitter idx.
+// `rebuildEmitterLabels()` clears this when label DOM is rebuilt
+// (cache stale), so the next frame writes through. Declared up here
+// because the module-init call to rebuildEmitterLabels() touches it.
+const _carrierSpanCache = [];
+
 function rebuildEmitterLabels() {
   const host = document.getElementById('emitter-labels');
   if (!host) return;
   host.innerHTML = '';
+  // Invalidate the carrier-indicator change cache: rebuilt label
+  // elements have empty `.ec` spans regardless of what was there
+  // before, so the next frame must write through.
+  _carrierSpanCache.length = 0;
   const n = scene.emitter.count;
   if (n <= 0 || host.offsetHeight / n < MIN_LABEL_PX) return;
   const mode = document.getElementById('input-mode').value;
@@ -682,8 +697,34 @@ function rebuildEmitterLabels() {
     const div = document.createElement('div');
     div.className = 'emitter-label';
     div.textContent = txt;
+    // Per-emitter carrier indicator. Hidden when the emitter uses the
+    // default (carrierIdx 0); shows a 1-2 char code otherwise. Updated
+    // live from the frame loop via `updateCarrierIndicators()`.
+    const cspan = document.createElement('span');
+    cspan.className = 'ec';
+    div.appendChild(cspan);
     div.style.top = `${((n - 1 - i + 0.5) / n) * 100}%`;
     host.appendChild(div);
+  }
+}
+
+// Per-frame: stamp each emitter label's carrier indicator from
+// `runtime.carrierPerSource`. Cheap — one DOM read + write per emitter
+// only when the value changed since last frame. No-op when the runtime
+// override is null (no song-driven carriers).
+function updateCarrierIndicators() {
+  const host = document.getElementById('emitter-labels');
+  if (!host) return;
+  const cps = scene.runtime.carrierPerSource;
+  const labels = host.querySelectorAll('.emitter-label');
+  if (!labels.length) return;
+  for (let i = 0; i < labels.length; i++) {
+    const cIdx = cps ? (cps[i] | 0) : 0;
+    const txt = _CARRIER_LABEL[cIdx] || '';
+    if (_carrierSpanCache[i] === txt) continue;
+    _carrierSpanCache[i] = txt;
+    const span = labels[i].querySelector('.ec');
+    if (span) span.textContent = txt;
   }
 }
 rebuildEmitterLabels();
@@ -1945,6 +1986,15 @@ window.addEventListener('resize', () => {
 
   function loadSongJson(json) {
     songPlayer.load(json);
+    // Reset per-emitter carrier override so a song without
+    // `global.carriers` doesn't inherit the previous song's carrier
+    // map. `_applyKeyframes` reallocates if the new song sets carriers;
+    // otherwise the runtime stays null → tracer.carrierCount = 1 and
+    // the synth rebuilds voices accordingly. Without this, toggling
+    // per-track-instruments off in the MIDI picker keeps the wide
+    // (carrierCount > 1) layout from the prior load and audio doesn't
+    // change.
+    scene.runtime.carrierPerSource = null;
     songPlayer.applyKeyframeAt(scene, 0);
     dirty = true;
     _enableTransport();
@@ -2061,6 +2111,11 @@ window.addEventListener('resize', () => {
   let _midiParsed = null;
   let _midiEnabled = null;
   let _midiCarrier = null;
+  // When false, every track's notes use the global synth carrier
+  // (`_midiCarrier`) instead of the GM program → carrier mapping.
+  // Toggled via the "Per-track instruments" checkbox in the picker.
+  let _midiPerTrackInstruments = true;
+  const _midiPerTrackEl = document.getElementById('midi-tracks-per-instr');
 
   function _midiProgramName(prog) {
     // Tiny GM-ish hint string. Full table isn't worth shipping; the
@@ -2090,17 +2145,49 @@ window.addEventListener('resize', () => {
       const song = midiToSong(_midiParsed, {
         enabledTracks: _midiEnabled,
         carrier: _midiCarrier,
+        perTrackInstruments: _midiPerTrackInstruments,
       });
       songSelect.value = '';
+      // Preserve playback position across the regenerate so toggles
+      // (track enable/disable, per-track-instruments) feel instant
+      // instead of restarting from 0. The song's note timing is
+      // unchanged; only metadata (carriers / track set) shifts.
+      const wasPlaying = songPlayer.playing;
+      const prevTime = songPlayer.time;
       loadSongJson(song);
       if (loopBtn) loopBtn.disabled = false;
-      // Autoplay the first time a MIDI is opened; subsequent toggles
-      // restart from 0 but don't start playback unless it was playing.
-      if (!songPlayer.playing) playBtn.click();
+      const hadPosition = wasPlaying || prevTime > 0;
+      if (hadPosition) {
+        // Order matters: songPlayer.play() resets time to 0 when
+        // state is 'stopped' (which it is right after load()), so
+        // we must call play() FIRST and seek SECOND. For the paused
+        // case we still play() briefly to get out of 'stopped', seek,
+        // then pause back — keeps the state machine clean and means
+        // the next user-driven play won't snap back to 0.
+        if (wasPlaying && synth.ctx && synth.ctx.state === 'suspended') synth.ctx.resume();
+        songPlayer.play();
+        songPlayer.seek(Math.min(prevTime, songPlayer.duration));
+        if (!wasPlaying) songPlayer.pause();
+        if (wasPlaying) scheduleFrame();
+      } else if (!songPlayer.playing) {
+        // First import (or a previous run that ended at time 0):
+        // autoplay so the user hears it immediately.
+        playBtn.click();
+      }
     } catch (err) {
       console.error('MIDI regenerate failed:', err);
       alert('Could not build song from selected tracks: ' + err.message);
     }
+  }
+
+  if (_midiPerTrackEl) {
+    _midiPerTrackEl.addEventListener('change', () => {
+      _midiPerTrackInstruments = _midiPerTrackEl.checked;
+      // Re-render the track list so the "→ <carrier>" hints reflect
+      // the new mode (shown only when per-track instruments is on).
+      if (_midiParsed) showMidiTrackPicker(_midiParsed, true);
+      _applyMidiSelection();
+    });
   }
 
   function _openMidiPanel() {
@@ -2114,10 +2201,13 @@ window.addEventListener('resize', () => {
     }
   }
 
-  function showMidiTrackPicker(parsed) {
+  function showMidiTrackPicker(parsed, rerenderOnly = false) {
     _midiParsed = parsed;
-    _midiEnabled = defaultEnabled(parsed);
-    _midiCarrier = 'supersaw';
+    if (!rerenderOnly) {
+      _midiEnabled = defaultEnabled(parsed);
+      _midiCarrier = 'supersaw';
+      _midiPerTrackInstruments = _midiPerTrackEl ? _midiPerTrackEl.checked : true;
+    }
     if (_midiReopenBtn) _midiReopenBtn.hidden = false;
     if (!_midiPanel) { _applyMidiSelection(); return; }
 
@@ -2144,7 +2234,13 @@ window.addEventListener('resize', () => {
       const ch = t.channel + 1;
       const prog = _midiProgramName(t.program);
       const chTag = t.channel === 9 ? ' (drum)' : '';
-      name.textContent = `${t.name}${chTag}${prog ? ' — ' + prog : ''} (ch${ch})`;
+      // Show the carrier this track's notes will use after import.
+      // Only when per-track instruments is on; otherwise every track
+      // routes through the global synth carrier and a per-track tag
+      // would be misleading.
+      const tc = _midiPerTrackInstruments ? trackCarrier(t) : null;
+      const carrierTag = tc ? ` → ${tc}` : '';
+      name.textContent = `${t.name}${chTag}${prog ? ' — ' + prog : ''}${carrierTag} (ch${ch})`;
       const count = document.createElement('span');
       count.className = 'tcount';
       count.textContent = t.noteCount + 'n';
@@ -2620,7 +2716,7 @@ function frame() {
       // Push display capture hooks into the renderer between the element
       // pass and the overlay pass — gets rays + elements without ticks/lines.
       renderer.onPreOverlay = (midi.push.output && midi.push.displayConnected)
-        ? () => midi.push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas)
+        ? () => midi.push.updateDisplay(tracer.sensorBins, tracer.binCount, scene.sensorCount, canvas, tracer.carrierCount || 1)
         : null;
     }
 
@@ -2638,8 +2734,13 @@ function frame() {
       synth.raysPer = scene.emitter.raysPerSource;
       synth.rebuild(scene.sensorCount);
     }
-    synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount);
+    synth.update(tracer.sensorBins, tracer.binCount, scene.sensorCount, tracer.carrierCount || 1);
   }
+
+  // Per-emitter carrier indicators on the wall labels — cheap; only
+  // touches DOM when the carrier index for an emitter actually changed
+  // since last frame.
+  updateCarrierIndicators();
 
   // Hardware controller pad LED feedback (Push or MPC).
   if (midi.active && midi.active.output) {

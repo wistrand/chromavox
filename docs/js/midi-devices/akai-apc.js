@@ -245,7 +245,7 @@ export class APCController {
     _scaleLength = semi.length;
   }
 
-  updateFromSensors(sensorBins, binCount, sensorCount, emitter, runtime) {
+  updateFromSensors(sensorBins, binCount, sensorCount, emitter, runtime, carrierCount = 1) {
     if (this.animating || !sensorBins) return;
     const scaleLength = _scaleLength;
     const disabled = emitter.disabled;
@@ -273,9 +273,12 @@ export class APCController {
       const s0 = Math.floor(row * sensorCount / PAD_ROWS);
       const s1 = Math.min(sensorCount, Math.floor((row + 1) * sensorCount / PAD_ROWS));
       let bestV = 0, bestWl = 0, totalI = 0;
+      const stride = binCount * carrierCount;
       for (let s = s0; s < s1; s++) {
+        const base = s * stride;
         for (let b = 0; b < binCount; b++) {
-          const v = sensorBins[s * binCount + b];
+          let v = 0;
+          for (let c = 0; c < carrierCount; c++) v += sensorBins[base + c * binCount + b];
           totalI += v;
           if (v > bestV) { bestV = v; bestWl = 380 + (b + 0.5) / binCount * 400; }
         }

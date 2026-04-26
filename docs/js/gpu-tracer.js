@@ -26,6 +26,7 @@
 import { wavelengthToRGB, materialN, materialAbsorption, mirrorReflectance,
          elementAbsorption, elementReflectance, elementDelay, MATERIALS } from './spectrum.js';
 import { worldEdges, materialOptics } from './scene.js';
+import { CARRIER_COUNT } from './song.js';
 
 const MAX_BOUNCES = 32;
 const MAX_EDGES = 512;
@@ -37,13 +38,18 @@ const EPS = 1e-4;
 // Per-vertex output: 6 vec4s = 24 floats, INTERLEAVED.
 // [0-3]   v_rayPosDir  — ray state: posX, posY, dirX, dirY
 // [4-7]   v_rayState   — ray state: I, wl, alive, packedStack
-//         packedStack encodes a depth-3 inside-element stack as:
-//         stackLen*262144 + stack[0]*4096 + stack[1]*64 + stack[2]
-//         (element indices 0-63, exact in fp32 integer range)
+//         packedStack encodes a depth-3 inside-element stack PLUS
+//         the source's carrier index (0..15) in the high bits:
+//         carrier*1048576 + stackLen*262144 + stack[0]*4096
+//         + stack[1]*64 + stack[2]
+//         Combined max: 15*1048576 + 1048575 = 16777215 = 2^24-1,
+//         exactly representable in fp32 mantissa. Carrier travels
+//         unchanged through every bounce — it's metadata about the
+//         source, not the photon (per-ray-carrier plan).
 // [8-11]  v_segP       — segment: p1x, p1y, p2x, p2y
 // [12-15] v_segC1      — segment: r*I1, g*I1, b*I1, I1
 // [16-19] v_segC2      — segment: r*I2, g*I2, b*I2, I2
-// [20-23] v_segMeta    — segment: wl, isSensor, 0, 0
+// [20-23] v_segMeta    — segment: wl, isSensor, carrierIdx, 0
 const PP_FLOATS = 24;
 const PP_BYTES = PP_FLOATS * 4; // 96
 // Byte offsets within a PP record for segment fields:
@@ -51,6 +57,7 @@ const SEG_P_OFF = 32;     // v_segP: bytes 32-47 (floats 8-11)
 const SEG_C1_OFF = 48;    // v_segC1: bytes 48-63 (floats 12-15)
 const SEG_C2_OFF = 64;    // v_segC2: bytes 64-79 (floats 16-19)
 const SEG_META_OFF = 80;  // v_segMeta: bytes 80-95 (floats 20-23)
+const CARRIER_PACK = 1048576; // 2^20 — high-bit slot for carrierIdx in packedStack
 
 // ── Bounce vertex shader ──
 // Handles both emission (u_bounce==0, uses gl_VertexID) and bouncing
@@ -83,6 +90,8 @@ uniform float u_baseIntensity;
 uniform sampler2D u_micLevels;
 uniform sampler2D u_wlPerSource;
 uniform int u_hasWlPer;
+uniform sampler2D u_carrierPerSource; // R32F, 1×64. Per-source carrier index.
+uniform int u_hasCarrierPer;
 
 // TF outputs: ray state + segment (6 vec4 = 24 floats INTERLEAVED)
 out vec4 v_rayPosDir;
@@ -107,16 +116,19 @@ vec4 elRow(int i, int row) { return texelFetch(u_elements, ivec2(i, row), 0); }
 const int MAX_STACK = 3;
 int stk[3];  // unpacked stack
 int stkLen;  // unpacked length
+int carrierIdx;  // unpacked carrier index (0..15), high bits of packed value
 
 void unpackStack(float packed) {
   int p = int(packed);
-  stkLen = p / 262144;
-  stk[0] = (p / 4096) % 64;
-  stk[1] = (p / 64) % 64;
-  stk[2] = p % 64;
+  carrierIdx = p / 1048576;        // high 4 bits
+  int q = p - carrierIdx * 1048576;
+  stkLen = q / 262144;
+  stk[0] = (q / 4096) % 64;
+  stk[1] = (q / 64) % 64;
+  stk[2] = q % 64;
 }
 float packStack() {
-  return float(stkLen * 262144 + stk[0] * 4096 + stk[1] * 64 + stk[2]);
+  return float(carrierIdx * 1048576 + stkLen * 262144 + stk[0] * 4096 + stk[1] * 64 + stk[2]);
 }
 void stkPush(int elIdx) {
   if (stkLen < MAX_STACK) {
@@ -262,6 +274,7 @@ void main() {
   vec2 pos, dir;
   float I, wl;
   stkLen = 0; stk[0] = 0; stk[1] = 0; stk[2] = 0;
+  carrierIdx = 0;
 
   if (u_bounce == 0) {
     // --- Emission: compute ray from gl_VertexID ---
@@ -289,6 +302,11 @@ void main() {
     if (u_hasWlPer > 0) {
       srcWlMin = texelFetch(u_wlPerSource, ivec2(srcIdx, 0), 0).r;
       srcWlMax = texelFetch(u_wlPerSource, ivec2(srcIdx, 1), 0).r;
+    }
+    if (u_hasCarrierPer > 0) {
+      carrierIdx = int(texelFetch(u_carrierPerSource, ivec2(srcIdx, 0), 0).r);
+      // Defensive: clamp to the 4-bit slot reserved for carrier (0..15).
+      carrierIdx = clamp(carrierIdx, 0, 15);
     }
     float wlRange = max(1.0, srcWlMax - srcWlMin);
     wl = srcWlMin + wlRange * (float(k) + 0.5) / float(u_raysPerSource);
@@ -347,7 +365,7 @@ void main() {
     v_segP = vec4(pos, p2);
     v_segC1 = vec4(rgb * I, I);
     v_segC2 = vec4(rgb * I, I);
-    v_segMeta = vec4(wl, 0.0, 0.0, 0.0);
+    v_segMeta = vec4(wl, 0.0, float(carrierIdx), 0.0);
     v_rayPosDir = vec4(p2, dir);
     v_rayState = vec4(0.0, wl, 0.0, 0.0); // dead
     return;
@@ -368,7 +386,7 @@ void main() {
   v_segP = vec4(pos, hit);
   v_segC1 = vec4(rgb * I, I);
   v_segC2 = vec4(rgb * Iend, Iend);
-  v_segMeta = vec4(wl, hitWallKind == 1 ? 1.0 : 0.0, 0.0, 0.0);
+  v_segMeta = vec4(wl, hitWallKind == 1 ? 1.0 : 0.0, float(carrierIdx), 0.0);
 
   I = Iend;
 
@@ -460,7 +478,12 @@ precision highp float;
 void main() { discard; }
 `;
 
-// ── Sensor accumulation shaders (same as before) ──
+// ── Sensor accumulation shaders ──
+// FBO is `(binCount * carrierCount) × sensorCount`. Each segment that
+// hits a sensor draws a single point at column `c * binCount + b`,
+// row `s`. Additive blending sums per-(carrier, wavelength) energy.
+// carrierCount === 1 collapses the column layout to the legacy
+// `binCount × sensorCount`.
 const SENSOR_VS = `#version 300 es
 precision highp float;
 in vec4 a_p;
@@ -469,6 +492,7 @@ in vec4 a_meta;
 uniform float u_benchH;
 uniform int u_sensorCount;
 uniform int u_binCount;
+uniform int u_carrierCount;
 flat out float v_intensity;
 void main() {
   float isSensor = a_meta.y;
@@ -481,12 +505,15 @@ void main() {
   }
   float hy = a_p.w;
   float wl = a_meta.x;
+  int carrier = clamp(int(a_meta.z + 0.5), 0, u_carrierCount - 1);
   float stripH = u_benchH / float(u_sensorCount);
   int sIdx = int(u_sensorCount) - 1 - int(floor(hy / stripH));
   sIdx = clamp(sIdx, 0, int(u_sensorCount) - 1);
   int bIdx = int(floor((wl - 380.0) / (780.0 - 380.0) * float(u_binCount)));
   bIdx = clamp(bIdx, 0, int(u_binCount) - 1);
-  float x = (float(bIdx) + 0.5) / float(u_binCount) * 2.0 - 1.0;
+  int colIdx = carrier * u_binCount + bIdx;
+  int totalCols = u_binCount * u_carrierCount;
+  float x = (float(colIdx) + 0.5) / float(totalCols) * 2.0 - 1.0;
   float y = (float(sIdx) + 0.5) / float(u_sensorCount) * 2.0 - 1.0;
   gl_Position = vec4(x, y, 0.0, 1.0);
   gl_PointSize = 1.0;
@@ -521,6 +548,11 @@ export class GPUTracer {
     this.sensorBins = null;
     this.sensorCount = 0;
     this.binCount = 64;
+    // Carrier-axis size: 1 when no per-emitter carrier override is
+    // present (legacy layout `s * binCount + b`). Bumps to a wider
+    // value when `scene.runtime.carrierPerSource` is set; consumers
+    // index as `s * binCount * carrierCount + c * binCount + b`.
+    this.carrierCount = 1;
 
     this._uloc = null;
     this._sensorFBO = null;
@@ -566,6 +598,7 @@ export class GPUTracer {
       edgeCount: u('u_edgeCount'), elementCount: u('u_elementCount'),
       edges: u('u_edges'), elements: u('u_elements'), micLevels: u('u_micLevels'),
       wlPerSource: u('u_wlPerSource'), hasWlPer: u('u_hasWlPer'),
+      carrierPerSource: u('u_carrierPerSource'), hasCarrierPer: u('u_hasCarrierPer'),
     };
     this._aRayPosDir = gl.getAttribLocation(prog, 'a_rayPosDir');
     this._aRayState = gl.getAttribLocation(prog, 'a_rayState');
@@ -587,6 +620,7 @@ export class GPUTracer {
           benchH: gl.getUniformLocation(sp, 'u_benchH'),
           sensorCount: gl.getUniformLocation(sp, 'u_sensorCount'),
           binCount: gl.getUniformLocation(sp, 'u_binCount'),
+          carrierCount: gl.getUniformLocation(sp, 'u_carrierCount'),
         };
       }
     }
@@ -622,6 +656,16 @@ export class GPUTracer {
     gl.bindTexture(gl.TEXTURE_2D, this._wlPerTex);
     gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, 64, 2);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 64, 2, gl.RED, gl.FLOAT, new Float32Array(128));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    // Per-source carrier index: 64×1 R32F. Stored as float for one-
+    // texel-per-source symmetry with micLevels / wlPerSource. Values
+    // are integers 0..15, clamped in the shader.
+    this._carrierPerTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this._carrierPerTex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, 64, 1);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 64, 1, gl.RED, gl.FLOAT, new Float32Array(64));
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
@@ -791,6 +835,22 @@ export class GPUTracer {
         d.subarray(0, Math.min(nSrc, 64)));
     }
 
+    // Per-source carrier index. Only uploaded when set on the runtime;
+    // otherwise the shader's u_hasCarrierPer = 0 path keeps every ray
+    // at carrier 0 (the legacy single-carrier behavior).
+    const carrierPer = runtime.carrierPerSource;
+    this._hasCarrierPer = !!carrierPer;
+    if (carrierPer) {
+      if (!this._carrierPerData || this._carrierPerData.length < nSrc) {
+        this._carrierPerData = new Float32Array(Math.max(nSrc, 1));
+      }
+      const cd = this._carrierPerData;
+      for (let i = 0; i < nSrc && i < 64; i++) cd[i] = carrierPer[i];
+      gl.bindTexture(gl.TEXTURE_2D, this._carrierPerTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
+        cd.subarray(0, Math.min(nSrc, 64)));
+    }
+
     // Effective bounce count: bounded by total element edges + 1.
     // A ray can cross at most one edge per bounce, so it can't bounce
     // more times than there are edges. Reduces dispatch count and
@@ -873,6 +933,10 @@ export class GPUTracer {
     gl.bindTexture(gl.TEXTURE_2D, this._wlPerTex);
     gl.uniform1i(loc.wlPerSource, 3);
     gl.uniform1i(loc.hasWlPer, this._hasWlPer ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, this._carrierPerTex);
+    gl.uniform1i(loc.carrierPerSource, 4);
+    gl.uniform1i(loc.hasCarrierPer, this._hasCarrierPer ? 1 : 0);
 
     // --- Bounce loop: ping-pong between two buffers ---
     // Two separate VAOs for the two read buffers, to avoid rebinding
@@ -961,13 +1025,18 @@ export class GPUTracer {
 
     // --- Sensor FBO pass ---
     this.sensorCount = sensorCount;
-    const binLen = sensorCount * this.binCount;
+    // Carrier axis: widen when per-source carriers are set. Number
+    // of carrier columns matches the synth's `_CARRIERS` map size
+    // (9 today). Collapses to 1 when nothing has set carrierPerSource
+    // — preserving today's legacy `s * binCount + b` layout exactly.
+    this.carrierCount = this._hasCarrierPer ? CARRIER_COUNT : 1;
+    const binLen = sensorCount * this.binCount * this.carrierCount;
     if (!this.sensorBins || this.sensorBins.length !== binLen) {
       this.sensorBins = new Float32Array(binLen);
     }
 
     if (this._sensorProgram && this._sensorFBOValid) {
-      const fbW = this.binCount, fbH = sensorCount;
+      const fbW = this.binCount * this.carrierCount, fbH = sensorCount;
       if (!this._sensorFBO || this._sensorFBOWidth !== fbW || this._sensorFBOHeight !== fbH) {
         if (this._sensorFBO) { gl.deleteFramebuffer(this._sensorFBO); gl.deleteTexture(this._sensorTex); }
         this._sensorTex = gl.createTexture();
@@ -996,6 +1065,7 @@ export class GPUTracer {
       gl.uniform1f(this._sensorLoc.benchH, bench.h);
       gl.uniform1i(this._sensorLoc.sensorCount, sensorCount);
       gl.uniform1i(this._sensorLoc.binCount, this.binCount);
+      gl.uniform1i(this._sensorLoc.carrierCount, this.carrierCount);
 
       const totalVerts = totalRays * effectiveBounces;
       const sLoc = this._sensorLoc;

@@ -285,6 +285,18 @@ button.active { background: var(--accent); color: #061018; border-color: var(--a
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 3px #000, 0 0 6px #000;
 }
+/* Per-emitter carrier indicator (sub-label inside .emitter-label).
+   Empty-text by default; populated from the frame loop when a song
+   sets a non-zero carrier for that emitter. Two-letter code, faded
+   accent so it doesn't compete with the frequency label. */
+.emitter-label .ec {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 9px;
+  color: rgba(140, 200, 255, 0.85);
+  letter-spacing: 0;
+}
+.emitter-label .ec:empty { display: none; }
 .sensor-label {
   position: absolute;
   right: 4px;
