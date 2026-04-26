@@ -22,6 +22,10 @@ const PTR_RADIUS_BENCH = 120;
 const K_ELEM_STRENGTH = 2.2; // push strength per element source (bench units, pre-normalization)
 const K_SPIN_SWIRL = 7.0;    // swirl strength per rad/s of element angular velocity
 const K_PTR_STRENGTH = 3.2;  // outward push strength per pointer source
+// Per-pointer glow brightness in the edge-glow HDR pass. Touch lights
+// the smoke at the press position with a warm white that fades on
+// release. Compares roughly to a single emitter at full level.
+const PTR_GLOW_AMP = 0.9;
 
 // Along-axis source offsets (fraction of longLen) for the element-source
 // packing loop. Hoisted to module scope so the arrays aren't reallocated
@@ -1156,6 +1160,12 @@ export class Renderer {
   // active row contributes one point-source: emitters at (0, y),
   // sensors at (bench.w, y). Sorted by brightness so when the cap
   // is hit we keep the strongest. CPU-side, called every frame.
+  // Pack wall sources (emitters left + sensors right) starting AFTER
+  // any already-populated slots — pointer-touch glow is packed first
+  // (see _appendPointerGlow), so when the wall set + pointer set
+  // exceeds MAX_ACTIVE_GLOW, pointers win. Without this priority,
+  // a song with many active notes filled all 32 slots and pointer
+  // touches dropped out invisibly.
   _packActiveGlow(scene) {
     const pos = this._activeGlowPos;
     const col = this._activeGlowCol;
@@ -1184,37 +1194,76 @@ export class Renderer {
       const y = benchH * (1 - (s + 0.5) / nS);
       cands.push({ x: benchW, y, r, g, b, m });
     }
-    if (cands.length > this.MAX_ACTIVE_GLOW) {
+    // Cap walls to whatever space is left after pointer slots.
+    const wallCap = Math.max(0, this.MAX_ACTIVE_GLOW - this._activeGlowCount);
+    if (cands.length > wallCap) {
       cands.sort((a, c) => c.m - a.m);
-      cands.length = this.MAX_ACTIVE_GLOW;
+      cands.length = wallCap;
     }
-    for (let i = 0; i < cands.length; i++) {
+    let idx = this._activeGlowCount;
+    for (let i = 0; i < cands.length; i++, idx++) {
       const c = cands[i];
-      pos[i * 2    ] = c.x;
-      pos[i * 2 + 1] = c.y;
-      col[i * 3    ] = c.r;
-      col[i * 3 + 1] = c.g;
-      col[i * 3 + 2] = c.b;
+      pos[idx * 2    ] = c.x;
+      pos[idx * 2 + 1] = c.y;
+      col[idx * 3    ] = c.r;
+      col[idx * 3 + 1] = c.g;
+      col[idx * 3 + 2] = c.b;
     }
     // Zero out trailing slots so stale data can't leak across frames
     // when the active count shrinks.
-    for (let i = cands.length; i < this.MAX_ACTIVE_GLOW; i++) {
+    for (let i = idx; i < this.MAX_ACTIVE_GLOW; i++) {
       pos[i * 2    ] = 0;
       pos[i * 2 + 1] = 0;
       col[i * 3    ] = 0;
       col[i * 3 + 1] = 0;
       col[i * 3 + 2] = 0;
     }
-    this._activeGlowCount = cands.length;
+    this._activeGlowCount = idx;
   }
 
   // Per-frame exponential smoothing of the edge-memory state. Targets
   // are (emitterColor × micLevel) for the left wall and the
   // wavelength-weighted average of sensor bins for the right wall.
   // No-op when the toggle is off (paid only when in use).
+  // Append active pointer-touch positions as glow sources at the end
+  // of the _activeGlowPos/Col arrays, starting at _activeGlowCount.
+  // Each touch contributes a warm-white point light that ramps in on
+  // press (PTR_RISE_SEC) and fades out on release (PTR_FADE_SEC) —
+  // same envelopes as the smoke push, so the visual light stays in
+  // sync with the swirl. Independent of edgeGlowEnabled: a touch
+  // lights the smoke even when wall edge-memory is off.
+  _appendPointerGlow() {
+    if (!this.smokeEnabled) return;
+    const now = performance.now() / 1000;
+    let idx = this._activeGlowCount;
+    for (const p of this._pointerSources) {
+      if (!p.active) continue;
+      if (idx >= this.MAX_ACTIVE_GLOW) break;
+      let fade;
+      if (p.released) {
+        const dt = Math.max(0, now - p.tRelease);
+        fade = Math.exp(-dt / PTR_FADE_SEC);
+      } else {
+        const dt = Math.max(0, now - p.tPress);
+        fade = 1.0 - Math.exp(-dt / PTR_RISE_SEC);
+      }
+      if (fade < 0.02) continue;
+      const a = fade * PTR_GLOW_AMP;
+      this._activeGlowPos[idx * 2    ] = p.x;
+      this._activeGlowPos[idx * 2 + 1] = p.y;
+      this._activeGlowCol[idx * 3    ] = a * 1.00;
+      this._activeGlowCol[idx * 3 + 1] = a * 0.95;
+      this._activeGlowCol[idx * 3 + 2] = a * 0.85;
+      idx++;
+    }
+    this._activeGlowCount = idx;
+  }
+
   updateEdgeGlow(scene, tracer, dt) {
     if (!this.edgeGlowEnabled) {
       this._activeGlowCount = 0;
+      // Touches still light the smoke even when wall edge-memory is off.
+      this._appendPointerGlow();
       return;
     }
     // Self-reset on any scene-shape change. Single tripwire replaces
@@ -1314,7 +1363,11 @@ export class Renderer {
         sg[o + 2] += k * (tb - sg[o + 2]);
       }
     }
-    // Pack the bright-enough subset for the GPU.
+    // Pointers first so they're guaranteed slots even when many notes
+    // fill the wall-source candidate pool. _packActiveGlow then fills
+    // the remaining slots with walls.
+    this._activeGlowCount = 0;
+    this._appendPointerGlow();
     this._packActiveGlow(scene);
   }
 
@@ -1495,14 +1548,15 @@ export class Renderer {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (this.edgeGlowEnabled) {
+    // Glow pass fires when ANY source is active — wall edge-memory
+    // and/or pointer touches. Pointer-touch glow runs even when the
+    // edge-memory toggle is off so a smoke press always lights up.
+    if (this._activeGlowCount > 0) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
       gl.useProgram(this.edgeGlowProgram);
-      // Upload the full fixed-size arrays each frame; trailing slots
-      // are zeroed in updateEdgeGlow so stale colors can't leak back.
       // The shader's `if (i >= uGlowCount) break` ensures only the
-      // populated prefix is sampled.
+      // populated prefix is sampled, so stale slots don't matter.
       gl.uniform2fv(this.edgeGlow.uGlowPos, this._activeGlowPos);
       gl.uniform3fv(this.edgeGlow.uGlowCol, this._activeGlowCol);
       gl.uniform1i(this.edgeGlow.uGlowCount, this._activeGlowCount);
