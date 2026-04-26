@@ -354,6 +354,25 @@ function _carrierVocoder(v, ctx) {
   v.vocEnv = env; v.gains[0] = env;
 }
 
+// Karplus body resonator constants. Two 2-pole bandpasses approximating
+// a guitar's air (Helmholtz, ~110 Hz) and top-plate (~200 Hz) resonances.
+// Computed once at module load — fixed regardless of voice frequency.
+function _kpBodyCoefs(fHz, Q) {
+  const w = 2 * Math.PI * fHz / sampleRate;
+  const r = Math.max(0.5, Math.min(0.999, 1 - Math.PI * fHz / (Q * sampleRate)));
+  return {
+    c1: 2 * r * Math.cos(w),
+    c2: -(r * r),
+    norm: (1 - r * r) / 2,
+  };
+}
+// Lower Q (wider bandpass) so the body contributes meaningful energy
+// off-resonance instead of only at the exact peak. Q=8/6 gave ~0.001
+// norm coefficients — body became inaudible for any note not landing
+// near 110/200 Hz.
+const _KP_BODY1 = _kpBodyCoefs(110, 3);  // air resonance, wide
+const _KP_BODY2 = _kpBodyCoefs(200, 2.5); // top-plate fundamental, wide
+
 function _carrierKarplus(v, ctx) {
   v.centroid += (v.targetCentroid - v.centroid) * ctx.centroidSmooth;
   let voiceGain = v.gains[0];
@@ -365,17 +384,53 @@ function _carrierKarplus(v, ctx) {
   const exciteAmt = ctx.P.kpExcite || 0.5;
   const kpBuf = v.kpBuf, kpLen = kpBuf.length;
   let idx = v.kpIdx, prev = v.kpPrev;
+  // Pluck excitation: short triangular noise burst (~5 ms, capped at
+  // kpLen) deposited into the delay line at the current read position.
+  // Replaces the previous "fill whole buffer with noise" approach
+  // which sounded like filtered noise rather than a struck string for
+  // the first cycle. Triangular envelope concentrates energy at the
+  // start (sharp transient) and tapers off, matching a finger-string
+  // contact. Stationary noise position simulates a fixed pluck point.
   if (voiceTarget >= 0.05 && v.kpGainPrev < 0.05) {
-    for (let j = 0; j < kpLen; j++) kpBuf[j] += (_rng() * 2 - 1) * voiceTarget * 0.5;
+    const burstMs = 5;
+    const burstLen = Math.min(kpLen, Math.floor(sampleRate * burstMs * 0.001));
+    const peakAt = Math.max(1, burstLen >> 2); // peak at 25% of burst
+    for (let s = 0; s < burstLen; s++) {
+      // Triangle envelope: 0→1 over first peakAt samples, 1→0 after.
+      const env = s < peakAt
+        ? s / peakAt
+        : 1 - (s - peakAt) / (burstLen - peakAt);
+      const writeIdx = (idx + s) % kpLen;
+      kpBuf[writeIdx] += (_rng() * 2 - 1) * voiceTarget * env;
+    }
   }
   v.kpGainPrev = voiceTarget;
-  const contExcite = (1 - exciteAmt) * 0.4;
+  // Continuous excitation reduced (was 0.4× weighting). Real plucked
+  // strings don't sustain via re-energizing — the pluck transient
+  // alone should ring out. Higher exciteAmt still adds breath/bow
+  // character but the default leans toward clean pluck decay.
+  const contExcite = (1 - exciteAmt) * 0.15;
   const exFiltCoeff = 0.05 + v.centroid * 0.9;
   let exLp = v.kpExLp;
   const lpA = 0.5 + lpBlend * 0.5, lpB = 1 - lpA;
+  // Body resonator state. Lazy-init so existing voices upgrade cleanly.
+  if (v.kpB1a === undefined) {
+    v.kpB1a = 0; v.kpB1b = 0; v.kpB2a = 0; v.kpB2b = 0;
+  }
+  let b1a = v.kpB1a, b1b = v.kpB1b, b2a = v.kpB2a, b2b = v.kpB2b;
+  const c1a = _KP_BODY1.c1, c2a = _KP_BODY1.c2, na = _KP_BODY1.norm;
+  const c1b = _KP_BODY2.c1, c2b = _KP_BODY2.c2, nb = _KP_BODY2.norm;
+  // Body mix: dry string × 1.0 + body resonators × 8.0 each.
+  // The bandpass `norm = (1-r²)/2` is small (~0.025 at Q=3); body
+  // contribution ≈ 0.2× input at center, weaker off-axis. 8.0× brings
+  // the resonator response into a perceptually audible range without
+  // dominating the dry string. Dry stays at full so overall loudness
+  // matches the pre-body version.
+  const dryMix = 1.0, bodyMix = 8.0;
+
   for (let i = 0; i < ctx.len; i++) {
     voiceGain += (voiceTarget - voiceGain) * ctx.smooth;
-    if (voiceGain > 0.01) {
+    if (voiceGain > 0.01 && contExcite > 0) {
       const white = Math.random() * 2 - 1;
       exLp += (white - exLp) * exFiltCoeff;
       kpBuf[idx] += exLp * voiceGain * contExcite;
@@ -385,10 +440,24 @@ function _carrierKarplus(v, ctx) {
     prev = out;
     kpBuf[idx] = filtered;
     idx++; if (idx >= kpLen) idx = 0;
-    const _s = out * Math.min(1, voiceGain * 3);
+    // Body resonators (2 parallel bandpasses) excited by string output.
+    const y1 = out + c1a * b1a + c2a * b1b;
+    const body1 = (y1 - b1b) * na;
+    b1b = b1a; b1a = y1;
+    const y2 = out + c1b * b2a + c2b * b2b;
+    const body2 = (y2 - b2b) * nb;
+    b2b = b2a; b2a = y2;
+    const _s = (out * dryMix + (body1 + body2) * bodyMix) * Math.min(1, voiceGain * 3);
     ctx.bufL[i] += _s * ctx.panL; ctx.bufR[i] += _s * ctx.panR;
   }
-  v.kpIdx = idx; v.kpPrev = prev; v.kpExLp = exLp; v.gains[0] = voiceGain;
+  // Denormal flush on body state.
+  if (Math.abs(b1a) < 1e-20) b1a = 0;
+  if (Math.abs(b1b) < 1e-20) b1b = 0;
+  if (Math.abs(b2a) < 1e-20) b2a = 0;
+  if (Math.abs(b2b) < 1e-20) b2b = 0;
+  v.kpIdx = idx; v.kpPrev = prev; v.kpExLp = exLp;
+  v.kpB1a = b1a; v.kpB1b = b1b; v.kpB2a = b2a; v.kpB2b = b2b;
+  v.gains[0] = voiceGain;
 }
 
 function _carrierSine(v, ctx) {
