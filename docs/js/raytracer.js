@@ -27,6 +27,7 @@
 
 import { wavelengthToRGB, materialN, elementAbsorption, elementReflectance, elementDelay } from './spectrum.js';
 import { worldEdges, pointInPolygon, materialOptics } from './scene.js';
+import { CARRIER_COUNT } from './song.js';
 
 const EPS = 1e-4;
 const MAX_BOUNCES = 18;
@@ -50,7 +51,11 @@ const DELAY_MIN = 0.0003;
 //   [lx, ly, ldx, ldy, I, wl, lastLx, lastLy, r, g, b]
 // RGB is pre-computed at capture time so the advance hot loop never
 // calls wavelengthToRGB (which allocates a fresh array each call).
-const PART_FLOATS = 11;
+// Particle record layout: [lx, ly, ldx, ldy, I, wl, lastLx, lastLy,
+// r, g, b, carrierIdx]. carrierIdx persists with the captured ray
+// through the delay so when it eventually exits the element it
+// continues feeding the same carrier slot in sensorBins.
+const PART_FLOATS = 12;
 
 // Per-delay-element particle store.  Flat `Float32Array` kept in the
 // element's local coordinate frame; `count` is the live record count.
@@ -69,7 +74,7 @@ class ParticlePool {
   }
   // Append a new particle at the local entry point with the local
   // (already-refracted-inward) direction and current intensity/wavelength.
-  add(lx, ly, ldx, ldy, I, wl, r, g, b) {
+  add(lx, ly, ldx, ldy, I, wl, r, g, b, carrierIdx) {
     this.ensureCapacity(this.count + 1);
     const i = this.count * PART_FLOATS;
     const d = this.data;
@@ -78,6 +83,7 @@ class ParticlePool {
     d[i + 4] = I;   d[i + 5] = wl;
     d[i + 6] = lx;  d[i + 7] = ly;  // lastLx / lastLy seeded to entry
     d[i + 8] = r;   d[i + 9] = g;   d[i + 10] = b;
+    d[i + 11] = carrierIdx | 0;
     this.count++;
   }
   // Compact: move record at `src` into slot `dst`.  Used when removing
@@ -104,11 +110,10 @@ export class Tracer {
     this.sensorBins = null;                    // Float32Array [sensor][carrier][bin] flat
     this.sensorCount = 0;
     this.binCount = 64;
-    // Carrier-axis size for sensor bins. CPU tracer always emits the
-    // collapsed (carrierCount === 1) layout — `s * binCount + b`. GPU
-    // tracer can emit a wider layout when `runtime.carrierPerSource`
-    // is set (Stage 1 of the per-ray-carrier plan). Consumers must
-    // index as `s * binCount * carrierCount + c * binCount + b`.
+    // Carrier-axis size for sensor bins. Both CPU and GPU tracers
+    // emit the wide layout `s * binCount * carrierCount + c * binCount
+    // + b` when `runtime.carrierPerSource` is set, and collapse to the
+    // legacy `s * binCount + b` (carrierCount === 1) when it isn't.
     this.carrierCount = 1;
     // Stateful per-delay-element particle pools keyed by element id.
     this._pools = new Map();
@@ -240,10 +245,19 @@ export class Tracer {
     W[2].p1.x = bench.w; W[2].p1.y = bench.h; W[2].p2.x = 0;       W[2].p2.y = bench.h;
     W[3].p1.x = 0;       W[3].p1.y = bench.h; W[3].p2.x = 0;       W[3].p2.y = 0;
 
+    // Per-emitter carrier override: present iff song / scene set
+    // `runtime.carrierPerSource`. When absent, every ray maps to
+    // carrier slot 0 and the bin layout collapses to the legacy
+    // `s * binCount + b` form. When present, we widen to
+    // `s * binCount * CARRIER_COUNT + c * binCount + b` so the synth
+    // worklet can dispatch each carrier independently.
+    const carrierPerSource = runtime.carrierPerSource || null;
+    const newCC = carrierPerSource ? CARRIER_COUNT : 1;
     // Sensor setup: sensors tile the right wall; each sensor covers a strip.
-    const binLen = sensorCount * this.binCount;
-    if (this.sensorCount !== sensorCount || !this.sensorBins) {
+    const binLen = sensorCount * this.binCount * newCC;
+    if (this.sensorCount !== sensorCount || this.carrierCount !== newCC || !this.sensorBins) {
       this.sensorCount = sensorCount;
+      this.carrierCount = newCC;
       this.sensorBins = new Float32Array(binLen);
       this._sensorPersist = new Float32Array(binLen);
     } else {
@@ -305,6 +319,12 @@ export class Tracer {
       const wlMinS = wlPer ? wlPer.min[s] : wlMin;
       const wlMaxS = wlPer ? wlPer.max[s] : wlMax;
       const wlRangeS = Math.max(1, wlMaxS - wlMinS);
+      // Per-emitter carrier slot. Falls back to 0 (global carrier) when
+      // no override is configured. Clamp into the carrier count so a
+      // stale carrier index can't write outside the bin array.
+      const carrierIdx = carrierPerSource
+        ? Math.max(0, Math.min(newCC - 1, carrierPerSource[s] | 0))
+        : 0;
       for (let k = 0; k < raysPer; k++) {
         const wl = wlMinS + wlRangeS * ((k + 0.5) / raysPer);
         const rgb = wavelengthToRGB(wl);
@@ -316,7 +336,7 @@ export class Tracer {
         const micGain = runtime.micLevels ? runtime.micLevels[s] : 1;
         const intensity = (BASE_INTENSITY / Math.sqrt(raysPer)) * micGain;
         this.castRay(emX, ey, dirX, dirY, wl, rgb, intensity,
-                     edges, elementMap, elementInfos, W, sensorStripH, -1);
+                     edges, elementMap, elementInfos, W, sensorStripH, -1, carrierIdx);
       }
     }
 
@@ -327,14 +347,14 @@ export class Tracer {
     // `_isSecondary` so the spectrum readout and synth don't flicker.
     const secStart = this.segmentCount;
     this._isSecondary = true;
-    const SEC_FLOATS = 9;
+    const SEC_FLOATS = 10;
     const _secRgb = [0, 0, 0];
     for (let i = 0; i < this._secondaryCount; i++) {
       const off = i * SEC_FLOATS;
       const s = this._secondary;
       _secRgb[0] = s[off + 5]; _secRgb[1] = s[off + 6]; _secRgb[2] = s[off + 7];
       this.castRay(s[off], s[off+1], s[off+2], s[off+3], s[off+4], _secRgb, s[off+8],
-                   edges, elementMap, elementInfos, W, sensorStripH, this._secondarySkipIds[i]);
+                   edges, elementMap, elementInfos, W, sensorStripH, this._secondarySkipIds[i], s[off + 9] | 0);
     }
     this._isSecondary = false;
     // Cache the segments scaled by (1-D), then remove them from the
@@ -399,6 +419,7 @@ export class Tracer {
       let I = d[off + 4];
       const wl = d[off + 5];
       _rgb[0] = d[off + 8]; _rgb[1] = d[off + 9]; _rgb[2] = d[off + 10];
+      const partCarrier = d[off + 11] | 0;
 
       const step = speedBase * dtEff;
       const nlx = lx + ldx * step;
@@ -527,14 +548,14 @@ export class Tracer {
         wyE + (tyW / tLen) * EPS * 10,
         txW / tLen, tyW / tLen,
         wl, _rgb[0], _rgb[1], _rgb[2],
-        I * GLASS_LOSS, el.id
+        I * GLASS_LOSS, el.id, partCarrier
       );
       pool.removeAt(i);
     }
   }
 
-  _pushSecondary(ox, oy, dx, dy, wl, r, g, b, I, skipElId) {
-    const SEC_FLOATS = 9;
+  _pushSecondary(ox, oy, dx, dy, wl, r, g, b, I, skipElId, carrierIdx) {
+    const SEC_FLOATS = 10;
     const needed = (this._secondaryCount + 1) * SEC_FLOATS;
     if (this._secondary.length < needed) {
       const next = new Float32Array(Math.max(needed, this._secondary.length * 2 || 128));
@@ -546,6 +567,7 @@ export class Tracer {
     s[i] = ox; s[i+1] = oy; s[i+2] = dx; s[i+3] = dy;
     s[i+4] = wl; s[i+5] = r; s[i+6] = g; s[i+7] = b;
     s[i+8] = I;
+    s[i+9] = carrierIdx | 0;
     // skipElId is a UUID string — can't store in Float32Array.
     if (!this._secondarySkipIds) this._secondarySkipIds = [];
     this._secondarySkipIds[this._secondaryCount] = skipElId;
@@ -623,7 +645,8 @@ export class Tracer {
     this._exitSegCount += count;
   }
 
-  castRay(ox, oy, dx, dy, wl, rgb, intensity, edges, elementMap, elementInfos, walls, sensorStripH, skipElId) {
+  castRay(ox, oy, dx, dy, wl, rgb, intensity, edges, elementMap, elementInfos, walls, sensorStripH, skipElId, carrierIdx) {
+    carrierIdx = carrierIdx | 0;
     let x = ox, y = oy, vx = dx, vy = dy;
     let I = intensity;
 
@@ -704,10 +727,15 @@ export class Tracer {
           const sIdx = Math.min(this.sensorCount - 1, Math.max(0, this.sensorCount - 1 - Math.floor(hy / sensorStripH)));
           const binIdx = Math.min(this.binCount - 1, Math.max(0,
             Math.floor((wl - 380) / (780 - 380) * this.binCount)));
+          // Wide bin layout: s * binCount * cc + carrierIdx * binCount + b.
+          // Collapses to legacy layout when carrierCount === 1 and
+          // carrierIdx === 0.
+          const cc = this.carrierCount;
+          const idx = sIdx * this.binCount * cc + carrierIdx * this.binCount + binIdx;
           if (this._isSecondary) {
-            this._sensorPersist[sIdx * this.binCount + binIdx] += I * (1 - Tracer.PERSIST_DECAY);
+            this._sensorPersist[idx] += I * (1 - Tracer.PERSIST_DECAY);
           } else {
-            this.sensorBins[sIdx * this.binCount + binIdx] += I;
+            this.sensorBins[idx] += I;
           }
         }
         return;
@@ -761,7 +789,7 @@ export class Tracer {
           const ldy = -sinR * vxW + cosR * vyW;
           const pool = this._poolFor(elInfo.el.id);
           const prgb = wavelengthToRGB(wl);
-          pool.add(lx, ly, ldx, ldy, I * GLASS_LOSS, wl, prgb[0], prgb[1], prgb[2]);
+          pool.add(lx, ly, ldx, ldy, I * GLASS_LOSS, wl, prgb[0], prgb[1], prgb[2], carrierIdx);
           return;
         }
         // Exit-from-inside primary ray: can't happen, since primary
