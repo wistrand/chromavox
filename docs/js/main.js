@@ -2012,6 +2012,11 @@ window.addEventListener('resize', () => {
     // change.
     scene.runtime.carrierPerSource = null;
     songPlayer.applyKeyframeAt(scene, 0);
+    // Sync the left-panel sliders / labels (emitter count, sensor
+    // count, wavelength range, etc.) to whatever the song's keyframes
+    // just wrote into the scene — otherwise the panel keeps showing
+    // the previous song's values.
+    ui.syncControls();
     dirty = true;
     _enableTransport();
     _persistSong(json);
@@ -2053,6 +2058,7 @@ window.addEventListener('resize', () => {
         songPlayer._globalApplied = true;
       }
     }
+    ui.syncControls();
     _enableTransport();
     cv.hideWelcome();
   }
