@@ -83,10 +83,42 @@ function findTempo(doc) {
   return 120;
 }
 
+// Cap on how far a pedal-extended note can ring (matches MIDI
+// SUS_MAX_SEC in midi.js — same rationale: long enough for natural
+// piano pedaling, short enough that a stuck/never-released pedal
+// can't hold notes for the rest of the song).
+const _MXML_SUSTAIN_MAX_SEC = 8;
+
+// Pedal-aware duration extension. For each note in `rawNotes` from
+// index `start` onward, if the pedal is on at the note's natural
+// end-time, extend the duration to the next pedal-up event (capped
+// at _MXML_SUSTAIN_MAX_SEC). `pedalEvents` is a time-sorted list of
+// {time, on} per part; pedal events from one part don't apply to
+// another part's notes.
+function _applyMxmlSustain(rawNotes, start, pedalEvents) {
+  for (let i = start; i < rawNotes.length; i++) {
+    const note = rawNotes[i];
+    const noteEnd = note.time + note.duration;
+    let on = false;
+    let nextOffTime = -1;
+    for (const e of pedalEvents) {
+      if (e.time <= noteEnd) { on = e.on; continue; }
+      if (!on) break;
+      if (!e.on) { nextOffTime = e.time; break; }
+    }
+    if (!on) continue;
+    const extendedEnd = nextOffTime > 0
+      ? Math.min(nextOffTime, noteEnd + _MXML_SUSTAIN_MAX_SEC)
+      : noteEnd + _MXML_SUSTAIN_MAX_SEC;
+    note.duration = extendedEnd - note.time;
+  }
+}
+
 // Walk one <part>, appending notes to `rawNotes` (time + duration in
-// seconds, pitch as MIDI). Divisions can change per measure; tempo is
-// the document-wide value passed in.
-function parsePart(part, tempo, rawNotes) {
+// seconds, pitch as MIDI) and sustain-pedal events to `pedalEvents`
+// ({time, on}). Divisions can change per measure; tempo is the
+// document-wide value passed in.
+function parsePart(part, tempo, rawNotes, pedalEvents) {
   let divisions = 1;
   const activeTies = new Map();
   let measureStart = 0; // seconds
@@ -155,6 +187,25 @@ function parsePart(part, tempo, rawNotes) {
       } else if (tag === 'forward') {
         cursor += toSec(readInt(el, ':scope > duration', 0));
         if (cursor > maxCursor) maxCursor = cursor;
+
+      } else if (tag === 'direction') {
+        // Sustain-pedal markings live inside <direction-type><pedal/>.
+        // Types: start | continue → on; stop | discontinue → off;
+        // change → bounce (off then immediately on, releasing held
+        // notes and re-engaging at the same time). Sostenuto and
+        // damp are ignored (rare, selectively-held).
+        const pedalEl = el.querySelector(':scope > direction-type > pedal');
+        if (pedalEl) {
+          const type = pedalEl.getAttribute('type');
+          if (type === 'start' || type === 'continue') {
+            pedalEvents.push({ time: cursor, on: true });
+          } else if (type === 'stop' || type === 'discontinue') {
+            pedalEvents.push({ time: cursor, on: false });
+          } else if (type === 'change') {
+            pedalEvents.push({ time: cursor, on: false });
+            pedalEvents.push({ time: cursor, on: true });
+          }
+        }
       }
     }
 
@@ -198,12 +249,22 @@ export function musicxmlToSong(text) {
 
   // Union notes from every part. Each part is parsed independently
   // with its own measure cursor / divisions / tie state, so voice +
-  // piano + whatever else stream into one note list.
+  // piano + whatever else stream into one note list. Sustain-pedal
+  // events are collected per part because pedals scope to a part —
+  // most piano grand-staff exports place pedal directions on the
+  // bass-stave part, and applying that pedal to the treble part's
+  // notes is the desired natural behavior.
   const rawNotes = [];
   let endTime = 0;
   for (const part of parts) {
-    const partEnd = parsePart(part, tempo, rawNotes);
+    const partNoteStart = rawNotes.length;
+    const pedalEvents = [];
+    const partEnd = parsePart(part, tempo, rawNotes, pedalEvents);
     if (partEnd > endTime) endTime = partEnd;
+    if (pedalEvents.length) {
+      pedalEvents.sort((a, b) => a.time - b.time);
+      _applyMxmlSustain(rawNotes, partNoteStart, pedalEvents);
+    }
   }
 
   if (rawNotes.length === 0) throw new Error('MusicXML: no audible notes found');

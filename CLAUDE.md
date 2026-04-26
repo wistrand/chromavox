@@ -43,6 +43,7 @@ Detailed notes are split into topic files under `agent_docs/`:
 - [Song format design](agent_docs/design-song-format.md)
 - [Known gotchas](agent_docs/architecture-gotchas.md)
 - [Plan: per-ray carrier (per-note instruments)](agent_docs/plan-per-ray-carrier.md)
+- [Plan: improve MIDI mapping for typical songs](agent_docs/plan-midi-mapping.md)
 
 Note: `agent_docs/plan-element-schema.md` was removed (implemented).
 

@@ -82,6 +82,28 @@ export const CARRIERS = {
       { id: 'pnoStretch',    label: 'Stretch',    min: 0,   max: 1,   default: 0.50 },
     ],
   },
+  bell: {
+    label: 'bell',
+    params: [
+      { id: 'bellDecay',      label: 'Decay',      min: 0.2, max: 3.0, default: 1.0,
+        display: v => v.toFixed(2) + 'x' },
+      { id: 'bellBrightness', label: 'Brightness', min: 0,   max: 1,   default: 0.60 },
+    ],
+  },
+  brass: {
+    label: 'brass',
+    params: [
+      { id: 'brsFormant', label: 'Formant', min: 0, max: 1, default: 0.5 },
+      { id: 'brsBite',    label: 'Bite',    min: 0, max: 1, default: 0.5 },
+    ],
+  },
+  bowed: {
+    label: 'bowed',
+    params: [
+      { id: 'bowBright',  label: 'Brightness', min: 0, max: 1, default: 0.5 },
+      { id: 'bowVibrato', label: 'Vibrato',    min: 0, max: 1, default: 0.5 },
+    ],
+  },
 };
 
 // All param IDs across all carriers (for persistence, automation).

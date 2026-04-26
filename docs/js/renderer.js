@@ -1336,11 +1336,26 @@ export class Renderer {
       if (!p.active) continue;
       let fade;
       if (p.released) {
-        fade = Math.exp(-(now - p.tRelease) / PTR_FADE_SEC);
+        // Released slot: now should always be ≥ tRelease (tRelease was
+        // set in the past). Defensive clamp guards against any
+        // tRelease=0 sentinel state where the exponent would diverge.
+        const dt = Math.max(0, now - p.tRelease);
+        fade = Math.exp(-dt / PTR_FADE_SEC);
         if (fade < 0.02) { p.active = false; p.released = false; continue; }
       } else {
-        fade = 1.0 - Math.exp(-(now - p.tPress) / PTR_RISE_SEC);
+        // Held slot: now should always be ≥ tPress. Defensive clamp —
+        // a clock-skew or out-of-order event could make `now - tPress`
+        // negative, which would make `1 - exp(positive)` negative, and
+        // negative-fade times the negative pushK constant flips the
+        // sign — smoke attracts instead of pushes. Clamp dt ≥ 0 to
+        // keep fade in [0, 1].
+        const dt = Math.max(0, now - p.tPress);
+        fade = 1.0 - Math.exp(-dt / PTR_RISE_SEC);
       }
+      // Belt-and-suspenders clamp to [0, 1] in case a future change
+      // to the fade formula slips negative or > 1 into the slot.
+      if (fade < 0) fade = 0;
+      else if (fade > 1) fade = 1;
       anyActivePtr = true;
       if (idx >= MAX_SMOKE_SOURCES) continue;
       const o = idx * 8;
@@ -1350,11 +1365,13 @@ export class Renderer {
       data[o + 3] = invRptr;
       data[o + 4] = 1;                      // cosA = 1 (isotropic)
       data[o + 5] = 0;                      // sinA = 0
-      // Negative pushK: domain-warp moves smoke patterns *opposite* to
-      // the warp vector, so a vector pointing away from the source
-      // (rad = d) visually pulls smoke inward. Negate to get the
-      // intuitive outward flow from the touch point.
-      data[o + 6] = -K_PTR_STRENGTH * fade; // pushK (visual outward)
+      // pushK is `-|K| * fade` so the sign is unconditionally
+      // negative regardless of any quirk in K_PTR_STRENGTH (e.g. if
+      // it ever ends up negative again). Domain-warp `fbm(p + warp)`
+      // moves smoke patterns OPPOSITE to the warp vector — negative
+      // sourceWarp on rad direction = inward warp = visual outward
+      // flow of smoke patterns from the touch point.
+      data[o + 6] = -Math.abs(K_PTR_STRENGTH) * fade;
       data[o + 7] = 0;                      // swirlK = 0
       idx++;
     }

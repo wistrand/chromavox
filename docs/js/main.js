@@ -663,7 +663,7 @@ const MIN_LABEL_PX = 12;
 // `_CARRIERS_BY_IDX` in synth-worklet.js / `Object.keys(CARRIERS)` in
 // carriers.js. Index 0 (sine = "use global synth-carrier") shows
 // nothing — labels stay clean for the default case.
-const _CARRIER_LABEL = ['', 'n', 'a', 'fm', 'ss', 'pu', 'vc', 'kp', 'pn'];
+const _CARRIER_LABEL = ['', 'n', 'a', 'fm', 'ss', 'pu', 'vc', 'kp', 'pn', 'bl', 'br', 'bw'];
 // Last-stamped carrier text per emitter, indexed by emitter idx.
 // `rebuildEmitterLabels()` clears this when label DOM is rebuilt
 // (cache stale), so the next frame writes through. Declared up here
@@ -1490,6 +1490,13 @@ window.addEventListener('resize', () => {
     titlebar.setPointerCapture(e.pointerId);
     const r = statsWin.getBoundingClientRect();
     dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+    // Lock current visual position before flipping the anchor side.
+    // Without setting `left` first, clearing `right` lets the CSS
+    // default (left: 0) take over and the window snaps left until
+    // the first pointermove arrives — which never happens on a
+    // pure click without drag.
+    statsWin.style.left = r.left + 'px';
+    statsWin.style.top  = r.top  + 'px';
     statsWin.style.right = 'auto';
   });
   titlebar.addEventListener('pointermove', e => {
@@ -1615,6 +1622,9 @@ window.addEventListener('resize', () => {
     titlebar.setPointerCapture(e.pointerId);
     const r = specWin.getBoundingClientRect();
     dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+    // Lock current position before flipping right→left anchor.
+    specWin.style.left = r.left + 'px';
+    specWin.style.top  = r.top  + 'px';
     specWin.style.right = 'auto';
   });
   titlebar.addEventListener('pointermove', e => {
@@ -1742,6 +1752,9 @@ window.addEventListener('resize', () => {
     titlebar.setPointerCapture(e.pointerId);
     const r = specWin.getBoundingClientRect();
     dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+    // Lock current position before flipping right→left anchor.
+    specWin.style.left = r.left + 'px';
+    specWin.style.top  = r.top  + 'px';
     specWin.style.right = 'auto';
   });
   titlebar.addEventListener('pointermove', e => {
@@ -1847,6 +1860,9 @@ window.addEventListener('resize', () => {
     titlebar.setPointerCapture(e.pointerId);
     const r = wfWin.getBoundingClientRect();
     dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+    // Lock current position before flipping right→left anchor.
+    wfWin.style.left = r.left + 'px';
+    wfWin.style.top  = r.top  + 'px';
     wfWin.style.right = 'auto';
   });
   titlebar.addEventListener('pointermove', e => {
@@ -2114,8 +2130,15 @@ window.addEventListener('resize', () => {
   // When false, every track's notes use the global synth carrier
   // (`_midiCarrier`) instead of the GM program → carrier mapping.
   // Toggled via the "Per-track instruments" checkbox in the picker.
-  let _midiPerTrackInstruments = true;
+  // Default to single-instrument (per-track off): chromavox's optical
+  // synth tends to sound more cohesive when the whole song uses the
+  // same carrier (electronic / synth-pop sources, which are most of
+  // typical MIDI). Turn the toggle on for orchestral / multi-timbre
+  // pieces where instrument variety is the point.
+  let _midiPerTrackInstruments = false;
+  let _midiIncludeDrums = false;
   const _midiPerTrackEl = document.getElementById('midi-tracks-per-instr');
+  const _midiIncludeDrumsEl = document.getElementById('midi-tracks-include-drums');
 
   function _midiProgramName(prog) {
     // Tiny GM-ish hint string. Full table isn't worth shipping; the
@@ -2146,6 +2169,7 @@ window.addEventListener('resize', () => {
         enabledTracks: _midiEnabled,
         carrier: _midiCarrier,
         perTrackInstruments: _midiPerTrackInstruments,
+        includeDrums: _midiIncludeDrums,
       });
       songSelect.value = '';
       // Preserve playback position across the regenerate so toggles
@@ -2189,6 +2213,24 @@ window.addEventListener('resize', () => {
       _applyMidiSelection();
     });
   }
+  if (_midiIncludeDrumsEl) {
+    _midiIncludeDrumsEl.addEventListener('change', () => {
+      _midiIncludeDrums = _midiIncludeDrumsEl.checked;
+      // Auto-toggle channel-10 tracks in the enabled set so the user
+      // doesn't have to hunt them down individually. When including
+      // drums: enable any unenabled channel-10 tracks. When excluding:
+      // remove them from the enabled set.
+      if (_midiParsed && _midiEnabled) {
+        for (const t of _midiParsed.tracks) {
+          if (t.channel !== 9) continue;
+          if (_midiIncludeDrums) _midiEnabled.add(t.index);
+          else _midiEnabled.delete(t.index);
+        }
+        showMidiTrackPicker(_midiParsed, true);
+      }
+      _applyMidiSelection();
+    });
+  }
 
   function _openMidiPanel() {
     if (!_midiPanel) return;
@@ -2206,7 +2248,15 @@ window.addEventListener('resize', () => {
     if (!rerenderOnly) {
       _midiEnabled = defaultEnabled(parsed);
       _midiCarrier = 'supersaw';
-      _midiPerTrackInstruments = _midiPerTrackEl ? _midiPerTrackEl.checked : true;
+      _midiPerTrackInstruments = _midiPerTrackEl ? _midiPerTrackEl.checked : false;
+      _midiIncludeDrums = _midiIncludeDrumsEl ? _midiIncludeDrumsEl.checked : false;
+      // If user has drums on at import time, pull channel-10 tracks
+      // into the enabled set (defaultEnabled excludes them).
+      if (_midiIncludeDrums) {
+        for (const t of parsed.tracks) {
+          if (t.channel === 9 && t.noteCount > 0) _midiEnabled.add(t.index);
+        }
+      }
     }
     if (_midiReopenBtn) _midiReopenBtn.hidden = false;
     if (!_midiPanel) { _applyMidiSelection(); return; }
@@ -2282,6 +2332,9 @@ window.addEventListener('resize', () => {
       _midiTitlebar.setPointerCapture(e.pointerId);
       const r = _midiPanel.getBoundingClientRect();
       dragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+      // Lock current position before flipping right→left anchor.
+      _midiPanel.style.left = r.left + 'px';
+      _midiPanel.style.top  = r.top  + 'px';
       _midiPanel.style.right = 'auto';
     });
     _midiTitlebar.addEventListener('pointermove', e => {
