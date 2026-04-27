@@ -101,10 +101,16 @@ edges), cutting dispatch count for curved-element scenes.
 - Dichroic mirrors: reflectance from `elementReflectance(el, mat, λ)`;
   non-reflected fraction is absorbed, not transmitted.
 - Sensor deposits: a sensor hit adds `I` to
-  `sensorBins[sIdx * binCount + binIdx]`. Sensor timing is implicit —
-  photons that traversed a delay glass arrive at the sensor on the
-  frame they exit, so the deposit pattern already reflects the
-  delay without any separate gating.
+  `sensorBins[sIdx * binCount * carrierCount + carrierIdx * binCount + binIdx]`.
+  The 3D layout collapses to the legacy `sIdx * binCount + binIdx`
+  when `carrierCount === 1` (no per-emitter carrier override). When
+  `runtime.carrierPerSource` is set, every ray emitted from emitter `s`
+  carries `carrierIdx = carrierPerSource[s]` through every reflection
+  / refraction, including delay-particle capture and re-emission, and
+  writes into its own carrier slice on the right wall. Sensor timing
+  is implicit — photons that traversed a delay glass arrive at the
+  sensor on the frame they exit, so the deposit pattern already
+  reflects the delay without any separate gating.
 - Starting medium: at primary-ray birth every non-delay dielectric
   polygon is tested and containing polygons pushed onto the
   inside-stack. Delay elements are *excluded* because primary rays
@@ -137,8 +143,9 @@ edges), cutting dispatch count for curved-element scenes.
 
 - `DELAY_MIN` threshold (0.0003): any element with `delayK` below
   this is treated as a normal dielectric — no particle capture.
-- Each `ParticlePool` stores records as a flat `Float32Array`, 11
-  floats per particle: `[lx, ly, ldx, ldy, I, wl, lastLx, lastLy, r, g, b]`.
+- Each `ParticlePool` stores records as a flat `Float32Array`, 12
+  floats per particle:
+  `[lx, ly, ldx, ldy, I, wl, lastLx, lastLy, r, g, b, carrierIdx]`.
   RGB is pre-computed at capture via `wavelengthToRGB` to avoid
   calling it in the hot advance loop. Compact-on-remove via
   swap-with-last.

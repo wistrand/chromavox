@@ -424,6 +424,22 @@ virtual tracks so the UI has something meaningful to toggle. The
 tempo map collects all tempo-meta events across tracks and is used
 by `tickToSec(tick, tempoMap, tpq)` to convert positions to seconds.
 
+Track-name and title text encoding: the SMF spec doesn't specify an
+encoding for meta-text events, so the parser cascades through
+candidates via `decodeMidiText(data)`:
+
+1. UTF-8 strict (modern files; throws on invalid bytes).
+2. Shift-JIS strict (older Japanese sequencers — Yamaha / Roland /
+   Korg from the 90s).
+3. Score-based pick between Windows-1251 (Cyrillic, common in
+   CIS-region cover MIDIs) and Windows-1252 (Latin-1). Both always
+   succeed; the picker counts ASCII (+1) and Cyrillic letters (+2),
+   penalizes accented Latin in 0x80-0x180 (-1, the typical mojibake
+   signature), and returns the higher-scoring decode.
+
+ASCII-only names round-trip identically through any encoding, so
+the cascade is a no-op for the common case.
+
 The transport's `⇪` button accepts MIDI as well as JSON / MusicXML;
 on a MIDI hit, `importSongFile` opens a floating "MIDI tracks" window
 (`#midi-tracks-window`) and stashes the parsed object so toggling a

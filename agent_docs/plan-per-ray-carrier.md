@@ -37,8 +37,8 @@ the carrier into a participating ray attribute. Don't do it.
 Today: `sensorBins[s * binCount + b]`, `binCount = 64`.
 
 After: `sensorBins[s * (binCount * carrierCount) + c * binCount + b]`,
-`carrierCount = 9` (matches `_CARRIERS`). 24 sensors × 9 carriers × 64
-bins = 13,824 floats vs. today's 1,536. Memory is fine; the cost is
+`carrierCount = CARRIER_COUNT (13 today)` (matches `_CARRIERS`). 24 sensors × 13 carriers × 64
+bins = 19,968 floats vs. today's 1,536. Memory is fine; the cost is
 GPU readback width.
 
 Visualizers (renderer's per-sensor mini-spectrum, edge-memory sensor
@@ -116,7 +116,7 @@ Estimate: ~light context, ~5 turns.
   Uploaded each frame from `runtime.carrierPerSource` when present.
 - Sensor FBO width grows from `binCount` to `binCount * carrierCount`.
   Sensor shader writes column `carrier * u_binCount + bIdx` for each
-  hit. `carrierCount = CARRIER_COUNT (9)` when
+  hit. `carrierCount = CARRIER_COUNT` when
   `runtime.carrierPerSource` is set, else 1.
 - `tracer.carrierCount` is the public field consumers read; `binCount`
   unchanged.
@@ -181,7 +181,7 @@ revisit.
 
 `tracer.binCount` is read by every consumer that walks `sensorBins`.
 Decision: keep `binCount` as the *wavelength* axis only and add
-`tracer.carrierCount` (defaulting to 1 for the legacy CPU path
+`tracer.carrierCount` (1 in the collapsed/legacy path,
 during transition). All consumers index as
 `s * binCount * carrierCount + c * binCount + b`.
 
@@ -220,25 +220,32 @@ Estimate: ~heavy context, ~20–25 turns. The vertex-format edits and
 shader changes touch every shader stage in the GPU tracer; one full
 re-read of `gpu-tracer.js` is mandatory before starting.
 
-## Stage 2 — CPU tracer parity
+## Stage 2 — CPU tracer parity ✅ SHIPPED
 
-Mirror the GPU tracer changes in `raytracer.js`:
+Mirrored the GPU tracer changes in `raytracer.js`:
 
-- Read `runtime.carrierPerSource[s]` at emission, store in the ray
-  struct (CPU-side; trivial — one extra property).
-- Carry through `castRay`'s recursion and the secondary-ray queue.
-- Add to particle struct in delay pools (`docs/js/raytracer.js`,
-  search `_pools`). Re-emission preserves it.
-- Sensor capture writes to the new layout
-  `s * binCount * carrierCount + c * binCount + b`.
-- `tracer.carrierCount = scene.runtime.carrierPerSource ? 9 : 1`
-  (9 if any carrier is non-zero; 1 if all sources use carrier 0,
-  same as the legacy collapsed path).
+- `castRay(...)` accepts a final `carrierIdx` parameter, threaded
+  through every recursion via the segment-tracing loop.
+- Primary emit loop reads `carrierPerSource[s] | 0` (clamped to
+  `[0, carrierCount)`) and passes it to `castRay`.
+- Sensor capture writes the wide layout
+  `s * binCount * carrierCount + c * binCount + b` (collapses to the
+  legacy `s * binCount + b` when `carrierCount === 1` and
+  `carrierIdx === 0`).
+- Secondary-ray queue: `SEC_FLOATS` 9 → 10, with carrierIdx as the
+  10th float. `_pushSecondary(... skipElId, carrierIdx)` and the
+  secondary cast loop both honor it.
+- Particle pool: `PART_FLOATS` 11 → 12, `ParticlePool.add(... carrierIdx)`
+  stores it, and `_advancePool` reads `partCarrier = d[off + 11]` and
+  passes it to `_pushSecondary` so a captured ray exits the delay
+  feeding the same carrier slot it entered with.
+- `tracer.carrierCount = runtime.carrierPerSource ? CARRIER_COUNT : 1`
+  (imported from `song.js`). Bin array reallocates when carrierCount
+  transitions, so toggling per-track-instruments mid-session is clean.
 
-CPU tracer's correctness is easy to verify: with `carrierPerSource`
-all-zero, `sensorBins` should match the pre-change exactly.
-
-Estimate: ~medium context, ~10 turns.
+Verified: all 119 unit tests pass with the change. With
+`carrierPerSource` absent, every code path collapses to identical
+legacy behavior.
 
 ## Stage 3 — synth voice expansion ✅ SHIPPED
 
@@ -304,8 +311,8 @@ share params; the song-format work can later add per-carrier params.
 
 ### Voice allocation
 
-Naïve: `sensorCount × carrierCount` voices = ~216 worst case for 24
-sensors × 9 carriers. Heavy.
+Naïve: `sensorCount × carrierCount` voices = ~312 worst case for 24
+sensors × 13 carriers. Heavy.
 
 Active-only allocation: at the start of each `process()` block, scan
 the bins; for each `(s, c)` with energy above a threshold, allocate /

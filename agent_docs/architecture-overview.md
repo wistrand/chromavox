@@ -82,7 +82,15 @@ No dependencies.
   scene-shape change. The shader clamps `max(vec3(0), uGlowCol[i])`
   per source as cheap insurance against any negative roundoff in the
   EMA — the additive HDR FBO has no clamp of its own, so a single
-  bad value would otherwise dominate the bench.
+  bad value would otherwise dominate the bench. **Touch-pointer glow**:
+  active smoke pointer sources are packed FIRST (priority over wall
+  sources) into the same `uGlowPos/uGlowCol` arrays as warm white-yellow
+  point lights at the touch position, ramping in over `PTR_RISE_SEC`
+  and fading out over `PTR_FADE_SEC` (same envelopes as the smoke
+  push, so visual light stays in sync with the swirl). Independent of
+  `edgeGlowEnabled`: a touch lights smoke even when wall edge-memory
+  is off. The render-pass gate fires whenever
+  `_activeGlowCount > 0` rather than only when edge-memory is enabled.
   (2) Tonemapped blit to screen + per-element bounding-quad pass that
   re-samples the ray FBO with a polygon-SDF-driven offset for
   refractive distortion. Both apply Reinhard tone-mapping. When smoke

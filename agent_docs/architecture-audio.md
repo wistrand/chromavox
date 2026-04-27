@@ -215,15 +215,26 @@ hiccups. The graph is `workletNode → master → destination`; the
     cleared in the `!anyActive` branch to prevent reactivation clicks.
     Three sliders: **Excite** (noise 0 / mix 0.5 / pulse 1),
     **Attack** (1–50 ms), **Release** (5–200 ms).
-  - `karplus`: Karplus-Strong physical string model. Per-voice delay
-    line (length = `ceil(sampleRate / freq)`). **Damping** slider
-    (0-1, default 0.4) controls feedback lowpass coefficient (higher
-    = faster decay). **Excite** slider (0-1, default 0.5) blends
-    between continuous excitation (bowed-string-like, low values) and
-    transient-only re-excitation (plucked, high values). Transient
-    mode triggers on rising gain edges (threshold `>= 0.05`).
-    Variable lowpass filter in the feedback loop, with cutoff
-    controlled by the Damping parameter.
+  - `karplus`: Karplus-Strong physical string model with guitar-body
+    coloration. Per-voice delay line (length = `ceil(sampleRate /
+    freq)`). **Damping** slider (0-1, default 0.4) controls feedback
+    lowpass coefficient (higher = faster decay). **Excite** slider
+    (0-1, default 0.5) blends between continuous excitation (low
+    values, breathy / bowed-string) and transient-only re-excitation
+    (high values, clean pluck). On a rising gain edge (threshold
+    `voiceTarget >= 0.05`), a **5 ms triangular noise burst** is
+    deposited at the current read index — peaks at 25% of burst
+    duration, tapers after — replacing the older whole-buffer noise
+    fill that sounded like filtered noise for the first cycle.
+    Continuous-excitation mix tightened from `0.4` to `0.15` so a
+    pluck rings out instead of buzz-sustaining. **Body resonator**:
+    two parallel 2-pole bandpasses at fixed guitar resonances
+    (110 Hz Q=3 air / Helmholtz, 200 Hz Q=2.5 top-plate fundamental)
+    coloring the dry string output. Mix: `dry × 1.0 + (body1 +
+    body2) × 8.0` — dry stays at full amplitude; bodyMix compensates
+    for the small bandpass `norm = (1 - r²)/2` so resonances are
+    audible. Per-voice state additions: `kpB1a`, `kpB1b`, `kpB2a`,
+    `kpB2b` for body filter taps, lazy-init on first use.
   - `piano`: modal synthesis with gain-edge attacks. Per-voice state
     is 12 slightly-inharmonic partials with running peak amplitudes.
     Strike model: rising edges in per-sample `voiceGain` inject

@@ -342,6 +342,24 @@ export class SongPlayer {
         if (topVel[i] > 0) cps[i] = carrierOverrides[i];
       }
     }
+    // Clear the carrier slot for emitters with no active song note so
+    // non-song stimuli (manual touch, mic, MIDI pad) fall through to
+    // the dropdown carrier instead of inheriting the song's locked
+    // per-emitter timbre. _applyKeyframes is called before this method
+    // every frame and re-writes the keyframe-base map, so emitters
+    // that DO have an active song note keep their proper carrier:
+    //   - per-note override fired:  carrierOverrides[e] (just written)
+    //   - no per-note override but keyframe map exists: keyframe base
+    //                                                   (still in cps)
+    // Without this clear, touching an emitter that the song mapped to
+    // (e.g.) piano would always play piano, regardless of the
+    // carrier dropdown selection.
+    const cps = scene.runtime.carrierPerSource;
+    if (cps) {
+      for (let i = 0; i < n; i++) {
+        if (levels[i] === 0) cps[i] = 0;
+      }
+    }
   }
 
   _noteEnvelope(note) {
