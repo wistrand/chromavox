@@ -491,27 +491,35 @@ const _GM_PROGRAM_TO_CARRIER = [
   'brass',    // 61 Brass Section
   'brass',    // 62 Synth Brass 1
   'brass',    // 63 Synth Brass 2
-  // 64-71 Reed
-  'pulse',    // 64 Soprano Sax
-  'pulse',    // 65 Alto Sax
-  'pulse',    // 66 Tenor Sax
-  'pulse',    // 67 Baritone Sax
+  // 64-71 Reed. Saxes (64-67) → brass: in synth-pop they're used as
+  // horn-section stand-ins, which the brass carrier (saw + bandpass
+  // formant) renders better than pulse. Double-reeds + clarinet
+  // (68-71) keep pulse — their hollow / nasal character is the right
+  // fit for pulse's odd-harmonics-only spectrum.
+  'brass',    // 64 Soprano Sax
+  'brass',    // 65 Alto Sax
+  'brass',    // 66 Tenor Sax
+  'brass',    // 67 Baritone Sax
   'pulse',    // 68 Oboe
   'pulse',    // 69 English Horn
   'pulse',    // 70 Bassoon
   'pulse',    // 71 Clarinet
-  // 72-79 Pipe — pulse (square) instead of sine. Sine is too thin
-  // for the iconic synth-lead "Flute" usage common in synth-pop MIDI
-  // (e.g. Sweet Dreams MELODY = prog 73 but really a synth lead).
-  // Pulse has hollow flute-like resonance and reads as a melody voice.
-  'pulse',    // 72 Piccolo
-  'pulse',    // 73 Flute
-  'pulse',    // 74 Recorder
-  'pulse',    // 75 Pan Flute
-  'pulse',    // 76 Blown Bottle
-  'pulse',    // 77 Shakuhachi
-  'pulse',    // 78 Whistle
-  'pulse',    // 79 Ocarina
+  // 72-79 Pipe — supersaw. The Pipe range is mislabeled in synth-pop
+  // MIDI: the original recording's lead patch was a detuned analog
+  // saw stack (Roland Juno / Korg Polysix style) but couldn't be
+  // expressed in GM, so arrangers tagged it as "Flute" or similar.
+  // Sweet Dreams MELODY = prog 73 is the canonical case. Supersaw's
+  // 7-voice detune + per-saw stereo spread matches the iconic
+  // "fat lead" character; pulse (formerly mapped here) was thin,
+  // mono, and missing the chorus thickness leads need.
+  'supersaw', // 72 Piccolo
+  'supersaw', // 73 Flute
+  'supersaw', // 74 Recorder
+  'supersaw', // 75 Pan Flute
+  'supersaw', // 76 Blown Bottle
+  'supersaw', // 77 Shakuhachi
+  'supersaw', // 78 Whistle
+  'supersaw', // 79 Ocarina
   // 80-87 Synth Lead
   'supersaw', // 80 Square Lead
   'supersaw', // 81 Saw Lead
