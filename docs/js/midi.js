@@ -384,8 +384,12 @@ const _BASS_RE    = /\b(bass|bs|sub)\b/i;
 const _BOWED_RE   = /\b(violin|viola|cello|contrabass|fiddle|strings?|str|ensemble|choir|chorus|vox|voice|orchestra)\b/i;
 const _BRASS_RE   = /\b(brass|trumpet|trombone|tuba|horn)\b/i;
 const _NOISE_RE   = /\b(perc|fx|noise|tinkle|cymbal|wind|sea|shore|clap|sfx)\b/i;
-// Synth pad / lead / generic synth — supersaw default.
-const _STRING_RE  = /\b(pad|sax|lead|ld|synth|arp|seq|sequence)\b/i;
+// Synth pad / lead / generic synth — supersaw default. `arp\w*` matches
+// "arp", "arpeggio", "arpeggiator", "arping" — previously only the bare
+// word "arp" matched (`\barp\b`), so a track literally named "Arpeggio"
+// fell through name matching and landed on the program table (often
+// noise for SynFX programs like 102 Echoes — wrong for a melodic arp).
+const _STRING_RE  = /\b(pad|sax|lead|ld|synth|arp\w*|seq\w*|sequence)\b/i;
 export function guessCarrier(parsed, enabled) {
   let sawString = false;
   for (const t of parsed.tracks) {
@@ -468,13 +472,14 @@ const _GM_PROGRAM_TO_CARRIER = [
   'karplus',  // 45 Pizzicato Strings (plucked)
   'karplus',  // 46 Orchestral Harp (plucked)
   'karplus',  // 47 Timpani (struck)
-  // 48-55 Ensemble — bowed for orchestral/synth string ensembles +
-  // choir (sustained, vowel-y). Synth Voice / Orchestra Hit stay on
-  // the saw-stack-y carriers since they're synthetic by nature.
+  // 48-55 Ensemble — bowed for real string ensembles + choir
+  // (sustained, vowel-y); supersaw for SYNTH strings, which in
+  // synth-pop are saw-stacks with chorus, not bowed-string emulations.
+  // Orchestra Hit stays on pulse for its hollow stab character.
   'bowed',    // 48 String Ensemble 1
   'bowed',    // 49 String Ensemble 2
-  'bowed',    // 50 Synth Strings 1
-  'bowed',    // 51 Synth Strings 2
+  'supersaw', // 50 Synth Strings 1   (was 'bowed' — synth strings = saw stack)
+  'supersaw', // 51 Synth Strings 2   (was 'bowed')
   'bowed',    // 52 Choir Aahs
   'bowed',    // 53 Voice Oohs
   'supersaw', // 54 Synth Voice
@@ -542,7 +547,7 @@ const _GM_PROGRAM_TO_CARRIER = [
   'noise',    // 96 Rain
   'noise',    // 97 Soundtrack
   'sine',     // 98 Crystal
-  'karplus',  // 99 Atmosphere
+  'supersaw', // 99 Atmosphere        (was 'karplus' — Atmosphere is a sustained pad)
   'noise',    // 100 Brightness
   'noise',    // 101 Goblins
   'noise',    // 102 Echoes
@@ -552,7 +557,7 @@ const _GM_PROGRAM_TO_CARRIER = [
   'karplus',  // 105 Banjo
   'karplus',  // 106 Shamisen
   'karplus',  // 107 Koto
-  'karplus',  // 108 Kalimba
+  'bell',     // 108 Kalimba         (was 'karplus' — metallic tines decay like bell partials)
   'pulse',    // 109 Bagpipe
   'supersaw', // 110 Fiddle
   'pulse',    // 111 Shanai
