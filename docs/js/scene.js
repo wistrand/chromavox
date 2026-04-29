@@ -22,6 +22,12 @@ export function bumpIdCeiling(_n) {}
 // aspect, so element coordinates are stable across viewport sizes.
 export const CANONICAL_BENCH = { w: 556, h: 900 };
 
+// Hard cap on emitter / sensor counts. The GPU tracer pre-allocates
+// per-source textures at this width; raising it costs a one-time
+// GPU memory bump but otherwise lets MIDI import / song load fit a
+// full GM pitch range without octave-folding bass into the lead.
+export const MAX_EMITTERS = 128;
+
 let _generation = 0;
 export function bumpGeneration(scene) { scene.generation = ++_generation; }
 

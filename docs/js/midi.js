@@ -1,3 +1,5 @@
+import { MAX_EMITTERS } from './scene.js';
+
 // MIDI (Standard MIDI File) → Chromavox song JSON.
 //
 // Zero deps. Parses Format 0 and Format 1 files; no Format 2 (rare).
@@ -745,7 +747,7 @@ export function midiToSong(parsed, options = {}) {
 
   // Octave-fold high pitches into the audible range, then pitch → emitter.
   // Base = one octave below the lowest note aligned to an octave boundary;
-  // emitterCount capped at 64 (GPU tracer wlPerSource texture width).
+  // emitterCount capped at MAX_EMITTERS (GPU tracer wlPerSource texture width).
   // When drums are included, the bottom DRUM_LANE_COUNT emitters are
   // reserved for drum lanes and all melodic emitter indices shift up.
   const drumOffset = drumNotes.length > 0 ? DRUM_LANE_COUNT : 0;
@@ -756,18 +758,16 @@ export function midiToSong(parsed, options = {}) {
   if (rawNotes.length > 0) {
     baseMidi = Math.floor(minPitch / 12) * 12 - 12;
     emitterCount = (maxPitch - baseMidi) + 1 + drumOffset;
-    if (emitterCount > 64) {
+    if (emitterCount > MAX_EMITTERS) {
       // Bench overflow: shift baseMidi UP enough to fit the high pitches
       // (the lead/melody) — losing any low notes (bass) is preferable
       // to losing the lead. Bass notes that fall below the new baseMidi
       // are octave-folded up at note-routing time so nothing is silently
       // dropped. Previously we clamped baseMidi at minPitch to preserve
-      // bass — but that pushed the maxPitch one or more emitters past 64
-      // and the LEAD got dropped instead. Drum mode amplifies this by
-      // stealing 4 emitters: melodic range 60+1 fits without drums but
-      // overflows by 1 with drums, dropping the topmost lead note.
-      baseMidi = maxPitch - (64 - drumOffset) + 1;
-      emitterCount = 64;
+      // bass — but that pushed the maxPitch past MAX_EMITTERS and the
+      // LEAD got dropped instead.
+      baseMidi = maxPitch - (MAX_EMITTERS - drumOffset) + 1;
+      emitterCount = MAX_EMITTERS;
     }
   } else {
     baseMidi = 60; // C4 fallback for drum-only songs

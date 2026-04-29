@@ -25,7 +25,7 @@
 
 import { wavelengthToRGB, materialN, materialAbsorption, mirrorReflectance,
          elementAbsorption, elementReflectance, elementDelay, MATERIALS } from './spectrum.js';
-import { worldEdges, materialOptics } from './scene.js';
+import { worldEdges, materialOptics, MAX_EMITTERS } from './scene.js';
 import { CARRIER_COUNT } from './song.js';
 
 const MAX_BOUNCES = 32;
@@ -90,7 +90,7 @@ uniform float u_baseIntensity;
 uniform sampler2D u_micLevels;
 uniform sampler2D u_wlPerSource;
 uniform int u_hasWlPer;
-uniform sampler2D u_carrierPerSource; // R32F, 1×64. Per-source carrier index.
+uniform sampler2D u_carrierPerSource; // R32F, 1×MAX_EMITTERS. Per-source carrier index.
 uniform int u_hasCarrierPer;
 
 // TF outputs: ray state + segment (6 vec4 = 24 floats INTERLEAVED)
@@ -646,26 +646,26 @@ export class GPUTracer {
 
     this._micTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this._micTex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, 64, 1);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 64, 1, gl.RED, gl.FLOAT, new Float32Array(64));
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, MAX_EMITTERS, 1);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, MAX_EMITTERS, 1, gl.RED, gl.FLOAT, new Float32Array(MAX_EMITTERS));
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
-    // Per-source wavelength range: 64×2 R32F (row 0 = wlMin, row 1 = wlMax).
+    // Per-source wavelength range: MAX_EMITTERS×2 R32F (row 0 = wlMin, row 1 = wlMax).
     this._wlPerTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this._wlPerTex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, 64, 2);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 64, 2, gl.RED, gl.FLOAT, new Float32Array(128));
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, MAX_EMITTERS, 2);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, MAX_EMITTERS, 2, gl.RED, gl.FLOAT, new Float32Array(MAX_EMITTERS * 2));
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
-    // Per-source carrier index: 64×1 R32F. Stored as float for one-
-    // texel-per-source symmetry with micLevels / wlPerSource. Values
-    // are integers 0..15, clamped in the shader.
+    // Per-source carrier index: MAX_EMITTERS×1 R32F. Stored as float
+    // for one-texel-per-source symmetry with micLevels / wlPerSource.
+    // Values are integers 0..CARRIER_COUNT-1, clamped in the shader.
     this._carrierPerTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this._carrierPerTex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, 64, 1);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 64, 1, gl.RED, gl.FLOAT, new Float32Array(64));
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R32F, MAX_EMITTERS, 1);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, MAX_EMITTERS, 1, gl.RED, gl.FLOAT, new Float32Array(MAX_EMITTERS));
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
@@ -812,9 +812,10 @@ export class GPUTracer {
         }
       }
     }
+    const nUp = Math.min(nSrc, MAX_EMITTERS);
     gl.bindTexture(gl.TEXTURE_2D, this._micTex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
-      this._micData.subarray(0, Math.min(nSrc, 64)));
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, nUp, 1, gl.RED, gl.FLOAT,
+      this._micData.subarray(0, nUp));
 
     // Per-source wavelength ranges.
     const wlPer = runtime.wlPerSource;
@@ -826,13 +827,13 @@ export class GPUTracer {
       const d = this._wlPerData;
       gl.bindTexture(gl.TEXTURE_2D, this._wlPerTex);
       // Row 0: wlMin per source.
-      for (let i = 0; i < nSrc && i < 64; i++) d[i] = wlPer.min[i];
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
-        d.subarray(0, Math.min(nSrc, 64)));
+      for (let i = 0; i < nUp; i++) d[i] = wlPer.min[i];
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, nUp, 1, gl.RED, gl.FLOAT,
+        d.subarray(0, nUp));
       // Row 1: wlMax per source.
-      for (let i = 0; i < nSrc && i < 64; i++) d[i] = wlPer.max[i];
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 1, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
-        d.subarray(0, Math.min(nSrc, 64)));
+      for (let i = 0; i < nUp; i++) d[i] = wlPer.max[i];
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 1, nUp, 1, gl.RED, gl.FLOAT,
+        d.subarray(0, nUp));
     }
 
     // Per-source carrier index. Only uploaded when set on the runtime;
@@ -845,10 +846,10 @@ export class GPUTracer {
         this._carrierPerData = new Float32Array(Math.max(nSrc, 1));
       }
       const cd = this._carrierPerData;
-      for (let i = 0; i < nSrc && i < 64; i++) cd[i] = carrierPer[i];
+      for (let i = 0; i < nUp; i++) cd[i] = carrierPer[i];
       gl.bindTexture(gl.TEXTURE_2D, this._carrierPerTex);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Math.min(nSrc, 64), 1, gl.RED, gl.FLOAT,
-        cd.subarray(0, Math.min(nSrc, 64)));
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, nUp, 1, gl.RED, gl.FLOAT,
+        cd.subarray(0, nUp));
     }
 
     // Effective bounce count: bounded by total element edges + 1.

@@ -1,3 +1,5 @@
+import { MAX_EMITTERS } from './scene.js';
+
 // MusicXML → Chromavox song JSON converter.
 //
 // Handles the audio-relevant subset of partwise MusicXML: notes with
@@ -276,19 +278,19 @@ export function musicxmlToSong(text) {
     if (n.pitch > maxMidi) maxMidi = n.pitch;
   }
   // Base = one octave below the lowest note, aligned to an octave
-  // boundary. Emitter count spans lowest→highest, capped at 64 (the
-  // GPU tracer's wlPerSource texture width). When clipped, the notes
-  // above the cap are dropped — we raise the base too so we don't
-  // waste emitters on sub-bass registers.
+  // boundary. Emitter count spans lowest→highest, capped at
+  // MAX_EMITTERS (the GPU tracer's wlPerSource texture width). When
+  // clipped, the notes above the cap are dropped — we raise the base
+  // too so we don't waste emitters on sub-bass registers.
   let baseMidi = Math.floor(minMidi / 12) * 12 - 12;
   let emitterCount = (maxMidi - baseMidi) + 1;
-  if (emitterCount > 64) {
+  if (emitterCount > MAX_EMITTERS) {
     // Prefer to drop low-octave headroom first, then high notes if
-    // the piece's span is still wider than 64 semitones.
-    const overflow = emitterCount - 64;
+    // the piece's span is still wider than MAX_EMITTERS semitones.
+    const overflow = emitterCount - MAX_EMITTERS;
     baseMidi += overflow;
     if (baseMidi > minMidi) baseMidi = minMidi; // never start above the lowest note
-    emitterCount = Math.min(64, (maxMidi - baseMidi) + 1);
+    emitterCount = Math.min(MAX_EMITTERS, (maxMidi - baseMidi) + 1);
   }
   emitterCount = Math.max(1, emitterCount);
   const baseHz = 440 * Math.pow(2, (baseMidi - 69) / 12);

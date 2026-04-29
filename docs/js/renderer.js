@@ -9,7 +9,7 @@
 //   3. Overlay lines on top (bench outline, emitter/sensor ticks, element
 //      outlines, selection handle). Alpha blend.
 
-import { worldEdges, localAABB } from './scene.js';
+import { worldEdges, localAABB, MAX_EMITTERS } from './scene.js';
 import { wavelengthToRGB, MATERIALS } from './spectrum.js';
 
 const MAX_EDGES = 128;
@@ -629,7 +629,12 @@ export class Renderer {
       uBench:         gl.getUniformLocation(this.edgeGlowProgram, 'uBench'),
       uBandWidth:     gl.getUniformLocation(this.edgeGlowProgram, 'uBandWidth'),
     };
-    this.MAX_GLOW_ROWS = 64;
+    // Per-row state cap matches MAX_EMITTERS (the GPU tracer's
+    // per-source texture width). The Y position math below divides by
+    // nE/nS, so this MUST be ≥ scene.emitter.count / scene.sensorCount
+    // — otherwise rows get spaced as if there were fewer emitters than
+    // actually exist, and every glow point lands at the wrong height.
+    this.MAX_GLOW_ROWS = MAX_EMITTERS;
     this.MAX_ACTIVE_GLOW = 32;
     this._emitterGlow = new Float32Array(this.MAX_GLOW_ROWS * 3);
     this._sensorGlow  = new Float32Array(this.MAX_GLOW_ROWS * 3);
